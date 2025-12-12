@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <!-- Android 状态栏透明 -->
+    <meta name="theme-color" content="transparent">
+    <title>Chat App</title>
+
+    <link rel="stylesheet" href="./assets/css/toastr.min.css">
+    <link rel="stylesheet" href="./assets/css/main.css">
+    <link rel="stylesheet" href="./assets/css/qq-legacy.css">
+    <link rel="stylesheet" href="./assets/css/cards.css">
+    <link rel="stylesheet" href="./assets/css/chat.css">
+    <link rel="stylesheet" href="./assets/css/legacy-card.css">
+</head>
+<body class="bg-legacy">
+    <div id="app">
+        <section id="chat-page" class="page active">
+            <!-- 消息界面顶部：头像+用户信息横向布局 -->
+            <div id="message-topbar" class="topbar qq-message-topbar">
+                <div class="user-info-section">
+                    <button id="avatar-button" class="user-avatar-btn">
+                        <img src="./assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png" alt="">
+                    </button>
+                    <div class="user-info-text">
+                        <div class="user-nickname">用户</div>
+                        <div class="user-status">😊在线 ›</div>
+                    </div>
+                </div>
+                <button id="plus-button" class="icon-button">＋</button>
+            </div>
+
+            <!-- 聊天列表：头像+名字+预览+时间 -->
+            <div id="chat-list" class="chat-list">
+                <div class="chat-list-item" data-session="default">
+                    <img src="./assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp" alt="" class="chat-item-avatar">
+                    <div class="chat-item-content">
+                        <div class="chat-item-header">
+                            <div class="chat-item-name">默认会话</div>
+                            <div class="chat-item-time">00:00</div>
+                        </div>
+                        <div class="chat-item-preview">点击进入聊天</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- QQ 风格聊天室 - 使用原版结构 -->
+            <div id="chat-room" class="QQ_chat_page hidden qq-scrollable">
+                <!-- 聊天室顶部 - 返回 + 会话名 + 菜单 -->
+                <div class="chat-room-topbar">
+                    <button id="back-to-list" class="chat-back-btn">‹</button>
+                    <div class="chat-room-title" id="current-chat-title">default</div>
+                    <button id="chat-menu-btn" class="chat-menu-btn">≡</button>
+                </div>
+
+                <!-- 消息列表区 -->
+                <div id="chat-scroll" class="msgcontent qq-scrollable"></div>
+
+                <!-- 输入区 - 原版样式 -->
+                <div class="chat-input-container">
+                    <button class="voice-btn">🎙</button>
+                    <input type="text" id="composer-input" class="chat-input" placeholder="">
+                    <button id="send-button" class="chat-send-btn">发送</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="contacts-page" class="page">
+            <!-- 联系人顶部：与消息界面一致 -->
+            <div class="topbar qq-message-topbar">
+                <div class="user-info-section">
+                    <button class="user-avatar-btn">
+                        <img src="./assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png" alt="">
+                    </button>
+                    <div class="user-info-text">
+                        <div class="user-nickname">用户</div>
+                        <div class="user-status">😊在线 ›</div>
+                    </div>
+                </div>
+                <button class="icon-button">＋</button>
+            </div>
+
+            <!-- 搜索框 -->
+            <div class="search-box-wrapper">
+                <input type="text" class="contact-search" placeholder="搜索联系人...">
+            </div>
+
+            <!-- 联系人列表：分组显示 -->
+            <div class="contacts-list">
+                <!-- 群组 -->
+                <div class="contact-group">
+                    <div class="contact-item">
+                        <img src="./assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp" alt="" class="contact-avatar">
+                        <div class="contact-info">
+                            <div class="contact-name">示例群组</div>
+                            <div class="contact-desc">群组说明...</div>
+                        </div>
+                        <div class="contact-time">00:00</div>
+                    </div>
+                </div>
+
+                <!-- 未分组联系人 -->
+                <div class="contact-group">
+                    <div class="contact-group-title">未分组联系人</div>
+                    <div id="contacts-ungrouped-list"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="moments-page" class="page">
+            <!-- 动态顶部：标题+图标 -->
+            <div class="topbar moments-topbar">
+                <div class="moments-title">动态</div>
+                <div class="moments-actions">
+                    <button class="icon-button-small">🔔</button>
+                    <button class="icon-button-small">⚙</button>
+                </div>
+            </div>
+
+            <!-- 动态卡片列表 -->
+            <div class="moments-list">
+                <div class="moment-card">
+                    <div class="moment-header">
+                        <img src="./assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp" alt="" class="moment-avatar">
+                        <div class="moment-user-info">
+                            <div class="moment-username">用户名</div>
+                            <div class="moment-time">00:00</div>
+                        </div>
+                        <button class="moment-more">⋯</button>
+                    </div>
+                    <div class="moment-content">
+                        <div class="moment-text">示例动态内容，可以包含文字、图片等...</div>
+                        <!-- 图片占位（可选） -->
+                        <!-- <div class="moment-images">
+                            <img src="..." alt="">
+                        </div> -->
+                    </div>
+                    <div class="moment-stats">
+                        <span>👁 浏览1024次</span>
+                        <span>📱 设备型号</span>
+                    </div>
+                    <div class="moment-footer">
+                        <span class="moment-likes">👍 896人已赞</span>
+                    </div>
+                    <div class="moment-comment">
+                        <span class="comment-user">用户：</span>
+                        <span class="comment-text">示例评论内容</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Avatar settings menu -->
+        <div id="settings-menu" class="sheet hidden settings-menu">
+            <div class="sheet-header">⚙ 设置</div>
+            <div class="sheet-desc">账户 / 会话</div>
+            <button data-action="session">💬 会话</button>
+            <button data-action="config">⚙ 设定</button>
+        </div>
+
+        <!-- Chat room menu (top-right ≡) -->
+        <div id="chatroom-menu" class="sheet hidden">
+            <div class="sheet-header">会话快捷</div>
+            <div class="sheet-desc">当前聊天相关操作</div>
+            <button data-action="world">🌐 世界书</button>
+            <button data-action="chat-settings">🎨 聊天设置</button>
+        </div>
+
+        <!-- Plus quick menu -->
+        <div id="quick-menu" class="sheet hidden">
+            <button data-action="new-chat">新聊天</button>
+            <button data-action="new-contact">添加联系人</button>
+            <button data-action="new-moment">发布动态</button>
+        </div>
+
+        <!-- Chat settings modal -->
+        <div id="chat-settings-overlay" class="popup-overlay" style="display: none;"></div>
+        <div id="chat-settings-modal" class="chat-setting-popup" style="display: none;">
+            <div class="chat-setting-header">
+                <span>聊天设置</span>
+                <span class="close-setting-btn" id="close-chat-settings">×</span>
+            </div>
+            <div class="chat-setting-content">
+                <div class="setting-item">
+                    <span>气泡颜色</span>
+                    <input type="text" id="bubble-color-input" value="#44639d">
+                    <input type="color" id="bubble-color" class="color-picker" value="#44639d">
+                </div>
+                <div class="setting-item">
+                    <span>字体颜色</span>
+                    <input type="text" id="text-color-input" value="#FFFFFF">
+                    <input type="color" id="text-color" class="color-picker" value="#FFFFFF">
+                </div>
+                <div class="setting-item">
+                    <span>聊天壁纸</span>
+                    <input type="text" id="chat-bg" placeholder="输入图片URL">
+                </div>
+                <div class="setting-preview">
+                    <div id="chat-setting-preview" class="QQ_chat_msgdiv">
+                        <span>这是预览文本</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chat-setting-footer">
+                <button id="random-setting-btn">随机</button>
+                <button id="save-setting-btn">保存</button>
+                <button id="cancel-setting-btn">取消</button>
+            </div>
+        </div>
+
+        <!-- Bottom nav -->
+        <nav class="bottom-nav">
+            <button class="nav-btn active" data-page="chat">聊天</button>
+            <button class="nav-btn" data-page="contacts">联系人</button>
+            <button class="nav-btn" data-page="moments">动态</button>
+        </nav>
+    </div>
+
+    <script src="./lib/jquery.min.js"></script>
+    <script src="./lib/toastr.min.js"></script>
+    <script type="module" src="./scripts/ui/app.js"></script>
+</body>
+</html>

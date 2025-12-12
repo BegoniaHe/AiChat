@@ -1,0 +1,812 @@
+/**
+ * QQ 风格聊天界面 - 原版视觉还原
+ * 基于手机流式.html提取，重新组织为清晰架构
+ * 适配: Google Pixel 10 (1080x2400, 420dpi)
+ */
+
+/* ========================================
+   1. CSS 变量系统 - 颜色、尺寸、间距
+   ======================================== */
+:root {
+    /* 颜色调色板 - 黄棕色系（原版QQ风格） */
+    --qq-color-bg-page: rgb(244, 245, 246);           /* 页面背景 */
+    --qq-color-bg-input: rgba(255, 255, 255, 0.2);    /* 输入框背景（半透明） */
+    --qq-color-bubble-default: rgba(198, 164, 108, 0.85); /* 默认消息气泡（黄棕色） */
+    --qq-color-bubble-alt: rgba(208, 174, 118, 0.9);   /* 辅助气泡色 */
+    --qq-color-text-primary: #000000;                 /* 主文本颜色 */
+    --qq-color-text-secondary: #a1a1a1;               /* 次要文本（时间戳） */
+    --qq-color-border: #000000;                       /* 边框颜色 */
+    --qq-color-divider: rgb(240, 244, 245);           /* 分割线 */
+    --qq-color-primary: #199AFF;                      /* 主题色（天空蓝） */
+    --qq-color-status-bg: rgba(255, 255, 255, 0.8);   /* 状态标签背景 */
+
+    /* 尺寸 */
+    --qq-size-avatar: 40px;                           /* 头像尺寸 */
+    --qq-size-input-height: 30px;                     /* 输入框高度 */
+
+    /* 圆角 */
+    --qq-radius-full: 50%;                            /* 圆形（头像） */
+    --qq-radius-lg: 22px;                             /* 大圆角（容器） */
+    --qq-radius-md: 10px;                             /* 中圆角 */
+    --qq-radius-sm: 7px;                              /* 小圆角（气泡） */
+    --qq-radius-pill: 30px;                           /* 胶囊形（输入框） */
+
+    /* 间距 */
+    --qq-spacing-xs: 2px;
+    --qq-spacing-sm: 7px;
+    --qq-spacing-md: 10px;
+    --qq-spacing-lg: 15px;
+    --qq-spacing-xl: 20px;
+    --qq-spacing-2xl: 50px;
+
+    /* 阴影 */
+    --qq-shadow-bubble: 2px 2px 2px rgba(15, 15, 15, 0.3);
+    --qq-shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.1);
+    --qq-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.1);
+
+    /* 字体 */
+    --qq-font-size-base: 15px;                        /* 消息基础字号 */
+    --qq-line-height-base: 1.4;
+    --qq-letter-spacing-base: 1px;
+    --qq-letter-spacing-sm: 0.7px;
+
+    /* Pixel 10 适配 - 安全区域 */
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-left: env(safe-area-inset-left, 0px);
+    --safe-area-right: env(safe-area-inset-right, 0px);
+}
+
+/* ========================================
+   2. 基础样式重置
+   ======================================== */
+* {
+    box-sizing: border-box;
+}
+
+/* 隐藏滚动条（全局） */
+.qq-scrollable {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.qq-scrollable::-webkit-scrollbar {
+    display: none !important;
+}
+
+/* ========================================
+   3. 聊天主容器 - .QQ_chat_page
+   ======================================== */
+.QQ_chat_page {
+    /* 布局 */
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100vh;
+    position: fixed; /* 固定定位，避免溢出 */
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+
+    /* 外观 */
+    background-color: var(--qq-color-bg-page);
+
+    /* 间距 */
+    padding-top: 0;
+
+    /* 滚动 */
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    /* 隐藏滚动条 */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+/* ========================================
+   3.5 聊天室顶部栏 - 原版样式
+   ======================================== */
+.chat-room-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px;
+    padding-top: calc(2px + env(safe-area-inset-top, 0px));
+    background: rgba(230, 230, 230, 0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    flex-shrink: 0;
+    min-height: 36px;
+    box-sizing: border-box;
+}
+
+.chat-back-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    font-size: 28px;
+    color: #333;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.chat-room-title {
+    flex: 1;
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    color: #1a1a1a;
+}
+
+.chat-menu-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    color: #333;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+/* 隐藏时完全不可见 */
+.QQ_chat_page.hidden {
+    display: none !important;
+    visibility: hidden !important;
+    z-index: -1 !important;
+}
+
+.QQ_chat_page::-webkit-scrollbar {
+    display: none !important;
+}
+
+/* 背景图支持（可选） */
+.QQ_chat_page[data-bg-image] {
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: top center;
+}
+
+/* ========================================
+   4. 消息列表区域 - .msgcontent
+   ======================================== */
+.msgcontent {
+    /* 布局 */
+    flex: 1;
+    overflow-y: auto;
+
+    /* 间距 */
+    padding-left: 8px;
+    padding-right: 8px;
+    margin-bottom: var(--qq-spacing-2xl); /* 为输入框预留空间 */
+
+    /* 隐藏滚动条 */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.msgcontent::-webkit-scrollbar {
+    display: none !important;
+}
+
+/* ========================================
+   5. 消息气泡基础样式
+   ======================================== */
+
+/* 5.1 别人的消息 - .QQ_chat_charmsg */
+.QQ_chat_charmsg {
+    /* 布局 */
+    display: grid;
+    grid-template-columns: var(--qq-size-avatar) 1fr;  /* 头像 + 内容 */
+    grid-template-rows: auto auto;
+    gap: var(--qq-spacing-xs);
+    align-items: start;
+
+    /* 尺寸 */
+    max-width: 80%;
+
+    /* 间距 */
+    margin-bottom: var(--qq-spacing-xl);
+    margin-left: var(--qq-spacing-lg);
+}
+
+/* 5.2 我的消息 - .QQ_chat_mymsg */
+.QQ_chat_mymsg {
+    /* 布局 */
+    display: grid;
+    grid-template-columns: 1fr var(--qq-size-avatar);  /* 内容 + 头像 */
+    grid-template-rows: auto auto;
+    gap: var(--qq-spacing-xs);
+    justify-items: end;
+    align-items: start;
+    text-align: right;
+
+    /* 尺寸 */
+    max-width: 70%;
+
+    /* 间距 */
+    margin-bottom: var(--qq-spacing-xl);
+    margin-right: var(--qq-spacing-lg);
+    margin-left: auto;  /* 右对齐 */
+}
+
+/* ========================================
+   6. 消息内容气泡 - .QQ_chat_msgdiv
+   ======================================== */
+.QQ_chat_msgdiv {
+    /* 布局 */
+    width: fit-content;
+
+    /* 外观 */
+    background-color: var(--qq-color-bubble-default);
+    color: var(--qq-color-text-primary);
+    border-radius: var(--qq-radius-sm);
+    box-shadow: var(--qq-shadow-bubble);
+
+    /* 间距 */
+    padding: var(--qq-spacing-sm);
+    margin-left: -2px;  /* 微调位置 */
+
+    /* 文字 */
+    font-size: var(--qq-font-size-base);
+    line-height: var(--qq-line-height-base);
+    letter-spacing: var(--qq-letter-spacing-base);
+    text-align: left;
+    word-wrap: break-word;
+    word-break: break-word;
+}
+
+/* 我的消息气泡（如有自定义背景色） */
+.QQ_chat_mymsg .QQ_chat_msgdiv {
+    text-align: left;  /* 保持文本左对齐 */
+}
+
+/* ========================================
+   7. 头像样式 - .QQ_chat_head / .user_avatar
+   ======================================== */
+.QQ_chat_head,
+.user_avatar,
+.qq-avatar {
+    /* 尺寸 */
+    width: var(--qq-size-avatar);
+    height: var(--qq-size-avatar);
+    min-width: var(--qq-size-avatar);
+    min-height: var(--qq-size-avatar);
+
+    /* 外观 */
+    border-radius: var(--qq-radius-full);
+    object-fit: cover;
+
+    /* 防止拖动 */
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+/* ========================================
+   8. 时间戳 - .QQ_chat_time
+   ======================================== */
+.QQ_chat_time {
+    /* 文字 */
+    font-size: 12px;
+    color: var(--qq-color-text-secondary);
+
+    /* 间距 */
+    margin-top: 4px;
+}
+
+/* 别人的消息时间戳（左对齐） */
+.QQ_chat_charmsg .QQ_chat_time {
+    grid-column: 2;
+    justify-self: start;
+}
+
+/* 我的消息时间戳（右对齐） */
+.QQ_chat_mymsg .QQ_chat_time {
+    grid-column: 1;
+    justify-self: end;
+}
+
+/* ========================================
+   9. 用户名 - .QQ_chat_name
+   ======================================== */
+.QQ_chat_name {
+    font-size: 13px;
+    color: var(--qq-color-text-secondary);
+    margin-bottom: 2px;
+}
+
+/* ========================================
+   10. 聊天室输入区域 - 原版样式
+   ======================================== */
+.chat-input-container {
+    /* 定位 */
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+
+    /* 外观 */
+    background: rgba(240, 240, 240, 0.95);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.voice-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    font-size: 22px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.chat-input {
+    flex: 1;
+    height: 40px;
+    padding: 0 16px;
+    border-radius: 20px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    background: rgba(255, 255, 255, 0.9);
+    font-size: 16px;
+    outline: none;
+}
+
+.chat-send-btn {
+    padding: 10px 20px;
+    border-radius: 20px;
+    border: none;
+    background: #1a1a1a;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.chat-send-btn:active {
+    opacity: 0.8;
+}
+
+/* 旧的输入容器（保留兼容） */
+.input-container {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-width: 100%;
+    background-color: var(--qq-color-bg-input);
+    border-top: 1px solid var(--qq-color-border);
+    padding: var(--qq-spacing-md) 0;
+    padding-bottom: calc(var(--qq-spacing-md) + var(--safe-area-bottom));
+}
+
+/* ========================================
+   11. 输入框 - .userInput
+   ======================================== */
+.userInput {
+    /* 尺寸 */
+    width: 100%;
+    height: var(--qq-size-input-height);
+
+    /* 外观 */
+    border: 1px solid rgba(0, 0, 0, 0.5);
+    border-radius: var(--qq-radius-pill);
+    background-color: #ffffff;
+
+    /* 间距 */
+    padding-left: var(--qq-spacing-md);
+    padding-right: var(--qq-spacing-md);
+
+    /* 文字 */
+    font: inherit;
+    letter-spacing: var(--qq-letter-spacing-sm);
+
+    /* 移除默认样式 */
+    outline: none;
+}
+
+.userInput:focus {
+    border-color: var(--qq-color-primary);
+}
+
+/* ========================================
+   11.5 语音和发送按钮
+   ======================================== */
+.voice-button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    background: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+
+.voice-button:active {
+    background: #f0f0f0;
+}
+
+.send-button {
+    padding: 6px 20px;
+    background: var(--qq-color-primary);
+    color: white;
+    border: none;
+    border-radius: 18px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    flex-shrink: 0;
+    transition: opacity 0.2s;
+}
+
+.send-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.send-button:active:not(:disabled) {
+    opacity: 0.8;
+}
+
+/* ========================================
+   12. 消息状态标签 - .message-status
+   ======================================== */
+.QQ_chat_mymsg .message-status {
+    /* 外观 */
+    background: var(--qq-color-status-bg);
+    border-radius: 12px;
+    box-shadow: var(--qq-shadow-sm);
+    backdrop-filter: blur(4px);
+
+    /* 间距 */
+    padding: 3px 8px;
+
+    /* 文字 */
+    font-size: 11px;
+    color: var(--qq-color-text-secondary);
+}
+
+/* ========================================
+   13. 特殊消息类型
+   ======================================== */
+
+/* 图片消息 */
+.QQ_chat_msgimg {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: var(--qq-radius-sm);
+    cursor: pointer;
+}
+
+/* 语音消息（待补充具体样式） */
+.QQ_chat_voice {
+    /* 预留 */
+}
+
+/* 音乐卡片（待补充具体样式） */
+.QQ_chat_music {
+    /* 预留 */
+}
+
+/* ========================================
+   14. 互动模式开关（可选功能）
+   ======================================== */
+.interactive-mode-switch {
+    position: absolute;
+    left: var(--qq-spacing-md);
+    top: -25px;
+    display: none;
+    z-index: 100;
+    animation: slideDown 0.3s ease;
+}
+
+.interactive-mode-switch.visible {
+    display: flex;
+}
+
+.interactive-mode-button {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--qq-radius-full);
+    background: rgba(255, 255, 255, 0.9);
+    border: 2px solid #ddd;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: var(--qq-shadow-md);
+    backdrop-filter: blur(10px);
+}
+
+.interactive-mode-button:hover {
+    transform: scale(1.1);
+}
+
+.interactive-mode-button.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-color: #667eea;
+    transform: scale(1.05);
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ========================================
+   15. Pixel 10 专属适配
+   ======================================== */
+
+/* 安全区域适配 */
+.QQ_chat_page {
+    padding-top: calc(var(--qq-spacing-md) + var(--safe-area-top));
+}
+
+/* 高 DPI 屏幕优化 */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+    .QQ_chat_msgdiv {
+        /* 高清屏下字体渲染优化 */
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+}
+
+/* 触摸反馈 */
+@media (hover: none) and (pointer: coarse) {
+    .QQ_chat_mymsg,
+    .QQ_chat_charmsg {
+        -webkit-tap-highlight-color: transparent;
+    }
+}
+
+/* ========================================
+   16. 打字指示器动画
+   ======================================== */
+.typing {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 2px 0;
+}
+
+.typing-dot {
+    width: 6px;
+    height: 6px;
+    background-color: var(--qq-color-text-secondary);
+    border-radius: 50%;
+    animation: typingBounce 1.4s infinite ease-in-out both;
+}
+
+.typing-dot:nth-child(1) {
+    animation-delay: -0.32s;
+}
+
+.typing-dot:nth-child(2) {
+    animation-delay: -0.16s;
+}
+
+@keyframes typingBounce {
+    0%, 80%, 100% {
+        transform: scale(0.8);
+        opacity: 0.5;
+    }
+    40% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* ========================================
+   17. 工具类
+   ======================================== */
+
+/* 隐藏元素 */
+.qq-hidden {
+    display: none !important;
+}
+
+/* 毛玻璃效果 */
+.qq-glass {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+/* 文本省略 */
+.qq-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 平滑滚动 */
+.qq-smooth-scroll {
+    scroll-behavior: smooth;
+}
+
+/* ========================================
+   18. 聊天设置弹窗
+   ======================================== */
+
+/* 弹窗遮罩层 */
+.popup-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1999;
+}
+
+/* 聊天设置弹窗 */
+.chat-setting-popup {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 85%;
+    max-width: 400px;
+    background-color: #fff;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    z-index: 2000;
+}
+
+.chat-setting-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.chat-setting-header span:first-child {
+    font-weight: bold;
+    font-size: 17px;
+    color: #1a1a1a;
+}
+
+.close-setting-btn {
+    font-size: 28px;
+    color: #999;
+    cursor: pointer;
+    line-height: 1;
+    transition: color 0.2s;
+}
+
+.close-setting-btn:hover {
+    color: #666;
+}
+
+.chat-setting-content {
+    padding: 20px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.setting-item {
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.setting-item span {
+    font-size: 14px;
+    color: #333;
+    white-space: nowrap;
+    min-width: 70px;
+}
+
+.setting-item input[type="text"] {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+}
+
+.setting-item input[type="text"]:focus {
+    border-color: #019aff;
+}
+
+.color-picker {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.setting-preview {
+    margin-top: 20px;
+    padding: 12px;
+    background: #f5f5f5;
+    border-radius: 8px;
+    text-align: center;
+}
+
+#chat-setting-preview {
+    display: inline-block;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background-color: #44639d;
+    max-width: 80%;
+}
+
+#chat-setting-preview span {
+    color: #fff;
+    font-size: 14px;
+}
+
+.chat-setting-footer {
+    padding: 12px 20px;
+    text-align: right;
+    border-top: 1px solid #eee;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.chat-setting-footer button {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: opacity 0.2s;
+}
+
+.chat-setting-footer button:active {
+    opacity: 0.7;
+}
+
+#random-setting-btn {
+    background-color: #8b7edc;
+    color: white;
+}
+
+#save-setting-btn {
+    background-color: #019aff;
+    color: white;
+}
+
+#cancel-setting-btn {
+    background-color: #f5f5f5;
+    color: #666;
+}

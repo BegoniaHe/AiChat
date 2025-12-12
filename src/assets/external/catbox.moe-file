@@ -1,0 +1,144 @@
+<!--
+                          ,
+   ,-.       _,---._ __  / \
+  /  )    .-'       `./ /   \
+ (  (   ,'            `/    /|
+  \  `-"             \'\   / |
+   `.              ,  \ \ /  |
+    /`.          ,'-`----Y   |
+   (            ;        |   '
+   |  ,-.    ,-'         |  /
+   |  | (   |            | /
+   )  |  \  `.___________|/
+   `--'   `--'
+
+I am the Alpha and the Omega, the First and the Last, the Beginning and the End.
+
+-->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<link rel="stylesheet" href="resources/style.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#CCE8ED">
+<link rel="icon" href="pictures/favicon.ico" />
+<script src="resources/jquery-3.7.1.min.js"></script>
+<script src="resources/dropzone.js"></script>
+<script src="resources/js.cookie.js"></script>
+<script src="resources/dark.js"></script>
+<meta charset="UTF-8">
+<meta name="description" content="The cutest free file host you've ever seen">
+<meta name="viewport" content="width=device-width, initial-scale=0.5">
+<title>Catbox</title>
+</head>
+
+<body>
+
+<header>
+<img src='/pictures/logo.png' alt='logo' style='margin: auto; display: block;'></header>
+
+<br>
+<br>
+
+<center> <div class="greeting">Uploads up to 200 MB are allowed. You should <b>read the <a class="linkbutton" href="faq.php">FAQ.</a></b></div ></center>
+
+<br>
+<br>
+
+<noscript><div class="noscriptalert">Javascript is required to use Catbox's drag and drop upload.<br><a href="https://nofun.catbox.moe/" class="linkbutton">No Javascript version</a></div></noscript>
+
+<center><form action="/user/api.php"
+	method='post' 
+	enctype='multipart/form-data'
+	class="dropzone"
+	id="dropzoneUpload">
+	<input type="hidden" name="reqtype" value="fileupload">
+	<input type="hidden" name="userhash" value="">
+</form></center>
+
+
+<div class="templateForUploads" style="display: none;">
+<div class="dz-preview dz-file-preview">
+	<div class="dz-details">
+		<div class="dz-filename"><span data-dz-name></span></div>
+		<div class="dz-size" data-dz-size></div>
+	</div>
+	<div class="dz-progress"><span class="dz-upload" data-dz-uploadprogress></span></div>
+	<div class="dz-error-message"><span data-dz-errormessage></span></div>
+</div>
+</div>
+
+
+<div class="urlUploads">
+<p><a class="linkbutton" id="showURLUp" href="#">Upload via URL</a></p>
+
+<form class="urlUploadForm" action="/user/api.php" method='post' enctype='multipart/form-data'  style="display: none;">
+	<input type="hidden" name="userhash" value="">
+	<input type="text" name="url" placeholder="Put your link in here, onii-chan~">
+	<button type="button" class="urlUpSubmit">Go!</button>
+
+<p class="urlUploadResponse" style="display: none;"></p>
+
+
+</form>
+
+</div>
+
+<script src="resources/uploadform.js"></script>
+
+
+<center><div class="linkrow">
+<a href='user/login.php' class='linkbutton'>Login</a> | <a href='user/register.php' class='linkbutton'>Register</a> |  <a href="faq.php" class="linkbutton">FAQ</a> | <a href="tools.php" class="linkbutton">Tools</a> | <a href="legal.php" class="linkbutton">Legal/Privacy Policy</a> | <a href="contact.php" class="linkbutton">Contact</a> | <a href="https://blog.catbox.moe" class="linkbutton">Blog</a> | <a href="https://catbox.moe/support.php" class="linkbutton" style="color: goldenrod"><b>Support Catbox!</b></a> | <a href="https://store.catbox.moe" class="linkbutton" target="_blank" style="color: goldenrod">Store</a> | <a href="https://status.catbox.moe/status/catbox" class = "linkbutton" target="_blank" rel="noopener"> Status</a> | 
+<a href='#' class='linkbutton' id='changeTheme'>Go Dark?</a>
+
+</div></center>
+
+
+
+<div class="notetiny" style="margin-top: 25px; width: 45%;">
+	<p>Catbox is entirely user-funded. Consider supporting?</p>
+	<p>
+		<span class="patreonSupportButton"><a class="patreonSupportLink" target="_blank" href="https://store.catbox.moe">Direct Support</a></span> <span class="kofiSupportButton"> <img src="pictures/outsideBrands/kofiCup.png" style="height: 15px; width: 22px; margin-right: 5px; margin-bottom: 3px; vertical-align: middle;"><a class="kofiSupportLink" target="_blank" href="https://ko-fi.com/catboxmoe">Ko-fi</a></span> <span class="storeSupportButton"><a class="storeSupportLink" target="_blank" href="https://store.catbox.moe">Merchandise!</a></span>
+	</p>
+        <p>Catbox was partially funded this month by supporters!</p>
+        <div class="patreonProgressBarBacking">
+                <div class="patreonProgressBar"><span style="font-weight: 600;">$1,575/$1,590</span></div>
+        </div>
+</div>
+
+<!--
+<div class="notetiny" style="margin-top: 25px; margin-bottom: 35px;">
+<b style="font-weight:700;">Hey Artists and Content Creators!</b>
+<br>
+Have you seen <a class="linkbutton" href="https://catbox.tech/" target="_blank">Catbox Spaces</a>? Read more about it <a class="linkbutton" href="https://blog.catbox.moe/post/774800476681207808/introducing-catbox-spaces-server-upgrades" target="_blank">here</a>!
+<br>
+<b style="font-weight:700;">Now featuring Anti-AI image protection with MistV2!</b>
+
+</div>
+-->
+
+<div class="notetiny" style="margin-top: 25px; margin-bottom: 35px; border-color: green;"><span style="color: green;">Merry</span> <span style="color: red;">Christmas</span>! There was so many requests for Christmas cards last year that I've decided to open them up again this year! <a class="linkbutton" href="https://docs.google.com/forms/d/e/1FAIpQLSfXPaqUdFqNgaJBeAnYT_5NzZe-VC-EwQ0q1UP-ETvppdC0Uw/viewform?usp=sf_link" target="_blank">Request yours here</a>!</div>
+
+<div class="notetiny" style="margin-top: 25px; margin-bottom: 35px;">Check out <a class="linkbutton" href="https://litterbox.catbox.moe">Litterbox</a> - A service by Catbox for temporary file storage!</div>
+
+<div class="footer"><a class="linkbutton" href="https://catbox.llc" target="_blank">Catbox LLC</a></div>
+
+<script>
+(function (d) {
+window.rum = {key: 'z2ave2fv'};
+var script = d.createElement('script');
+script.src = 'https://cdn.perfops.net/rom3/rom3.min.js';
+script.type = 'text/javascript';
+script.defer = true;
+script.async = true;
+d.getElementsByTagName('head')[0].appendChild(script);
+})(document);
+</script>
+</body>
+
+<div class="image">
+	<script src="resources/pic.js"></script>
+</div>
+
+</html>

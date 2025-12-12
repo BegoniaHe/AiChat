@@ -1,0 +1,262 @@
+use crate::storage::{simple_decrypt, simple_encrypt, ChatMessage};
+use serde_json::Value;
+use tauri::{AppHandle, Manager};
+use std::fs;
+use std::path::PathBuf;
+
+/// 获取数据目录
+fn get_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())
+}
+
+/// 保存配置
+#[tauri::command]
+pub async fn save_config(app: AppHandle, config: Value) -> Result<(), String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+
+    let config_path = data_dir.join("config.json");
+
+    // 加密敏感字段
+    let mut config_to_save = config.clone();
+    if let Some(api_key) = config_to_save.get("apiKey").and_then(|v| v.as_str()) {
+        let encrypted = simple_encrypt(api_key);
+        if let Some(obj) = config_to_save.as_object_mut() {
+            obj.insert("apiKey".to_string(), Value::String(encrypted));
+            obj.insert("_encrypted".to_string(), Value::Bool(true));
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&config_to_save).map_err(|e| e.to_string())?;
+    fs::write(config_path, json).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 加载配置
+#[tauri::command]
+pub async fn load_config(app: AppHandle) -> Result<Value, String> {
+    let data_dir = get_data_dir(&app)?;
+    let config_path = data_dir.join("config.json");
+
+    if !config_path.exists() {
+        // 返回默认配置
+        return Ok(serde_json::json!({
+            "provider": "openai",
+            "baseUrl": "https://api.openai.com/v1",
+            "model": "gpt-3.5-turbo",
+            "stream": true,
+            "apiKey": ""
+        }));
+    }
+
+    let json = fs::read_to_string(config_path).map_err(|e| e.to_string())?;
+    let mut config: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+    // 解密 API Key
+    if let Some(obj) = config.as_object_mut() {
+        if obj.get("_encrypted").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if let Some(api_key) = obj.get("apiKey").and_then(|v| v.as_str()) {
+                match simple_decrypt(api_key) {
+                    Ok(decrypted) => {
+                        obj.insert("apiKey".to_string(), Value::String(decrypted));
+                    }
+                    Err(_) => {}
+                }
+            }
+            obj.remove("_encrypted");
+        }
+    }
+
+    Ok(config)
+}
+
+/// 保存聊天历史
+#[tauri::command]
+pub async fn save_chat_history(
+    app: AppHandle,
+    character_id: String,
+    messages: Vec<ChatMessage>,
+) -> Result<(), String> {
+    let data_dir = get_data_dir(&app)?;
+    let chat_dir = data_dir.join("chats");
+    fs::create_dir_all(&chat_dir).map_err(|e| e.to_string())?;
+
+    let chat_file = chat_dir.join(format!("{}.json", character_id));
+
+    // 读取现有记录
+    let mut all_messages: Vec<ChatMessage> = if chat_file.exists() {
+        let json = fs::read_to_string(&chat_file).map_err(|e| e.to_string())?;
+        serde_json::from_str(&json).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // 添加新消息
+    all_messages.extend(messages);
+
+    // 保存
+    let json = serde_json::to_string_pretty(&all_messages).map_err(|e| e.to_string())?;
+    fs::write(chat_file, json).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 获取聊天历史
+#[tauri::command]
+pub async fn get_chat_history(
+    app: AppHandle,
+    character_id: String,
+    limit: Option<i64>,
+) -> Result<Vec<ChatMessage>, String> {
+    let data_dir = get_data_dir(&app)?;
+    let chat_file = data_dir.join("chats").join(format!("{}.json", character_id));
+
+    if !chat_file.exists() {
+        return Ok(Vec::new());
+    }
+
+    let json = fs::read_to_string(chat_file).map_err(|e| e.to_string())?;
+    let mut messages: Vec<ChatMessage> = serde_json::from_str(&json).unwrap_or_default();
+
+    // 限制数量
+    if let Some(limit) = limit {
+        let start = messages.len().saturating_sub(limit as usize);
+        messages = messages[start..].to_vec();
+    }
+
+    Ok(messages)
+}
+
+/// 清除聊天历史
+#[tauri::command]
+pub async fn clear_chat_history(
+    app: AppHandle,
+    character_id: String,
+) -> Result<(), String> {
+    let data_dir = get_data_dir(&app)?;
+    let chat_file = data_dir.join("chats").join(format!("{}.json", character_id));
+
+    if chat_file.exists() {
+        fs::remove_file(chat_file).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// 保存世界书数据
+#[tauri::command]
+pub async fn save_world_info(
+    app: AppHandle,
+    character_id: String,
+    data: Value,
+) -> Result<(), String> {
+    let data_dir = get_data_dir(&app)?;
+    let world_dir = data_dir.join("worldinfo");
+    fs::create_dir_all(&world_dir).map_err(|e| e.to_string())?;
+
+    let world_file = world_dir.join(format!("{}.json", character_id));
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    fs::write(world_file, json).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 获取世界书数据
+#[tauri::command]
+pub async fn get_world_info(
+    app: AppHandle,
+    character_id: String,
+) -> Result<Value, String> {
+    let data_dir = get_data_dir(&app)?;
+    let world_file = data_dir.join("worldinfo").join(format!("{}.json", character_id));
+
+    if !world_file.exists() {
+        return Ok(serde_json::json!({}));
+    }
+
+    let json = fs::read_to_string(world_file).map_err(|e| e.to_string())?;
+    let data: Value = serde_json::from_str(&json).unwrap_or(serde_json::json!({}));
+
+    Ok(data)
+}
+
+/// 保存角色信息
+#[tauri::command]
+pub async fn save_character(
+    app: AppHandle,
+    id: String,
+    name: String,
+    description: Option<String>,
+    avatar_url: Option<String>,
+    system_prompt: Option<String>,
+) -> Result<(), String> {
+    let data_dir = get_data_dir(&app)?;
+    let char_dir = data_dir.join("characters");
+    fs::create_dir_all(&char_dir).map_err(|e| e.to_string())?;
+
+    let char_file = char_dir.join(format!("{}.json", id));
+    let character = serde_json::json!({
+        "id": id,
+        "name": name,
+        "description": description,
+        "avatarUrl": avatar_url,
+        "systemPrompt": system_prompt
+    });
+
+    let json = serde_json::to_string_pretty(&character).map_err(|e| e.to_string())?;
+    fs::write(char_file, json).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 获取所有角色
+#[tauri::command]
+pub async fn get_characters(app: AppHandle) -> Result<Vec<Value>, String> {
+    let data_dir = get_data_dir(&app)?;
+    let char_dir = data_dir.join("characters");
+
+    if !char_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut characters = Vec::new();
+
+    for entry in fs::read_dir(char_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            let json = fs::read_to_string(path).map_err(|e| e.to_string())?;
+            if let Ok(character) = serde_json::from_str::<Value>(&json) {
+                characters.push(character);
+            }
+        }
+    }
+
+    Ok(characters)
+}
+
+/// 通用 KV 持久化（前端清缓存后仍可讀）
+#[tauri::command]
+pub async fn save_kv(app: AppHandle, name: String, data: Value) -> Result<(), String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let file = data_dir.join(format!("{name}.json"));
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    fs::write(file, json).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn load_kv(app: AppHandle, name: String) -> Result<Value, String> {
+    let data_dir = get_data_dir(&app)?;
+    let file = data_dir.join(format!("{name}.json"));
+    if !file.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let json = fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let data: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    Ok(data)
+}

@@ -1,0 +1,112 @@
+/**
+ * Contacts store
+ * - 保存已添加的好友/群聊信息
+ * - 目前主要用于在「联系人」页渲染所有聊天室入口
+ */
+
+import { logger } from '../utils/logger.js';
+
+const safeInvoke = async (cmd, args) => {
+    const invoker = window.__TAURI__?.core?.invoke;
+    if (typeof invoker === 'function') return invoker(cmd, args);
+    return null;
+};
+
+const STORE_KEY = 'contacts_store_v1';
+
+const normalizeId = (id) => String(id || '').trim();
+const displayNameFromId = (id) => {
+    const s = normalizeId(id);
+    return s.startsWith('group:') ? s.replace(/^group:/, '') : s;
+};
+
+export class ContactsStore {
+    constructor() {
+        this.state = this._load();
+        this.ready = this._hydrateFromDisk();
+    }
+
+    _load() {
+        try {
+            const raw = localStorage.getItem(STORE_KEY);
+            return raw ? JSON.parse(raw) : { contacts: {} };
+        } catch (err) {
+            logger.warn('contacts store load failed, reset', err);
+            return { contacts: {} };
+        }
+    }
+
+    async _hydrateFromDisk() {
+        try {
+            const kv = await safeInvoke('load_kv', { name: STORE_KEY });
+            if (kv && kv.contacts) {
+                this.state = kv;
+                localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                logger.info('contacts store hydrated from disk');
+            }
+        } catch (err) {
+            logger.debug('contacts store disk load skipped (可能非 Tauri)', err);
+        }
+    }
+
+    _persist() {
+        localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch(() => {});
+    }
+
+    listContacts() {
+        const list = Object.values(this.state.contacts || {});
+        return list.sort((a, b) => {
+            const ta = a.addedAt || 0;
+            const tb = b.addedAt || 0;
+            if (tb !== ta) return tb - ta;
+            return String(a.name || a.id).localeCompare(String(b.name || b.id));
+        });
+    }
+
+    getContact(id) {
+        return this.state.contacts[normalizeId(id)] || null;
+    }
+
+    upsertContact(contact) {
+        const id = normalizeId(contact?.id);
+        if (!id) return;
+        const prev = this.state.contacts[id] || {};
+        this.state.contacts[id] = {
+            id,
+            name: contact.name ?? prev.name ?? displayNameFromId(id),
+            avatar: contact.avatar ?? prev.avatar ?? '',
+            isGroup: contact.isGroup ?? prev.isGroup ?? id.startsWith('group:'),
+            addedAt: contact.addedAt ?? prev.addedAt ?? Date.now(),
+        };
+        this._persist();
+    }
+
+    removeContact(id) {
+        delete this.state.contacts[normalizeId(id)];
+        this._persist();
+    }
+
+    /**
+     * 確保所有現有 session 都在联系人里可见（不会覆盖已有资料）
+     */
+    ensureFromSessions(sessionIds = [], { defaultAvatar = '' } = {}) {
+        let changed = false;
+        sessionIds.forEach((sid) => {
+            const id = normalizeId(sid);
+            if (!id) return;
+            if (!this.state.contacts[id]) {
+                this.state.contacts[id] = {
+                    id,
+                    name: displayNameFromId(id),
+                    avatar: defaultAvatar,
+                    isGroup: id.startsWith('group:'),
+                    addedAt: Date.now(),
+                };
+                changed = true;
+            }
+        });
+        if (changed) this._persist();
+    }
+}
+

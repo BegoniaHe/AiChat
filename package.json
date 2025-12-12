@@ -1,0 +1,23 @@
+{
+  "name": "tauri-chat-app",
+  "version": "0.1.0",
+  "description": "A cross-platform chat application with LLM integration",
+  "type": "module",
+  "scripts": {
+    "prepare": "bash scripts/download-deps.sh && node scripts/fix-paths.js",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

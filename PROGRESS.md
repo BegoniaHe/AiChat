@@ -1,0 +1,392 @@
+# 開發進度追蹤（必更新）
+
+## 架構簡表
+- 前端殼：`src/index.html` + `assets/css/qq-legacy.css`（原版QQ樣式） + `assets/css/main.css`
+- 交互邏輯：`src/scripts/ui/app.js`（整體協調）、`src/scripts/ui/chat/chat-ui.js`（渲染/輸入/打字）、`src/scripts/ui/config-panel.js`
+- 橋接層：`src/scripts/ui/bridge.js`
+- 客戶端與配置：`src/scripts/api/*`、`src/scripts/storage/config.js`、`src/scripts/storage/chat.js`
+- 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
+
+## 變更日誌
+- 2025-12-10
+  - 建立進度追蹤文件，要求後續每次代碼更新同步記錄。
+  - 重構 UI 殼：新增 `assets/css/chat.css`、改寫 `src/index.html`，引入模組化聊天界面。
+  - 新增聊天 UI 模組：`src/scripts/ui/chat/chat-ui.js`（消息渲染、打字指示器、自適應輸入）。
+  - 新增應用入口：`src/scripts/ui/app.js`，統一初始化橋接、配置面板入口、流式/非流式發送、歷史預載。
+  - 更新 `MIGRATION_PLAN.md`：添加當前進度快照與下一步建議。
+- 2025-12-10（續）
+  - 加入消息解析器 `src/scripts/ui/chat/message-parser.js`，支持特例消息標記：[img-]、[yy-]、[music-]、[zz-]、[bqb-]。
+  - 擴展聊天渲染：`chat-ui.js` 支持圖片、語音卡、音樂卡、轉帳提示、表情包徽標，流式完成後會用解析結果重渲染。
+  - 新增卡片樣式：`assets/css/cards.css`，並在 `index.html` 引入。
+  - 更新 `app.js`：流式/非流式流程都使用解析後的類型化消息。
+- 2025-12-10 13:21
+  - 添加資產提取/下載工具：`scripts/utils/extract-assets.js` 生成 `asset-manifest.json`、`asset-summary.txt`；`scripts/utils/download-assets.js` 用於批量下載（需網絡）。
+  - 生成了初步資產清單（31 個 URL）。
+  - 新增 `WORLDINFO_NOTES.md`：整理 ST 世界書格式、目標簡化格式與導入策略（僅參考，不改 ST 源）。
+- 2025-12-10 13:23
+  - 新增世界書存取與轉換：`src/scripts/storage/worldinfo.js`（localStorage 緩存，提供 ST JSON -> 簡化格式轉換）。
+  - 更新 `bridge.js`：增加 worldStore；get/saveWorldInfo 先用本地存儲，後端命令存在則同步；新增 `window.importSTWorld` 兼容導入。
+- 2025-12-10 13:25
+  - 新增世界書面板 `src/scripts/ui/world-panel.js`：列出本地世界書、支持貼入 ST JSON 導入（使用 `convertSTWorld`）、可從頭部「世界书」按鈕打開。
+  - 更新 `index.html`（新增世界书按鈕）、`app.js`（掛載世界書面板）、`bridge.js`（listWorlds/setCurrentWorld）。
+- 2025-12-10 13:28
+  - 世界書面板增強：列表項新增「啟用」（設置當前世界書並提示）與「導出」（優先複製到剪貼簿，退化為下載 JSON）。
+- 2025-12-10 13:35
+  - 資產下載（需網路）：`node scripts/utils/download-assets.js` 成功拉取約 21 個文件到 `src/assets/external`；大量 sharkpan/catbox 資源仍有 404/命名過長/占位符導致失敗，保留 `asset-manifest.json` 作為待補清單。
+- 2025-12-10 13:36
+  - 引入已下載背景示例：`main.css` 增加 `bg-legacy` 並在 `index.html` body 掛上，引用 `src/assets/external/sharkpan.xyz-f-eWhZ-00017-2763077315.png`。
+- 2025-12-10 13:39
+  - UI 提升：聊天氣泡加入頭像/名稱/時間區塊；`chat-ui.js` 支持 avatar/name 元資料，`app.js` 為 user/assistant 指定本地下載的頭像。
+  - 新增卡片樣式文件引用：`assets/css/legacy-card.css`（預留本地圖集展示），`index.html` 引入。
+- 2025-12-10 13:44
+  - 聊天 composer 升級：增加快捷操作占位按鈕（圖片/音樂/轉帳/表情），樣式更新。
+  - 氣泡佈局保留頭像/名稱結構並增加 messageBuffer 以備後續多會話存儲。
+- 2025-12-10 13:45
+  - 增加前端會話存儲：`src/scripts/storage/chat-store.js`（localStorage），支援消息追加與草稿保存。
+  - `app.js` 接入 ChatStore，啟動時預載歷史/草稿；發送時同步寫入存儲；輸入變更即時保存草稿。
+  - `chat-ui.js` 提供 `setInputText` / `onInputChange` 以便草稿同步。
+- 2025-12-10 13:47
+  - 會話標籤顯示：`index.html` 顯示當前 session id，`chat-ui.js` 暴露 `setSessionLabel`。
+  - ChatStore 接入現有 UI，為後續多會話/群聊切換奠定基礎（目前單 session，草稿/歷史不丟失）。
+- 2025-12-10 13:48
+  - 新增會話面板：`src/scripts/ui/session-panel.js` 可列出/新建/切換會話，並刷新歷史/草稿、標記當前 session。
+  - `index.html` 增加「會話」按鈕，`chat-ui.js` 支持 session button handler，`app.js` 掛載 SessionPanel。
+- 2025-12-10 13:50
+  - 會話面板增強：顯示最近消息摘要，支持重命名與刪除會話；切換時清空當前列表並載入目標會話歷史/草稿。
+  - `chat-ui.js` 新增 `clearMessages`；ChatStore 增加 `delete`/`rename`/`getLastMessage`。
+- 2025-12-10 13:53
+  - 世界書應用：`bridge.js` 在構建消息時自動附加當前世界書的內容（按 priority 排序），由 `setCurrentWorld` 控制。
+- 2025-12-10 13:55
+  - 聊天訊息顯示補充：meta 支持時間、徽章樣式；user/assistant 消息自動帶當前時間。
+  - SessionPanel 增強：摘要顯示、重命名/刪除行為，切換時清空並重載歷史/草稿。
+- 2025-12-10 13:57
+  - 會話列表排序/摘要：按最後消息時間降序，顯示簡短摘要與時間；SessionPanel UI 更新。
+  - Session badge：為標題添加 session 標籤 ID，預留群聊/標識擴展。
+- 2025-12-10 13:58
+  - Composer 佈局調整：縱向排列快捷操作+輸入/發送；chat-scroll 啟用平滑滾動。
+- 2025-12-10 14:00
+  - 消息解析增強：支持 inline <img>、純 URL 的圖片/視頻後綴判定；badge/時間在 meta 顯示。
+  - 氣泡 meta 可顯示 badge，為群聊/狀態標籤預留。
+- 2025-12-10 14:02
+  - 會話列表細節：按最後消息時間排序；UI 保持摘要/時間顯示，預留群聊/標籤。
+- 2025-12-10 14:05
+  - SessionPanel 補充「清空當前」按鈕，便於重置會話；排序依最後消息時間；摘要/時間繼續顯示。
+- 2025-12-10 14:10
+  - 快捷操作落地：圖片/音樂/轉帳/表情按鈕可輸入內容並作為用戶消息插入（帶時間、頭像）。
+  - 為後續媒體卡片行為打基礎（當前使用 prompt 輸入 URL/文本）。
+- 2025-12-10 14:13
+  - 圖片預覽：消息中的圖片可點擊放大（lightbox）；預設預覽樣式添加。
+  - 歷史回放支持 type/name/avatar/time/meta/badge，確保渲染一致。
+- 2025-12-10 14:14
+  - 音樂卡片初步：播放/暫停按鈕（若有 URL 即可播放，無 URL 提示失敗）。
+  - 解析器支持 music 標記及 meta.artist，用於卡片展示。
+- 2025-12-10 14:16
+  - 轉帳卡片：展示金額並提供「確認收款」按鈕（UI 互動占位）。
+- 2025-12-10 14:18
+  - 表情選擇器：新增 `StickerPicker`（預置表情列表），與快捷「表情」按鈕打通，插入 sticker 類消息。
+- 2025-12-10 14:19
+  - 會話列表再優化：按最後消息時間排序，摘要+時間展示，並加入群聊標記（基於 ID 前綴）。
+- 2025-12-10 14:24
+  - Slash 命令占位：新增 `command-runner.js`，支持 /clear（清空當前會話）、/session（開啟會話面板）、/world（開啟世界書面板）。
+- 2025-12-10 14:27
+  - 快捷操作細節：圖片輸入提示支持 file/https；音樂卡片允許填寫音源 URL；會話時間顯示用本地化 HH:MM。
+- 2025-12-10 14:27
+  - 音樂卡片：播放/暫停基於 meta.url 判斷，無地址時提示；解析保留。
+- 2025-12-10 14:29
+  - 小清理：SessionPanel/快捷操作提示微調（無功能變化）。
+- 2025-12-10 14:31
+  - 鍵盤/底部適配：chat-scroll 增加 safe-bottom padding，兼容鍵盤。
+  - 清空提示文案更新，提醒不可恢復。
+- 2025-12-10 14:33
+  - 媒體選取占位：新增 `MediaPicker`，圖片快捷操作走 URL 輸入回調；結構上預留 file 選取接口。
+  - 圖片插入、表情插入均經 handler 統一寫入會話。
+- 2025-12-10 14:36
+  - 世界書指示器：新增 `WorldInfoIndicator`，掛載到標題顯示當前世界書（初始“未啟用”）。
+  - 打開世界書面板時同步刷新指示器。
+- 2025-12-10 14:36
+  - worldinfo 切換事件：`setCurrentWorld` 會派發 `worldinfo-changed`，`app.js` 監聽更新指示器。
+- 2025-12-10 14:37
+  - Slash 命令擴充：新增 /export（導出當前會話到剪貼簿）、/rename（重命名當前會話並同步 UI）。命令解析支持參數。
+  - Session change 事件：重命名後觸發 session-changed，UI 同步歷史/草稿與標籤。
+- 2025-12-10 14:38
+  - 命令新增：/worldset <id> 直接切換當前世界書。
+- 2025-12-10 14:39
+  - 命令新增：/exportworld 導出當前世界書 JSON 到剪貼簿。
+- 2025-12-10 14:49
+  - 會話列表摘要顯示更多字符（32），時間格式本地化；群聊標記保留。
+  - 消息容器 min-width 修正，避免 meta/badge 擠壓。
+- 2025-12-10 14:51
+  - 世界書命令：新增 /worldlist（列出已存世界書），初始化時刷新世界書指示器；/worldset 持續可用。
+- 2025-12-10 14:53
+  - 世界書面板：啟用時派發 worldinfo-changed，同步指示器。
+  - 音樂卡片：播放中更新按鈕文案並顯示 URL（如有），暫停時重置。
+- 2025-12-10 14:56
+  - 世界書面板新增「導出當前」按鈕，可複製/下載當前世界書；啟用時仍同步指示器。
+  - 命令補充：/worldlist、/worldset、/exportworld；世界書操作有 UI + 命令雙入口。
+- 2025-12-10 15:06
+  - 標題區支持換行（flex-wrap），避免指示器/徽章擠壓。
+- 2025-12-10 15:11
+  - 表情選擇器升級：增加「最近」分組（localStorage 保存），雙欄呈現最近/全部。
+  - 媒體快捷操作：支持本地圖片/音頻文件（Data URL 形式插入）；音樂快捷操作可選文件或 URL。
+- 2025-12-10 15:11
+  - 世界書面板：增加「輸入框切換」按鈕，可直接用名稱框切換；啟用/切換會派發 worldinfo-changed。
+- 2025-12-10 15:16
+  - 命令新增：/help 列出所有命令；命令集覆蓋 worldlist/worldset/exportworld/export/rename/clear/session/world 等。
+- 2025-12-10 15:19
+  - 兼容處理：標題指示器掛載時檢查元素存在，避免空指針；chat meta 样式保持。
+- 2025-12-10 15:27
+  - 音樂卡片微調：播放/暫停狀態更新（播放中文案、重置）；快速操作去掉占位註解。
+- 2025-12-10 13:16
+  - 添加資產提取腳本 `scripts/utils/extract-assets.js`，解析 `手机流式.html` 中外部 URL，生成 `asset-manifest.json` 與 `asset-summary.txt` 以準備資產本地化。
+- 2025-12-10 15:40
+  - MIGRATION_PLAN 新增「實施順序（帶 PS）」段落，固化工作順序與風險提示，便於後續按序推進。
+- 2025-12-10 15:40
+  - 音樂卡片加入狀態/進度顯示（播放中/暫停/播放完畢 + 00:00/總長度），轉帳卡片增加狀態行與收款時間標記。
+  - 會話面板強化：當前會話高亮並標記「當前」，切換行為改為只發佈 `session-changed` 事件避免重複渲染。
+  - 世界書面板顯示當前世界書、列表高亮當前並禁用啟用按鈕，啟用/輸入切換後自動刷新列表。
+- 2025-12-10 19:32
+  - 消息解析補充：識別以音頻後綴結尾的 URL（mp3/wav/ogg/m4a），自動渲染為音頻卡片；兼容 ST 口徑的 `[yy-]` 之外的直鏈音頻。
+- 2025-12-10 22:43
+  - 配置面板打磨：可顯示/隱藏 API Key，必填校驗 Base URL / API Key / 模型，保存/測試按鈕加入 loading 狀態並復用 appBridge 配置，避免誤操作；標題增加生效提示。
+- 2025-12-10 22:44
+  - 媒體健壯性：圖片失敗時提示並標記為破圖；音樂卡片對播放錯誤給出提示並重置狀態。
+- 2025-12-10 22:45
+  - 鍵盤/弱網體驗：輸入框聚焦自動滾動到底；新增全局錯誤 Banner 用於未配置 API 或發送失敗提示；發送報錯時會同時 toaster + banner 提示。
+- 2025-12-10 22:56
+  - 穩定性小補：忽略空消息渲染；語音 audio 加載錯誤給出提示。
+- 2025-12-10 23:00
+  - 網絡狀態提示：監聽 online/offline，離線時顯示錯誤 Banner，恢復時提示已連接，避免弱網無感。
+- 2025-12-10 23:08
+  - 發送保護：離線時禁用發送並提示；恢復網絡自動恢復發送按鈕；離線狀態下阻止發送流程，減少錯誤。
+- 2025-12-10 23:10
+  - 媒體/流式防護：破圖樣式標記；流式狀態標記，防止流式中途再次點擊發送；語音卡片加載錯誤提示（已補）。
+- 2025-12-10 23:13
+  - 錯誤提示可重試：全局 Banner 支持「重試」按鈕，發送失敗可一鍵重試；Banner 停留時間延長以便操作。
+- 2025-12-10 23:15
+  - 桥接層校驗：在生成前檢查在線狀態，離線直接報錯避免後端調用，與前端離線防護一致。
+- 2025-12-10 23:19
+  - 新增手機手動回歸清單 `TEST_CHECKLIST.md`，覆蓋消息/媒體、會話與世界書、配置校驗、網絡切換、鍵盤佈局等場景，便於真機驗證。
+- 2025-12-11 01:44
+  - 修復瀏覽器開發模式下的模組解析：去除 `@tauri-apps/api/core` 靜態導入，使用安全的 `safeInvoke`（檢查 `window.__TAURI__`），避免 dev server 報「Failed to resolve module specifier」。
+- 2025-12-11 09:47
+  - UI 還原原稿三頁結構：新增頂部導航（聊天/联系人/动态），左右為頭像與「＋」按鈕；世界書/配置/會話入口收納到頭像設定菜單；＋ 展開快捷菜單。
+  - 新增頁面骨架：聊天頁保留現有聊天殼，联系人/动态頁先行占位；增補頂部/頁面/菜單樣式以貼近原 QQ 風布局。
+- 2025-12-11 09:57
+  - 導航位置還原到底部 Tab（聊天/联系人/动态），符合原手機流式布局；聊天頁左上頭像、右上「＋」保留。
+  - 聊天列表入口：先顯示聊天列表，點擊項目進入會話並顯示聊天室；底部 Tab 切換恢復正常。
+- 2025-12-11 09:58
+  - 安全區適配：頂部/底部使用 safe-area 填充，避免與瀏海/狀態欄重疊；切換非聊天頁時自動回到聊天列表視圖，保持原版邏輯。
+- 2025-12-11 10:02
+  - 移除其餘 @tauri-apps/api/core 靜態導入，改為 safeInvoke，避免 Android dev 環境模組解析報錯；配置/聊天存儲均兼容非 Tauri 環境。
+- 2025-12-11 10:04
+  - 顶部安全区收紧约 3/4，避免过低；设置/快捷菜单定位到按钮旁，避免弹到右上角。
+- 2025-12-11 10:05
+  - 顶部再上移约一头像高度（调整 safe-area padding），以贴近手机状态栏下方的常规社交布局。
+- 2025-12-11 10:06
+  - 顶部继续上移约两个头像高度（减少 padding-top），进一步贴近状态栏位置。
+- 2025-12-11 10:10
+  - 顶部再上移（约三头像高度，clamp 保護），设置/快捷菜单增加标题与描述，布局改绝对定位并限定最小宽度，弹出贴近按钮。
+- 2025-12-11 10:12
+  - 再上移约半头像：仅保留顶部安全区并给 topbar 负 margin；头像菜单内「配置」改为「⚙ 设定」并继续触发配置面板。
+- 2025-12-11 10:14
+  - 顶部再上移（约两头像高度，负 margin 调整），贴近状态栏。
+- 2025-12-11 10:17
+  - 联系人/动态页顶端同步上移；弹出菜单改为 fixed 定位并跟随按钮位置（含滚动偏移），避免漂移。
+- 2025-12-11 10:19
+  - 弹出菜单位置贴近按钮（1px 距离）；配置面板填充改用面板作用域查询，修复「设定」点击报 null 的问题。
+- 2025-12-11 10:21
+  - 菜单进一步贴近按钮（取消额外距离）；配置面板在填充前若未创建将自动 createUI，避免元素为 null。
+- 2025-12-11 10:23
+  - 菜单定位函数化，按按钮 rect+scrollY 精确贴 1px；配置加载为空时回退默认，避免“provider 为 null”崩溃。
+- 2025-12-11 10:25
+  - 菜单上移约两头像高度（相对按钮偏移），进一步贴近按钮；配置面板加宽到 94% / 680px 以适配手机。
+- 2025-12-11 10:27
+  - 顶部高度恢复（topbar 负 margin -64）；配置面板进一步加宽至 96vw / 760px。
+- 2025-12-11 10:33
+  - 顶部再上移两头像高度（topbar 负 margin -128）。
+- 2025-12-11 10:34
+  - 顶部微调：上移幅度減少至 -96px，避免頭像/「＋」被遮擋。
+- 2025-12-11 10:34
+  - 去除頂部負 margin，改用 sticky top + safe-area；移除 body 額外頂部留白，避免被白色安全區遮擋。
+- 2025-12-11 10:35
+  - 為各頁增加 56px padding-top，給黏性 topbar 預留空間，避免頂部與第一條聊天重疊。
+- 2025-12-11 10:36
+  - 聊天列表單獨下移（margin-top: 64px），不再動整個頁面 padding，避免與頂部重疊。
+- 2025-12-11 10:37
+  - 再下移聊天列表到 72px，頂部高度保持不動，避免重疊。
+- 2025-12-11 11:05
+  - 配置面板：模型列表新增可点击模型芯片，移除重复下拉图标，确保完整列表可见；切换服务商时表单回到对应默认值，避免 API Key/Base URL 泄漏到其他 provider。
+  - 配置校验：provider 白名单同步 UI 选项，修复 makersuite 保存报「无效 provider」的问题。
+  - Vertex 提示：前端明确标注 Vertex 需后端签名，刷新/测试直接提示使用 Makersuite 或代理，避免误用 Service Account。
+- 2025-12-11 11:12
+  - 修复配置保存报错：ConfigManager 新增 set() 用于更新内存缓存，配置面板保存后不再触发 `window.appBridge.config.set is not a function`。
+- 2025-12-11 11:40
+  - 世界書入口調整：移出頭像菜單，置於聊天室右上「≡」下拉（世界書 / 聊天設置）；保留快捷描述。
+  - 世界書按會話隔離：AppBridge 支持 per-session world 映射（本地持久化），切換會話會同步當前世界書並更新指示器；世界書面板顯示當前會話 ID。
+- 2025-12-11 12:00
+  - 新增 Tauri KV 落盤：通用 save_kv/load_kv 命令；ChatStore/世界書/會話-世界書映射均落盤到 app_data 目錄，清空瀏覽器緩存也不丟失。
+  - 安全處理配置：保存到文件時不寫入 API Key（需手動再次填入），BaseURL/模型等仍可持久；localStorage 也不再存 API Key。
+- 2025-12-11 12:10
+  - 世界書導入改為 ST 原生體驗：支持選擇 JSON 文件或貼上內容，名稱自動取 JSON.name/文件名，無需手填；去掉名稱輸入/手動切換按鈕。
+- 2025-12-12 12:05
+  - 長按氣泡菜單：AI 消息支持重新生成/刪除，使用消息前最近的用戶內容重新生成並替換；用戶消息支持編輯/刪除（編輯不觸發重生成）。
+  - 消息存儲：ChatStore 增加消息 ID、更新/刪除接口，長按操作同步更新存儲與 UI，預載帶上 id 確保替換一致。
+- 2025-12-11 10:45 - 原版設計完整還原
+  - **重大重構**：提取原版 `手机流式.html` 的完整 CSS 設計並清晰化架構。
+  - 新增 `src/assets/css/qq-legacy.css`：原版 QQ 風格樣式系統（16+ 模塊，CSS 變量系統）。
+  - 消息氣泡顏色還原為黃棕色系：`rgba(198, 164, 108, 0.85)`（原版配色）。
+  - 完整還原消息界面佈局：頭像+用戶名橫向排列，聊天列表項顯示預覽+時間右上角。
+  - 完整還原聊天室界面：頂部 `‹ 會話名 ≡`、底部 🎙 + 輸入框 + 發送（黑底白字）。
+  - 完整還原聯系人界面：頂部一致佈局、搜索框 "搜索联系人..."、分組顯示（群組+未分組聯系人）。
+  - 完整還原動態界面：頂部 "動態" + 🔔 + ⚙、動態卡片（頭像+內容+圖片+互動數據+評論）。
+- 2025-12-11 10:53 - 聊天列表/聊天室邏輯分離修復
+  - 修復聊天室元素溢出到消息界面問題：`.QQ_chat_page` 改為 `position: fixed` + 多重隱藏規則。
+  - 進入聊天室時自動隱藏消息界面頂部和底部導航欄（完全匹配原版行為）。
+  - 退出聊天室時恢復顯示頂部和底部導航欄。
+  - 聊天列表和聊天室使用 `.hidden` 類互斥顯示，確保不會同時出現。
+- 2025-12-11 11:20 - 狀態欄透明與頂部空白修復
+  - 移除 `body` 的 `padding-top`，改為在 `.topbar` 使用 `env(safe-area-inset-top)`。
+  - 頂欄緊貼手機狀態欄下方，無多餘空白。
+  - 頂欄背景改為半透明：`rgba(255, 255, 255, 0.95)`，不完全遮擋狀態欄。
+  - 添加 `<meta name="theme-color" content="transparent">`，Android 狀態欄透明顯示。
+  - `body` 背景設為 `transparent`，可透視手機時間/電量圖標。
+- 2025-12-11 11:26 - 聊天室完整還原（匹配原版截圖）
+  - 聊天室顶部样式：半透明灰色 `rgba(230, 230, 230, 0.85)` + 毛玻璃效果。
+  - 返回按鈕：`‹`（28px，左對齊）。
+  - 菜單按鈕：`≡`（28px，右對齊）。
+  - 會話名稱居中顯示。
+  - 輸入區完整還原：🎙 麥克風 + 圓角輸入框（白色背景+灰邊框）+ "發送"（黑底白字 `#1a1a1a`）。
+  - 底部輸入區背景：半透明灰色 `rgba(240, 240, 240, 0.95)` + 安全區適配。
+- 2025-12-11 14:53 - UI 細節調整與輸入框優化
+  - 修復下拉菜單位置：頭像/「+」按鈕菜單現在出現在按鈕下方（4px 間隙），不再遮擋按鈕本身。
+  - 「+」按鈕菜單改為右對齊，避免被手機邊框切掉部分內容。
+  - 聊天室頂部優化：減少頂部灰色區域高度（padding 從 8px 降至 4px/2px），改用 min-height: 36px，匹配原版緊湊設計。
+  - 輸入框尺寸調整：輸入框高度增至 40px，語音按鈕 36px，發送按鈕增大（10px 20px），字體/圓角相應調整，匹配原版設計。
+- 2025-12-11 15:06 - 聊天設置功能實現
+  - 移除臨時的下拉菜單，改為完整的聊天設置彈窗（模態窗口），匹配原版設計。
+  - 新增聊天設置彈窗：包含氣泡顏色、字體顏色、聊天壁紙設置，並提供實時預覽。
+  - 實現隨機配色功能：一鍵生成隨機氣泡和字體顏色組合。
+  - 設置持久化：將設置保存到 localStorage，按會話獨立存儲，切換會話自動應用對應設置。
+  - 新增 ChatStore 方法：`getSessionSettings`、`setSessionSettings`、`clearMessages`、`switchSession`。
+  - 添加 CSS 樣式到 `qq-legacy.css`：完整的彈窗樣式系統（遮罩層、標題欄、內容區、按鈕等）。
+  - 聊天室菜單按鈕（≡）點擊打開設置彈窗，替代原下拉菜單。
+
+- 2025-12-11 16:17 - API 串接功能实现（支持多个 LLM 服务商）
+  - 新增 Google Gemini provider：完整支持 Google AI Studio 和 Vertex AI。
+    - 实现消息格式转换（OpenAI 格式 → Gemini 格式）
+    - 支持流式和非流式生成
+    - 支持系统指令（systemInstruction）
+    - 安全设置配置（GEMINI_SAFETY）
+    - 模型列表获取
+    - 健康检查
+  - 新增 Deepseek provider：基于 OpenAI 兼容 API。
+    - 继承 OpenAIProvider，设置默认 baseUrl 和模型
+    - 支持所有 OpenAI 兼容功能（流式、非流式、模型列表等）
+  - 更新 LLMClient：支持 5 种服务商（OpenAI、Gemini、Deepseek、Anthropic、Custom）。
+  - 更新配置面板：
+    - 服务商下拉菜单新增 Google Gemini 和 Deepseek 选项
+    - 不同服务商自动切换默认配置（baseUrl、model、帮助文本）
+    - 支持实时切换并更新占位符
+  - 技术细节：
+    - Gemini API 使用不同的消息格式（contents + systemInstruction）
+    - 支持 Google AI Studio（API Key in URL）和 Vertex AI（Authorization header）
+    - Deepseek 完全兼容 OpenAI API 格式
+  - 文件修改：
+    - 新增：`src/scripts/api/providers/gemini.js`（~300行）
+    - 新增：`src/scripts/api/providers/deepseek.js`（~50行）
+    - 修改：`src/scripts/api/client.js`（导入新 providers）
+    - 修改：`src/scripts/ui/config-panel.js`（更新服务商选项和默认配置）
+
+- 2025-12-11 18:00 - API 配置增强与安全存储（分离 Vertex AI 和 AI Studio）
+  - **重大重构**：参考 SillyTavern 的安全存储方案，实现 API 配置增强。
+  - 分离 Google Gemini 服务商为两个独立选项：
+    - **Google AI Studio (Makersuite)**：使用 API Key 在 URL 参数中认证
+    - **Google Vertex AI**：支持两种认证模式
+      - 快速模式：使用 API Key（Authorization: Bearer）
+      - 完整模式：使用 Service Account JSON（OAuth2 + Bearer token）
+  - 实现 API Key 安全存储与掩码显示：
+    - 保存后显示为 `••••••••••••••••`，保护敏感信息
+    - 用户聚焦输入框时自动清空，便于修改
+    - 原始 Key 存储在 `dataset.originalKey`，提交时使用实际值
+    - Service Account JSON 同样支持掩码显示
+  - 自动填写 Base URL 和模型：
+    - 选择服务商时自动填写对应的 Base URL 和默认模型
+    - 智能判断：如果当前值为空或为其他服务商的默认值，才自动填写
+    - 避免误覆盖用户自定义配置
+  - Vertex AI 专属配置字段（条件显示）：
+    - **Project ID**：GCP 项目 ID（必填）
+    - **Region**：5 个常用区域选项（us-central1、us-east1、us-west1、europe-west1、asia-southeast1）
+    - **Service Account JSON**：完整模式认证（可选，支持掩码显示/隐藏切换）
+  - 配置面板 UI 优化：
+    - 动态字段可见性：选择 Vertex AI 时显示专属字段，其他服务商隐藏
+    - 帮助文本自动更新：根据选择的服务商显示不同的提示
+    - 添加显示/隐藏按钮：API Key 和 Service Account JSON 均支持切换显示
+  - 技术实现细节：
+    - Service Account JSON 认证需要后端支持（浏览器无法签署 RS256 JWT）
+    - 当前实现会抛出友好错误，提示用户使用 AI Studio 或设置后端代理
+    - Vertex AI Express 模式（API Key）可在前端直接使用
+  - 文件修改：
+    - 新增：`src/scripts/api/providers/makersuite.js`（~220行，AI Studio 专用）
+    - 新增：`src/scripts/api/providers/vertexai.js`（~300行，Vertex AI 专用）
+    - 修改：`src/scripts/api/client.js`（添加 makersuite 和 vertexai providers）
+    - 重大修改：`src/scripts/ui/config-panel.js`（新增 Vertex AI 字段、掩码逻辑、自动填写、字段可见性控制）
+  - 未来改进方向：
+    - 可考虑实现后端代理以支持完整的 Service Account JSON 认证
+    - 可考虑使用更安全的加密存储方案（如 Web Crypto API）
+    - 可考虑添加配置导入/导出功能
+
+- 2025-12-11 18:30 - 模型列表自动获取功能（仿 SillyTavern）
+  - **新功能**：实现类似 SillyTavern 的模型列表自动获取和选择功能。
+  - 将模型输入框改为**可输入的下拉选单**：
+    - 使用 HTML5 `<datalist>` 元素实现
+    - 用户可以手动输入模型 ID
+    - 也可以从获取的模型列表中选择
+    - 兼顾灵活性和便利性
+  - 添加"⟳ 刷新列表"按钮：
+    - 位于模型字段标签右侧
+    - 点击后自动从 API 获取可用模型列表
+    - 显示加载状态和进度提示
+  - 智能验证：
+    - 刷新前检查必填字段（Base URL、API Key）
+    - Vertex AI 需要额外检查 Project ID
+    - 缺少必填字段时给出友好提示
+  - 实时反馈：
+    - 获取中显示"正在从服务器获取可用模型列表..."
+    - 成功后显示"已加载 N 个模型（可输入或从列表选择）"
+    - 失败时显示错误信息并提示重试
+    - 3-5 秒后自动恢复原始提示文本
+  - 调用各 Provider 的 `listModels()` 方法：
+    - OpenAI: 从 `/v1/models` 端点获取
+    - Makersuite: 从 Google AI Studio API 获取
+    - Vertex AI: 从 Vertex AI models 端点获取
+    - Deepseek: 从 `/v1/models` 端点获取并过滤
+    - Anthropic: 返回预定义的 Claude 模型列表
+  - 用户体验优化：
+    - 按钮加载状态（禁用+文字变化）
+    - 彩色状态提示（蓝色加载、绿色成功、红色失败）
+    - 自动恢复提示文本避免混淆
+    - 保留用户手动输入能力
+  - 文件修改：
+    - 修改：`src/scripts/ui/config-panel.js`（新增 refreshModels 方法、UI 更新）
+
+- 2025-12-11 18:45 - Vertex AI 优化与模型输入框改进
+  - **Vertex AI Project ID 自动提取**：
+    - 从 Service Account JSON 中自动提取 `project_id` 字段
+    - 移除 Project ID 输入框（不再需要手动填写）
+    - 简化配置流程，减少用户输入错误
+    - 更新帮助文本："Project ID 会自动从 JSON 中提取"
+  - **模型输入框视觉优化**：
+    - 添加下拉箭头图标 (▼)，更符合下拉选单视觉习惯
+    - 使用 `position: relative` 容器实现图标叠加
+    - 保持完整的输入和选择功能
+    - 右侧预留空间避免文字与图标重叠
+  - **Vertex AI 配置验证优化**：
+    - 刷新模型列表时检查 Service Account JSON（而非 Project ID）
+    - 更准确的错误提示
+  - 技术实现：
+    - `VertexAIProvider` 构造函数中解析 Service Account JSON
+    - 自动提取 `project_id` 字段并赋值
+    - 保留 fallback 到 `config.vertexaiProjectId`（向后兼容）
+  - 文件修改：
+    - 修改：`src/scripts/api/providers/vertexai.js`（自动提取 Project ID）
+    - 修改：`src/scripts/ui/config-panel.js`（移除 Project ID 字段、添加下拉箭头）
