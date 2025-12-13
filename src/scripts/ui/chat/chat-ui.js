@@ -30,6 +30,9 @@ export class ChatUI {
 
     bindInputAutosize() {
         const el = this.inputEl;
+        if (!el) return;
+        // 目前聊天室輸入是 <input>（單行），避免 autosize 覆寫 CSS 高度
+        if (el.tagName !== 'TEXTAREA') return;
         const resize = () => {
             el.style.height = 'auto';
             el.style.height = `${Math.min(el.scrollHeight, 140)}px`;

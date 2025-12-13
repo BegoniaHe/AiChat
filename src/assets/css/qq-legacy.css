@@ -83,6 +83,7 @@
     flex-direction: column;
     width: 100%;
     height: 100vh;
+    height: 100dvh; /* 鍵盤彈出時跟隨視口變化 */
     position: fixed; /* 固定定位，避免溢出 */
     top: 0;
     left: 0;
@@ -97,8 +98,7 @@
     padding-top: 0;
 
     /* 滚动 */
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden; /* 僅消息列表滾動，避免鍵盤引發整頁滾動把頂欄推出 */
 
     /* 隐藏滚动条 */
     scrollbar-width: none;
@@ -112,13 +112,13 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 12px;
-    padding-top: calc(2px + env(safe-area-inset-top, 0px));
+    padding: 8px 12px;
+    padding-top: calc(8px + clamp(0px, env(safe-area-inset-top, 0px), 12px)); /* 限制安全區高度，避免過大 */
     background: rgba(230, 230, 230, 0.85);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
     flex-shrink: 0;
-    min-height: 36px;
+    min-height: 44px;
     box-sizing: border-box;
 }
 
@@ -142,6 +142,7 @@
     font-size: 16px;
     font-weight: 600;
     color: #1a1a1a;
+    line-height: 32px;
 }
 
 .chat-menu-btn {
@@ -187,7 +188,8 @@
     /* 间距 */
     padding-left: 8px;
     padding-right: 8px;
-    margin-bottom: var(--qq-spacing-2xl); /* 为输入框预留空间 */
+    padding-top: 10px; /* 首條消息與頂欄留出間距 */
+    margin-bottom: calc(var(--qq-spacing-2xl) + 20px); /* 为输入框预留空间（輸入框加高後） */
 
     /* 隐藏滚动条 */
     scrollbar-width: none;
@@ -361,12 +363,13 @@
 
 .chat-input {
     flex: 1;
-    height: 40px;
-    padding: 0 16px;
-    border-radius: 20px;
+    height: 54px;
+    padding: 0 20px;
+    border-radius: 27px;
     border: 1px solid rgba(0, 0, 0, 0.12);
     background: rgba(255, 255, 255, 0.9);
     font-size: 16px;
+    line-height: 54px;
     outline: none;
 }
 

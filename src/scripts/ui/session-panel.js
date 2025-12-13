@@ -6,13 +6,15 @@
 import { logger } from '../utils/logger.js';
 
 export class SessionPanel {
-    constructor(store, ui) {
-        this.store = store;
+    constructor(chatStore, contactsStore, ui, { onUpdated } = {}) {
+        this.store = chatStore;
+        this.contactsStore = contactsStore;
         this.ui = ui;
         this.overlay = null;
         this.panel = null;
         this.listEl = null;
         this.nameInput = null;
+        this.onUpdated = typeof onUpdated === 'function' ? onUpdated : null;
     }
 
     formatTime(ts) {
@@ -21,11 +23,14 @@ export class SessionPanel {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    show() {
+    show({ focusAdd = false } = {}) {
         if (!this.panel) this.createUI();
         this.refresh();
         this.overlay.style.display = 'block';
         this.panel.style.display = 'block';
+        if (focusAdd) {
+            setTimeout(() => this.nameInput?.focus(), 0);
+        }
     }
 
     hide() {
@@ -36,16 +41,17 @@ export class SessionPanel {
     refresh() {
         if (!this.listEl) return;
         this.listEl.innerHTML = '';
-        const sessions = this.store.listSessions();
+        const contacts = this.contactsStore?.listContacts?.() || [];
         const currentId = this.store.getCurrent();
-        if (!sessions.length) {
+        if (!contacts.length) {
             const li = document.createElement('li');
-            li.textContent = '（暫無會話）';
+            li.textContent = '（暫無好友/群組）';
             li.style.color = '#888';
             this.listEl.appendChild(li);
             return;
         }
-        sessions.forEach((id) => {
+        contacts.forEach((c) => {
+            const id = c.id;
             const li = document.createElement('li');
             li.style.display = 'flex';
             li.style.justifyContent = 'space-between';
@@ -61,10 +67,11 @@ export class SessionPanel {
             const last = this.store.getLastMessage(id);
             const snippet = last ? (last.content || '').slice(0, 32) : '新會話';
             const time = last && last.timestamp ? this.formatTime(last.timestamp) : '';
-            const isGroup = id.startsWith('group:');
+            const isGroup = Boolean(c.isGroup) || id.startsWith('group:');
             const badge = isGroup ? `<span style="padding:2px 6px; border-radius:8px; background:#e0f2fe; color:#0369a1; font-size:11px; margin-left:4px;">群</span>` : '';
             const currentTag = id === currentId ? `<span style="color:#059669; font-size:11px; margin-left:6px;">當前</span>` : '';
-            name.innerHTML = `<strong>${id}${badge}${currentTag}</strong><br><span style="color:#888;font-size:12px;">${snippet}</span> ${time ? `<span style="color:#9ca3af;font-size:11px;">${time}</span>` : ''}`;
+            const displayName = c.name || id;
+            name.innerHTML = `<strong>${displayName}${badge}${currentTag}</strong><br><span style="color:#888;font-size:12px;">${snippet}</span> ${time ? `<span style="color:#9ca3af;font-size:11px;">${time}</span>` : ''}`;
             if (id === currentId) {
                 name.style.fontWeight = '700';
             }
@@ -79,7 +86,7 @@ export class SessionPanel {
             actions.style.gap = '6px';
 
             const renameBtn = document.createElement('button');
-            renameBtn.textContent = '重命名';
+            renameBtn.textContent = '改名';
             renameBtn.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
             renameBtn.onclick = () => this.rename(id);
 
@@ -105,23 +112,60 @@ export class SessionPanel {
     }
 
     rename(id) {
-        const next = prompt('輸入新會話 ID', id);
+        const currentName = this.contactsStore?.getContact?.(id)?.name || id;
+        const next = prompt('輸入新好友名稱（同時作為聊天室 ID）', currentName);
         if (!next || next === id) return;
-        if (this.store.listSessions().includes(next)) {
-            window.toastr?.warning('ID 已存在，請換一個');
+        const nextId = next.trim();
+        if (!nextId) return;
+        if (nextId.startsWith('group:')) {
+            window.toastr?.warning('好友名稱不可使用 group: 前綴');
             return;
         }
-        this.store.rename(id, next);
-        this.switchTo(next);
+        if (this.contactsStore?.getContact?.(nextId) || this.store.listSessions().includes(nextId)) {
+            window.toastr?.warning('名稱已存在，請換一個');
+            return;
+        }
+
+        // 迁移世界书映射（按会话隔离）
+        const map = window.appBridge?.worldSessionMap;
+        if (map && map[id]) {
+            map[nextId] = map[id];
+            delete map[id];
+            window.appBridge?.persistWorldSessionMap?.();
+        }
+
+        // 迁移联系人记录
+        const existing = this.contactsStore?.getContact?.(id);
+        if (existing) {
+            this.contactsStore.removeContact(id);
+            this.contactsStore.upsertContact({ ...existing, id: nextId, name: nextId });
+        }
+
+        // 迁移聊天记录
+        this.store.rename(id, nextId);
+
+        this.switchTo(nextId);
         this.refresh();
+        this.onUpdated?.();
     }
 
     remove(id) {
-        if (!confirm(`確認刪除會話：${id}？`)) return;
+        const name = this.contactsStore?.getContact?.(id)?.name || id;
+        if (!confirm(`確認刪除：${name}？此操作會刪除聊天室與好友記錄（不可恢復）。`)) return;
+
+        // 清理世界书映射
+        const map = window.appBridge?.worldSessionMap;
+        if (map && map[id]) {
+            delete map[id];
+            window.appBridge?.persistWorldSessionMap?.();
+        }
+
         this.store.delete(id);
+        this.contactsStore?.removeContact?.(id);
         this.refresh();
         const current = this.store.getCurrent();
         this.switchTo(current);
+        this.onUpdated?.();
     }
 
     createUI() {
@@ -140,11 +184,11 @@ export class SessionPanel {
         this.panel.onclick = (e) => e.stopPropagation();
 
         this.panel.innerHTML = `
-            <h3 style="margin:0 0 12px;">會話列表</h3>
+            <h3 style="margin:0 0 12px;">好友列表</h3>
             <div style="display:flex; gap:8px; margin-bottom:8px;">
-                <input id="session-name" placeholder="新會話ID" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;">
-                <button id="session-add" style="padding:8px 12px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">新建</button>
-                <button id="session-clear" style="padding:8px 12px; border:1px solid #fca5a5; border-radius:8px; background:#fee2e2; color:#b91c1c;">清空當前</button>
+                <input id="session-name" placeholder="新好友名稱" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;">
+                <button id="session-add" style="padding:8px 12px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">添加</button>
+                <button id="session-clear" style="padding:8px 12px; border:1px solid #fca5a5; border-radius:8px; background:#fee2e2; color:#b91c1c;">清空聊天</button>
             </div>
             <ul id="session-list" style="list-style:none; padding:0; margin:0; border:1px solid #eee; border-radius:8px;"></ul>
         `;
@@ -159,20 +203,31 @@ export class SessionPanel {
     }
 
     addSession() {
-        const id = (this.nameInput.value || '').trim();
-        if (!id) {
-            window.toastr?.warning('請輸入會話ID');
+        const name = (this.nameInput.value || '').trim();
+        if (!name) {
+            window.toastr?.warning('請輸入好友名稱');
             return;
         }
-        if (!this.store.listSessions().includes(id)) {
-            this.store.setCurrent(id);
-            this.store.appendMessage({ role: 'system', type: 'meta', content: '新會話開始' }, id);
-        } else {
-            this.store.setCurrent(id);
+
+        if (name.startsWith('group:')) {
+            window.toastr?.warning('好友名稱不可使用 group: 前綴');
+            return;
         }
+
+        if (this.contactsStore?.getContact?.(name)) {
+            window.toastr?.warning('好友已存在');
+            return;
+        }
+
+        // 创建独立聊天室（会话）与联系人记录
+        this.contactsStore?.upsertContact?.({ id: name, name, isGroup: false, addedAt: Date.now() });
+        this.store.switchSession(name);
+        window.appBridge?.setActiveSession?.(name);
+
         this.nameInput.value = '';
-        this.switchTo(id);
+        this.switchTo(name);
         this.refresh();
+        this.onUpdated?.();
     }
 
     clearCurrent() {

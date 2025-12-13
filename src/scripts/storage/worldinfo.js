@@ -7,9 +7,11 @@
 import { logger } from '../utils/logger.js';
 
 const safeInvoke = async (cmd, args) => {
-    const invoker = window.__TAURI__?.core?.invoke;
-    if (typeof invoker === 'function') return invoker(cmd, args);
-    return null;
+    const invoker = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INVOKE__;
+    if (typeof invoker !== 'function') {
+        throw new Error('Tauri invoke not available');
+    }
+    return invoker(cmd, args);
 };
 
 const STORAGE_KEY = 'worldinfo_store';

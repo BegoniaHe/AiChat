@@ -21,7 +21,7 @@ const initApp = async () => {
     await chatStore.ready;
     await contactsStore.ready;
     window.appBridge.setActiveSession(chatStore.getCurrent());
-    const sessionPanel = new SessionPanel(chatStore, ui);
+    const sessionPanel = new SessionPanel(chatStore, contactsStore, ui);
     const stickerPicker = new StickerPicker((tag) => handleSticker(tag));
     const mediaPicker = new MediaPicker({
         onUrl: (url) => handleImage(url),
@@ -153,6 +153,7 @@ const initApp = async () => {
         renderChatList();
         renderContactsUngrouped();
     };
+    sessionPanel.onUpdated = refreshChatAndContacts;
 
     /* ---------------- 底部导航（聊天/联系人/动态） ---------------- */
     const navBtns = document.querySelectorAll('.bottom-nav .nav-btn');
@@ -337,9 +338,9 @@ const initApp = async () => {
     quickMenu?.querySelectorAll('button').forEach(btn => {
         btn.addEventListener('click', () => {
             const action = btn.dataset.action;
-            if (action === 'new-chat') sessionPanel.show();
-            if (action === 'new-contact') window.toastr?.info('添加联系人占位');
-            if (action === 'new-moment') window.toastr?.info('发布动态占位');
+            if (action === 'add-friend') sessionPanel.show({ focusAdd: true });
+            if (action === 'create-group') window.toastr?.info('创建群组占位');
+            if (action === 'new-group') window.toastr?.info('新建分组占位');
             hideMenus();
         });
     });

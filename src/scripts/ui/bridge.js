@@ -10,12 +10,11 @@ import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
 const safeInvoke = async (cmd, args) => {
-    const invoker = window.__TAURI__?.core?.invoke;
-    if (typeof invoker === 'function') {
-        return invoker(cmd, args);
+    const invoker = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INVOKE__;
+    if (typeof invoker !== 'function') {
+        throw new Error('Tauri invoke not available');
     }
-    // 非 Tauri 環境下返回 null，避免模組解析錯誤
-    return null;
+    return invoker(cmd, args);
 };
 
 class AppBridge {

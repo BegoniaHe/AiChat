@@ -14,6 +14,8 @@ export class ConfigPanel {
         this.saveButton = null;
         this.testButton = null;
         this.modelOptions = [];
+        this.keyOverlay = null;
+        this.keyModal = null;
     }
 
     /**
@@ -30,6 +32,7 @@ export class ConfigPanel {
             logger.warn('配置为空，使用默认配置');
             config = this.configManager.getDefault();
         }
+        this.refreshProfileOptions();
         this.populateForm(config);
 
         this.element.style.display = 'block';
@@ -77,6 +80,19 @@ export class ConfigPanel {
                 </div>
 
                 <div style="margin-bottom: 15px;">
+                    <label style="display: flex; align-items:center; justify-content:space-between; margin-bottom: 5px; font-weight: bold;">
+                        <span>連線設定檔</span>
+                        <div style="display:flex; gap:6px;">
+                            <button id="profile-new" title="新建設定檔" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">＋</button>
+                            <button id="profile-rename" title="重命名" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">✎</button>
+                            <button id="profile-delete" title="刪除" style="font-size:12px; border:none; background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:6px; cursor:pointer;">🗑</button>
+                        </div>
+                    </label>
+                    <select id="config-profile" style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; font-size: 14px;"></select>
+                    <small style="color: #666;">可保存多個配置並快速切換（清除緩存也不丟）</small>
+                </div>
+
+                <div style="margin-bottom: 15px;">
                     <label style="display: block; margin-bottom: 5px; font-weight: bold;">服务商</label>
                     <select id="config-provider" style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; font-size: 14px;">
                         <option value="openai">OpenAI</option>
@@ -98,11 +114,14 @@ export class ConfigPanel {
                 <div style="margin-bottom: 15px;">
                     <label style="display: flex; align-items:center; justify-content:space-between; margin-bottom: 5px; font-weight: bold;">
                         <span>API Key</span>
-                        <button id="toggle-apikey" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">顯示</button>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <button id="toggle-apikey" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">顯示</button>
+                            <button id="manage-keys" title="管理已保存的 Key" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">🔑</button>
+                        </div>
                     </label>
                     <input type="password" id="config-apikey" placeholder="sk-..."
                            style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; font-size: 14px; box-sizing: border-box;">
-                    <small id="apikey-help" style="color: #666;">你的 API 密钥将被安全存储</small>
+                    <small id="apikey-help" style="color: #666;">保存後 Key 以遮罩顯示（不可複製）；用 🔑 管理多個 Key</small>
                 </div>
 
                 <div id="vertexai-fields" style="display: none;">
@@ -193,13 +212,28 @@ export class ConfigPanel {
         this.element.querySelector('#config-cancel').onclick = () => this.hide();
         this.testButton.onclick = () => this.onTest();
         this.element.querySelector('#toggle-apikey').onclick = () => this.toggleApiKey();
+        this.element.querySelector('#manage-keys').onclick = () => this.openKeyManager();
+        this.element.querySelector('#profile-new').onclick = () => this.createProfile();
+        this.element.querySelector('#profile-rename').onclick = () => this.renameProfile();
+        this.element.querySelector('#profile-delete').onclick = () => this.deleteProfile();
         this.element.querySelector('#toggle-sa')?.addEventListener('click', () => this.toggleServiceAccount());
         this.element.querySelector('#refresh-models').onclick = () => this.refreshModels();
+
+        // 連線設定檔切換
+        this.element.querySelector('#config-profile').onchange = async (e) => {
+            const profileId = e.target.value;
+            await this.configManager.setActiveProfile(profileId);
+            const config = await this.configManager.load();
+            this.populateForm(config);
+            if (window.appBridge) {
+                window.appBridge.config.set(config);
+                window.appBridge.client = config.apiKey ? new LLMClient(config) : null;
+            }
+        };
 
         // Provider 切换时更新默认值和字段可见性
         this.element.querySelector('#config-provider').onchange = async (e) => {
             const provider = e.target.value;
-            await this.loadProviderConfig(provider);
             this.updateDefaultsForProvider(provider);
             this.updateFieldVisibility(provider);
         };
@@ -461,25 +495,30 @@ export class ConfigPanel {
         modelEl.value = config.model || '';
         streamEl.checked = config.stream !== false;
 
-        // API Key 显示为 masked
-        if (config.apiKey) {
-            apiKeyInput.value = '••••••••••••••••';
+        // Profile selector
+        this.refreshProfileOptions();
+
+        // API Key：仅显示遮罩（不把明文塞进 DOM / dataset）
+        const masked = this.getMaskedActiveKey();
+        if (masked) {
+            apiKeyInput.value = masked;
             apiKeyInput.dataset.hasKey = 'true';
-            apiKeyInput.dataset.originalKey = config.apiKey;
+            apiKeyInput.dataset.masked = masked;
         } else {
             apiKeyInput.value = '';
             apiKeyInput.dataset.hasKey = 'false';
+            apiKeyInput.dataset.masked = '';
         }
 
-        // 清除 placeholder 提示用户修改
         apiKeyInput.onfocus = function() {
-            if (this.dataset.hasKey === 'true' && this.value === '••••••••••••••••') {
+            if (this.dataset.hasKey === 'true' && this.dataset.masked && this.value === this.dataset.masked) {
                 this.value = '';
             }
         };
         apiKeyInput.onblur = function() {
-            if (!this.value) {
-                this.dataset.hasKey = 'false';
+            if (!this.value && this.dataset.masked) {
+                this.value = this.dataset.masked;
+                this.dataset.hasKey = 'true';
             }
         };
 
@@ -522,6 +561,30 @@ export class ConfigPanel {
 
         // 更新字段可见性
         this.updateFieldVisibility(config.provider || 'openai');
+    }
+
+    refreshProfileOptions() {
+        const panel = this.element || document;
+        const select = panel.querySelector('#config-profile');
+        if (!select) return;
+        const profiles = this.configManager.getProfiles?.() || [];
+        const activeId = this.configManager.getActiveProfileId?.();
+        select.innerHTML = '';
+        profiles.forEach((p) => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.name;
+            select.appendChild(opt);
+        });
+        if (activeId) select.value = activeId;
+    }
+
+    getMaskedActiveKey() {
+        const active = this.configManager.getActiveProfile?.();
+        if (!active?.activeKeyId) return '';
+        const keys = this.configManager.listKeys?.(active.id) || [];
+        const key = keys.find(k => k.id === active.activeKeyId);
+        return key?.preview || '';
     }
 
     /**
@@ -577,7 +640,7 @@ export class ConfigPanel {
         } else {
             vertexaiFields.style.display = 'none';
             if (apiKeyHelp) {
-                apiKeyHelp.textContent = '你的 API 密钥将被安全存储';
+                apiKeyHelp.textContent = '保存後 Key 以遮罩顯示（不可複製）；用 🔑 管理多個 Key';
             }
         }
     }
@@ -588,12 +651,10 @@ export class ConfigPanel {
     getFormData() {
         const provider = document.getElementById('config-provider').value;
         const apiKeyInput = document.getElementById('config-apikey');
-        let apiKey = apiKeyInput.value;
-
-        // 如果显示的是 masked 且用户没改，保留原值
-        if (apiKey === '••••••••••••••••' && apiKeyInput.dataset.hasKey === 'true') {
-            apiKey = apiKeyInput.dataset.originalKey;
-        }
+        const rawKey = (apiKeyInput?.value || '').trim();
+        const masked = apiKeyInput?.dataset?.masked || '';
+        // apiKey 为 null => 不修改 key（继续使用已保存的 active key）
+        const apiKey = (!rawKey || (masked && rawKey === masked)) ? null : rawKey;
 
         const formData = {
             provider: provider,
@@ -651,6 +712,186 @@ export class ConfigPanel {
         }
     }
 
+    async createProfile() {
+        const name = prompt('新設定檔名稱', '新配置');
+        if (!name) return;
+        await this.configManager.createProfile(name);
+        const config = await this.configManager.load();
+        this.refreshProfileOptions();
+        this.populateForm(config);
+        window.toastr?.success(`已创建：${name}`);
+    }
+
+    async renameProfile() {
+        const active = this.configManager.getActiveProfile?.();
+        if (!active) return;
+        const name = prompt('重命名設定檔', active.name || '');
+        if (!name) return;
+        await this.configManager.renameProfile(active.id, name);
+        this.refreshProfileOptions();
+        window.toastr?.success('已重命名');
+    }
+
+    async deleteProfile() {
+        const profiles = this.configManager.getProfiles?.() || [];
+        if (profiles.length <= 1) {
+            window.toastr?.warning('至少保留一个設定檔');
+            return;
+        }
+        const active = this.configManager.getActiveProfile?.();
+        if (!active) return;
+        if (!confirm(`删除設定檔「${active.name}」？此操作不可恢复。`)) return;
+        await this.configManager.deleteProfile(active.id);
+        const config = await this.configManager.load();
+        this.refreshProfileOptions();
+        this.populateForm(config);
+    }
+
+    openKeyManager() {
+        if (!this.keyOverlay) {
+            this.createKeyManagerUI();
+        }
+        this.refreshKeyManagerList();
+        this.keyOverlay.style.display = 'block';
+        this.keyModal.style.display = 'block';
+    }
+
+    closeKeyManager() {
+        if (this.keyOverlay) this.keyOverlay.style.display = 'none';
+        if (this.keyModal) this.keyModal.style.display = 'none';
+    }
+
+    createKeyManagerUI() {
+        this.keyOverlay = document.createElement('div');
+        this.keyOverlay.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index: 20000;';
+        this.keyOverlay.onclick = () => this.closeKeyManager();
+
+        this.keyModal = document.createElement('div');
+        this.keyModal.style.cssText = `
+            display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+            width:min(560px,92vw); max-height:80vh; overflow:auto;
+            background:#fff; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.25);
+            z-index: 21000; padding:16px;
+        `;
+        this.keyModal.onclick = (e) => e.stopPropagation();
+        this.keyModal.innerHTML = `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <div>
+                    <div style="font-weight:800; color:#0f172a;">🔑 Key 管理</div>
+                    <div style="color:#64748b; font-size:12px;">Key 以遮罩顯示，不可複製；可保存多個並切換當前使用</div>
+                </div>
+                <button id="keymgr-close" style="font-size:18px; border:none; background:transparent; cursor:pointer;">×</button>
+            </div>
+            <div style="margin-top:12px; border-top:1px solid #eee; padding-top:12px;">
+                <div style="font-weight:700; margin-bottom:6px;">已保存的 Keys</div>
+                <ul id="keymgr-list" style="list-style:none; padding:0; margin:0; border:1px solid #eee; border-radius:10px; overflow:hidden;"></ul>
+            </div>
+            <div style="margin-top:12px; border-top:1px solid #eee; padding-top:12px;">
+                <div style="font-weight:700; margin-bottom:6px;">新增 Key</div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input id="keymgr-input" type="password" placeholder="貼上 API Key" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:10px;">
+                    <button id="keymgr-add" style="padding:10px 12px; border:1px solid #ddd; border-radius:10px; background:#f5f5f5; cursor:pointer;">保存</button>
+                </div>
+                <small style="color:#94a3b8;">保存後將自動設為當前 Key</small>
+            </div>
+        `;
+
+        this.keyModal.querySelector('#keymgr-close').onclick = () => this.closeKeyManager();
+        this.keyModal.querySelector('#keymgr-add').onclick = async () => {
+            const input = this.keyModal.querySelector('#keymgr-input');
+            const key = (input?.value || '').trim();
+            if (!key) {
+                window.toastr?.warning('請輸入 Key');
+                return;
+            }
+            const active = this.configManager.getActiveProfile?.();
+            try {
+                const keyId = await this.configManager.addKey(active?.id, key, 'API Key');
+                await this.configManager.setActiveKey(active?.id, keyId);
+                input.value = '';
+                this.refreshKeyManagerList();
+                this.syncMaskedKeyToForm();
+                await this.syncRuntimeToAppBridge();
+                window.toastr?.success('Key 已保存並設為當前');
+            } catch (err) {
+                window.toastr?.error(err.message || '保存 Key 失败');
+            }
+        };
+
+        document.body.appendChild(this.keyOverlay);
+        document.body.appendChild(this.keyModal);
+    }
+
+    syncMaskedKeyToForm() {
+        const masked = this.getMaskedActiveKey();
+        const apiKeyInput = (this.element || document).querySelector('#config-apikey');
+        if (!apiKeyInput) return;
+        apiKeyInput.value = masked || '';
+        apiKeyInput.dataset.masked = masked || '';
+        apiKeyInput.dataset.hasKey = masked ? 'true' : 'false';
+    }
+
+    async syncRuntimeToAppBridge() {
+        const runtime = await this.configManager.load();
+        if (window.appBridge) {
+            window.appBridge.config.set(runtime);
+            window.appBridge.client = runtime.apiKey ? new LLMClient(runtime) : null;
+        }
+    }
+
+    refreshKeyManagerList() {
+        const list = this.keyModal?.querySelector('#keymgr-list');
+        if (!list) return;
+        const active = this.configManager.getActiveProfile?.();
+        const keys = this.configManager.listKeys?.(active?.id) || [];
+        list.innerHTML = '';
+        if (!keys.length) {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:10px 12px; color:#94a3b8;';
+            li.textContent = '（尚無 Key）';
+            list.appendChild(li);
+            return;
+        }
+        keys.forEach((k) => {
+            const li = document.createElement('li');
+            li.style.cssText = 'padding:10px 12px; border-bottom:1px solid #f1f5f9; display:flex; align-items:center; justify-content:space-between; gap:10px;';
+            const left = document.createElement('div');
+            const isActive = active?.activeKeyId === k.id;
+            left.innerHTML = `<div style="font-weight:700; color:#0f172a;">${k.preview || '••••'}</div><div style="color:#64748b; font-size:12px;">${k.label || 'API Key'}${isActive ? ' · 当前' : ''}</div>`;
+            const right = document.createElement('div');
+            right.style.display = 'flex';
+            right.style.gap = '6px';
+
+            const useBtn = document.createElement('button');
+            useBtn.textContent = isActive ? '当前' : '使用';
+            useBtn.disabled = isActive;
+            useBtn.style.cssText = 'padding:6px 10px; border:1px solid #ddd; border-radius:10px; background:#f5f5f5; cursor:pointer;';
+            useBtn.onclick = async () => {
+                await this.configManager.setActiveKey(active?.id, k.id);
+                this.refreshKeyManagerList();
+                this.syncMaskedKeyToForm();
+                await this.syncRuntimeToAppBridge();
+            };
+
+            const delBtn = document.createElement('button');
+            delBtn.textContent = '删除';
+            delBtn.style.cssText = 'padding:6px 10px; border:1px solid #fca5a5; border-radius:10px; background:#fee2e2; color:#b91c1c; cursor:pointer;';
+            delBtn.onclick = async () => {
+                if (!confirm('删除该 Key？')) return;
+                await this.configManager.removeKey(active?.id, k.id);
+                this.refreshKeyManagerList();
+                this.syncMaskedKeyToForm();
+                await this.syncRuntimeToAppBridge();
+            };
+
+            right.appendChild(useBtn);
+            right.appendChild(delBtn);
+            li.appendChild(left);
+            li.appendChild(right);
+            list.appendChild(li);
+        });
+    }
+
     /**
      * 显示状态消息
      */
@@ -684,21 +925,24 @@ export class ConfigPanel {
         const formData = this.getFormData();
 
         try {
-            if (!formData.apiKey || !formData.baseUrl || !formData.model) {
-                this.showStatus('請填寫 Base URL / API Key / 模型', 'error');
+            const existingKey = (this.configManager.get()?.apiKey || '').trim();
+            const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
+            if (!keyToUse || !formData.baseUrl || !formData.model) {
+                this.showStatus('請填寫 Base URL / 模型，並確保已保存至少一個 API Key（🔑）', 'error');
                 return;
             }
             this.setLoading(true);
             // 验证配置
-            await this.configManager.validate(formData);
+            await this.configManager.validate({ ...formData, apiKey: keyToUse });
 
             // 保存
             await this.configManager.save(formData);
 
             // 重新初始化客户端
             if (window.appBridge) {
-                window.appBridge.client = new LLMClient(formData);
-                window.appBridge.config.set(formData);
+                const runtime = await this.configManager.load();
+                window.appBridge.client = runtime.apiKey ? new LLMClient(runtime) : null;
+                window.appBridge.config.set(runtime);
             }
 
             this.showStatus('配置保存成功！', 'success');
@@ -729,7 +973,9 @@ export class ConfigPanel {
             this.testButton.textContent = '测试中...';
             this.testButton.disabled = true;
 
-            const tempClient = new LLMClient(formData);
+            const existingKey = (this.configManager.get()?.apiKey || '').trim();
+            const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
+            const tempClient = new LLMClient({ ...formData, apiKey: keyToUse });
             const result = await tempClient.healthCheck();
 
             if (result.ok) {
