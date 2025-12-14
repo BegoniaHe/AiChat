@@ -3,6 +3,7 @@
  */
 
 import { logger } from '../../utils/logger.js';
+import { renderRichText, setupIframeResizeListener } from './rich-text-renderer.js';
 
 export class ChatUI {
     constructor() {
@@ -23,6 +24,7 @@ export class ChatUI {
         this.longPressTimer = null;
         this.actionHandler = null;
 
+        setupIframeResizeListener();
         this.bindInputAutosize();
         this.bindFocusScroll();
         this.bindNetworkEvents();
@@ -322,7 +324,8 @@ export class ChatUI {
                 break;
             case 'text':
             default:
-                bubble.textContent = message.content;
+                // Safe rich rendering (code fences + html iframe preview)
+                renderRichText(bubble, message.content, { messageId: message.id });
         }
 
         // 时间戳
@@ -415,6 +418,7 @@ export class ChatUI {
         const wrapperEl = messageEl?.closest?.('.QQ_chat_charmsg, .QQ_chat_mymsg') || messageEl?.parentElement || null;
         return {
             update: (text) => {
+                // Keep streaming lightweight (avoid re-parsing markdown/code each token)
                 messageEl.textContent = text;
                 this.scrollToBottom();
                 this.messageBuffer[bufferIndex].content = text;
@@ -428,7 +432,13 @@ export class ChatUI {
                     this.addMessage(finalMessage);
                     this.messageBuffer[bufferIndex] = finalMessage;
                 } else {
-                    this.messageBuffer[bufferIndex] = finalMessage || this.messageBuffer[bufferIndex];
+                    const fm = finalMessage || this.messageBuffer[bufferIndex];
+                    this.messageBuffer[bufferIndex] = fm;
+                    try {
+                        // Render rich content for the final text
+                        const text = String(fm?.content ?? '');
+                        renderRichText(messageEl, text, { messageId: fm?.id || meta?.id });
+                    } catch {}
                 }
             },
             cancel: () => {

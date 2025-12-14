@@ -614,3 +614,29 @@
   - **修复**：对齐 ST 原实现（regexFromString + flags 校验 + 宏替换正则），并修正 `replace` 回调绑定写法，避免语法错误。
   - 文件修改：
     - 修改：`src/scripts/storage/regex-store.js`
+
+- 2025-12-15 00:41 - 聊天气泡支持「酒馆助手」风格代码块渲染：HTML iframe 预览
+  - **代码块渲染**：聊天文本支持解析 fenced code block（```lang），以安全方式渲染为代码卡片（可复制）。
+  - **HTML 呈现**：当代码块为 HTML（或内容包含 `<body>...</body>`）时，提供沙盒 iframe 预览并自动自适应高度；若整段消息本身就是 HTML 文档也会自动按 HTML 代码块处理。
+  - **流式兼容**：流式生成过程中保持纯文本更新，结束后再进行代码块/iframe 渲染，避免卡顿。
+  - 文件修改：
+    - 新增：`src/scripts/ui/chat/rich-text-renderer.js`
+    - 修改：`src/scripts/ui/chat/chat-ui.js`
+
+- 2025-12-15 00:49 - HTML 片段也可渲染（不再仅限 <body> 文档）
+  - **问题**：部分正则会把 `<thinking>` 替换为 `<style>...` + `<details>/<div>` 的 HTML 片段（不包含 `<body>`），之前因仅识别 `<body>` 导致无法渲染。
+  - **修复**：当整段消息明显是 HTML 片段（以 `<` 开头且含 style/details/div 等并有闭合标签）时，自动按 `html` 代码块处理并打开 iframe 预览。
+  - 文件修改：
+    - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+
+- 2025-12-15 00:55 - iframe 预览自适配手机宽度（更美观，不易溢出）
+  - **基础样式**：在 iframe 内注入 `max-width:100%`、图片/表格响应式、默认 padding 等样式，减少超出手机屏幕的问题。
+  - **自动适配**：检测内容横向溢出时自动缩放（最低 0.78），仍溢出则允许横向滚动，尽量兼顾可读性与不超宽。
+  - 文件修改：
+    - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+
+- 2025-12-15 01:02 - iframe 手机排版进一步贴近 ST：不再出现超长横向滚动 + 隐藏源码区块
+  - **横向滚动**：改为移动端优先，强制避免长横向滚动；溢出时自动缩放到更低阈值（最低 0.55）并保持 `overflow-x:hidden`。
+  - **隐藏源码**：HTML 预览默认只显示渲染结果，不再显示黑底源码；需要时可点「代码」切换查看。
+  - 文件修改：
+    - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
