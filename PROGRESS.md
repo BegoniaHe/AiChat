@@ -506,3 +506,51 @@
   - 文件修改：
     - 修改：`src/scripts/ui/preset-panel.js`
     - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-14 21:50 - 正规表达式（正则）三种作用域：全局 / 局部（绑定预设/世界书）/ 聊天室
+  - **入口**：
+    - 点击头像菜单新增「正规表达式」：管理全局/局部正则
+    - 聊天室右上角「三」菜单新增「正规表达式」：管理该聊天室独立正则
+  - **作用域**：
+    - 全局正则：始终生效
+    - 局部正则：绑定到特定预设或世界书，切换到对应对象时自动生效
+    - 聊天室正则：仅在当前会话生效
+  - **生效时机**：输入（发送前）/输出（显示前）/两者可选；输入在 `AppBridge.generate()` 构建 messages 前处理，输出在非流式返回前与流式保存历史时处理（UI 流式结束时会同步刷新为处理后的结果）。
+  - 文件修改：
+    - 新增：`src/scripts/storage/regex-store.js`
+    - 新增：`src/scripts/ui/regex-panel.js`
+    - 新增：`src/scripts/ui/regex-session-panel.js`
+    - 修改：`src/index.html`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-14 22:11 - 世界书全局作用域入口 + 导入时自动带入绑定正则
+  - **全局世界书**：头像菜单新增「世界书」，打开的世界书为全局通用作用域（不影响聊天室内单独世界书管理）。
+  - **Prompt 构建**：发送时会同时注入「全局世界书」与「当前会话世界书」（若两者都启用）。
+  - **导入联动**：导入预设/世界书 JSON 若包含 `boundRegexSets`，会自动导入并绑定对应对象，同时启用。
+  - 文件修改：
+    - 修改：`src/index.html`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/bridge.js`
+    - 修改：`src/scripts/ui/world-panel.js`
+    - 修改：`src/scripts/ui/preset-panel.js`
+
+- 2025-12-14 22:11 - 预设导入：兼容 ST 的 RegexBinding 自动导入
+  - **问题修复**：部分 ST 预设将绑定正则存放在 `RegexBinding.regexes`（可能嵌在 `SPreset` 或塞在 `prompts[n].content` 的 JSON 字符串里），之前未识别导致导入后正则未同步。
+  - **现在行为**：导入预设时若检测到 `RegexBinding.regexes`，会自动转换为局部正则集合并绑定到该预设，且默认启用（单条脚本遵循其 `disabled` 状态）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/storage/regex-store.js`
+    - 修改：`src/scripts/ui/regex-panel.js`
+    - 修改：`src/scripts/ui/regex-session-panel.js`
+
+- 2025-12-14 22:21 - 正则导入体验优化：规则默认折叠 + 导入确认 + 去重
+  - **折叠**：全局/局部/聊天室正则规则与预设区块一致，默认折叠，点击标题展开编辑。
+  - **导入确认**：导入预设/世界书若检测到绑定正则，会弹窗询问是否一并导入；取消则仅导入预设/世界书。
+  - **去重**：导入时会跳过与现有正则“完全相同”的规则（按 `when/pattern/flags/replacement` 判定），避免重复导入。
+  - 文件修改：
+    - 修改：`src/scripts/ui/regex-panel.js`
+    - 修改：`src/scripts/ui/regex-session-panel.js`
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/ui/world-panel.js`
+    - 修改：`src/scripts/storage/regex-store.js`

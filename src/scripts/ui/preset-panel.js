@@ -287,6 +287,135 @@ export class PresetPanel {
         return null;
     }
 
+    parseStRegexFromString(str) {
+        const raw = String(str || '').trim();
+        if (!raw) return { pattern: '', flags: '' };
+        if (raw.startsWith('/') && raw.length > 2) {
+            // find last unescaped /
+            let end = -1;
+            for (let i = raw.length - 1; i > 0; i--) {
+                if (raw[i] !== '/') continue;
+                let backslashes = 0;
+                for (let j = i - 1; j >= 0 && raw[j] === '\\\\'; j--) backslashes++;
+                if (backslashes % 2 === 0) { end = i; break; }
+            }
+            if (end > 0) {
+                return { pattern: raw.slice(1, end), flags: raw.slice(end + 1) };
+            }
+        }
+        // No delimiter form => treat as raw pattern (no flags)
+        return { pattern: raw, flags: '' };
+    }
+
+    convertStRegexScriptsToRules(regexes = []) {
+        const scripts = Array.isArray(regexes) ? regexes : [];
+        const rules = [];
+        scripts.forEach((s) => {
+            const { pattern, flags } = this.parseStRegexFromString(s?.findRegex);
+            if (!pattern) return;
+
+            // Map ST placement/promptOnly/markdownOnly into our simple when model
+            let when = 'both';
+            if (s?.promptOnly) when = 'input';
+            else if (s?.markdownOnly) when = 'output';
+            else if (Array.isArray(s?.placement)) {
+                const p = new Set(s.placement.map(n => Number(n)));
+                const hasIn = p.has(1) || p.has(3) || p.has(5);
+                const hasOut = p.has(2);
+                if (hasIn && !hasOut) when = 'input';
+                else if (!hasIn && hasOut) when = 'output';
+                else if (hasIn && hasOut) when = 'both';
+            }
+
+            const repl = String(s?.replaceString ?? '').replace(/{{match}}/gi, '$0');
+            rules.push({
+                id: s?.id || undefined,
+                name: s?.scriptName || '',
+                enabled: s?.disabled ? false : true,
+                when,
+                pattern,
+                replacement: repl,
+                flags: flags ?? '',
+            });
+        });
+        return rules;
+    }
+
+    getRuleSignature(r) {
+        const when = String(r?.when || 'both');
+        const pattern = String(r?.pattern || '').trim();
+        const flags = (r?.flags === undefined || r?.flags === null) ? 'g' : String(r?.flags);
+        const replacement = String(r?.replacement ?? '');
+        // ignore name/id; focus on semantic behavior
+        return `${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`;
+    }
+
+    getExistingLocalRuleSigs() {
+        const sigs = new Set();
+        try {
+            const sets = window.appBridge?.regex?.listLocalSets?.() || [];
+            sets.forEach(s => {
+                (Array.isArray(s?.rules) ? s.rules : []).forEach(r => {
+                    sigs.add(this.getRuleSignature(r));
+                });
+            });
+        } catch {}
+        return sigs;
+    }
+
+    extractStRegexBindingSets(obj) {
+        const out = [];
+        const seenScriptIds = new Set();
+
+        const tryAddRegexes = (container) => {
+            const regexes = container?.RegexBinding?.regexes;
+            if (!Array.isArray(regexes) || !regexes.length) return;
+            const filtered = regexes.filter(r => {
+                const id = String(r?.id || '');
+                if (!id) return true;
+                if (seenScriptIds.has(id)) return false;
+                seenScriptIds.add(id);
+                return true;
+            });
+            if (!filtered.length) return;
+            const rules = this.convertStRegexScriptsToRules(filtered);
+            if (!rules.length) return;
+            out.push({ name: 'RegexBinding', enabled: true, rules });
+        };
+
+        const tryParseJsonString = (s) => {
+            const raw = String(s || '').trim();
+            if (!raw) return null;
+            if (!raw.includes('RegexBinding')) return null;
+            if (!(raw.startsWith('{') || raw.startsWith('['))) return null;
+            try { return JSON.parse(raw); } catch { return null; }
+        };
+
+        const walk = (node, depth = 0) => {
+            if (!node || depth > 18) return;
+            if (typeof node === 'string') {
+                const parsed = tryParseJsonString(node);
+                if (parsed && typeof parsed === 'object') {
+                    tryAddRegexes(parsed);
+                    walk(parsed, depth + 1);
+                }
+                return;
+            }
+            if (Array.isArray(node)) {
+                node.forEach(v => walk(v, depth + 1));
+                return;
+            }
+            if (typeof node === 'object') {
+                // direct object with RegexBinding
+                tryAddRegexes(node);
+                for (const v of Object.values(node)) walk(v, depth + 1);
+            }
+        };
+
+        walk(obj, 0);
+        return out;
+    }
+
     downloadJson(filename, dataObj) {
         const data = JSON.stringify(dataObj, null, 2);
         const blob = new Blob([data], { type: 'application/json' });
@@ -306,7 +435,23 @@ export class PresetPanel {
         const preset = this.store.getActive(type) || {};
         const name = String(preset.name || type).replace(/[\\/:*?"<>|]+/g, '_');
         const prefix = type === 'openai' ? 'preset' : type;
-        this.downloadJson(`${prefix}-${name}.json`, preset);
+        const payload = { ...(preset || {}) };
+
+        // 若该预设绑定了正则集合，则导出时一并带上（便于导入自动绑定/启用）
+        try {
+            await window.appBridge?.regex?.ready;
+            const sets = window.appBridge?.regex?.listLocalSets?.() || [];
+            const bindType = type;
+            const bindId = this.store.getActiveId(type);
+            if (bindType && bindId) {
+                const bound = sets
+                    .filter(s => s?.bind?.type === 'preset' && s.bind.presetType === bindType && s.bind.presetId === bindId)
+                    .map(s => ({ name: s.name, enabled: s.enabled !== false, rules: s.rules || [] }));
+                if (bound.length) payload.boundRegexSets = bound;
+            }
+        } catch {}
+
+        this.downloadJson(`${prefix}-${name}.json`, payload);
         this.showStatus('已导出当前预设', 'success');
     }
 
@@ -366,7 +511,59 @@ export class PresetPanel {
 
         const name = prompt('导入预设名称', json?.name || '导入预设');
         if (!name) return;
-        await this.store.upsert(importType, { name, data: { ...json, name } });
+        let boundSets = json?.boundRegexSets || json?.bound_regex_sets || json?.bound_regex_sets_v1 || null;
+        const data = { ...json, name };
+        delete data.boundRegexSets;
+        delete data.bound_regex_sets;
+        delete data.bound_regex_sets_v1;
+
+        // ST 预设：可能包含 RegexBinding.regexes（对象或被塞在 prompts[n].content 的 JSON 字符串里）
+        if (!Array.isArray(boundSets) || !boundSets.length) {
+            const stSets = this.extractStRegexBindingSets(json);
+            if (stSets.length) boundSets = stSets;
+        }
+
+        const presetId = await this.store.upsert(importType, { name, data });
+
+        // 若导入文件包含绑定正则集合，则一并导入并绑定到该预设
+        if (Array.isArray(boundSets) && boundSets.length) {
+            try {
+                const ok = confirm(`检测到预设包含绑定的正规表达式（${boundSets.length} 组）。是否一并导入并绑定？\n取消：仅导入预设，不导入正则。`);
+                if (!ok) {
+                    await this.refreshAll();
+                    this.showStatus('已导入预设（未导入绑定正则）', 'success');
+                    window.dispatchEvent(new CustomEvent('preset-changed'));
+                    return;
+                }
+
+                await window.appBridge?.regex?.ready;
+                const existingSigs = this.getExistingLocalRuleSigs();
+                for (const s of boundSets) {
+                    const rulesRaw = Array.isArray(s?.rules) ? s.rules : [];
+                    const rules = [];
+                    const localSeen = new Set();
+                    for (const rr of rulesRaw) {
+                        const sig = this.getRuleSignature(rr);
+                        if (!sig || localSeen.has(sig) || existingSigs.has(sig)) continue;
+                        localSeen.add(sig);
+                        existingSigs.add(sig);
+                        rules.push(rr);
+                    }
+                    if (!rules.length) continue;
+                    const setName = String(s?.name || '正则').trim() || '正则';
+                    await window.appBridge.regex.upsertLocalSet({
+                        name: `${setName} (${name})`,
+                        enabled: s?.enabled !== false,
+                        bind: { type: 'preset', presetType: importType, presetId },
+                        rules,
+                    });
+                }
+                window.dispatchEvent(new CustomEvent('regex-changed'));
+            } catch (err) {
+                logger.warn('导入绑定正则失败', err);
+            }
+        }
+
         await this.refreshAll();
         this.showStatus('已导入预设', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));

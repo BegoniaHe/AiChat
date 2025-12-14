@@ -12,11 +12,14 @@ import { WorldInfoIndicator } from './worldinfo-indicator.js';
 import { runCommand } from './command-runner.js';
 import { logger } from '../utils/logger.js';
 import { PresetPanel } from './preset-panel.js';
+import { RegexPanel } from './regex-panel.js';
+import { RegexSessionPanel } from './regex-session-panel.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
     const configPanel = new ConfigPanel();
     const presetPanel = new PresetPanel();
+    const regexPanel = new RegexPanel();
     const worldPanel = new WorldPanel();
     const chatStore = new ChatStore();
     const contactsStore = new ContactsStore();
@@ -24,6 +27,7 @@ const initApp = async () => {
     await contactsStore.ready;
     window.appBridge.setActiveSession(chatStore.getCurrent());
     const sessionPanel = new SessionPanel(chatStore, contactsStore, ui);
+    const regexSessionPanel = new RegexSessionPanel(() => chatStore.getCurrent());
     const stickerPicker = new StickerPicker((tag) => handleSticker(tag));
     const mediaPicker = new MediaPicker({
         onUrl: (url) => handleImage(url),
@@ -278,6 +282,8 @@ const initApp = async () => {
             const action = btn.dataset.action;
             if (action === 'session') sessionPanel.show();
             if (action === 'preset') presetPanel.show();
+            if (action === 'world-global') worldPanel.show({ scope: 'global' });
+            if (action === 'regex') regexPanel.show();
             if (action === 'config') configPanel.show();
             hideMenus();
         });
@@ -286,6 +292,7 @@ const initApp = async () => {
         btn.addEventListener('click', () => {
             const action = btn.dataset.action;
             if (action === 'world') worldPanel.show();
+            if (action === 'regex') regexSessionPanel.show();
             if (action === 'chat-settings') openChatSettings();
             hideMenus();
         });
@@ -544,6 +551,13 @@ const initApp = async () => {
                     streamBubble.update(full);
                 }
                 ui.hideTyping();
+                try {
+                    const processed = window.appBridge.applyOutputRegex(full);
+                    if (processed !== full) {
+                        full = processed;
+                        streamBubble.update(full);
+                    }
+                } catch {}
                 const parsed = {
                     role: 'assistant',
                     name: '助手',
@@ -626,6 +640,13 @@ const initApp = async () => {
                         streamBubble.update(full);
                     }
                     ui.hideTyping();
+                    try {
+                        const processed = window.appBridge.applyOutputRegex(full);
+                        if (processed !== full) {
+                            full = processed;
+                            streamBubble.update(full);
+                        }
+                    } catch {}
                     const parsed = {
                         role: 'assistant',
                         name: '助手',
@@ -719,8 +740,12 @@ const initApp = async () => {
     }
 
     function updateWorldIndicator() {
-        const current = window.appBridge?.currentWorldId || '未啟用';
-        worldIndicator.setName(current || '未啟用');
+        const globalId = window.appBridge?.globalWorldId || '';
+        const currentId = window.appBridge?.currentWorldId || '';
+        const label = globalId && currentId
+            ? `全局:${globalId} / 会话:${currentId}`
+            : (globalId || currentId || '未啟用');
+        worldIndicator.setName(label);
     }
 
     /* ---------------- 聊天设置功能 ---------------- */

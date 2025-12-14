@@ -7,6 +7,7 @@ import { ConfigManager } from '../storage/config.js';
 import { ChatStorage } from '../storage/chat.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
 import { PresetStore } from '../storage/preset-store.js';
+import { RegexStore } from '../storage/regex-store.js';
 import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
@@ -63,14 +64,26 @@ class AppBridge {
         this.chatStorage = new ChatStorage();
         this.worldStore = new WorldInfoStore();
         this.presets = new PresetStore();
+        this.regex = new RegexStore();
         this.client = null;
         this.initialized = false;
         this.currentCharacterId = 'default';
         this.currentWorldId = null;
+        this.globalWorldId = this.loadGlobalWorldId();
         this.activeSessionId = 'default';
         this.worldSessionMap = this.loadWorldSessionMap();
         this.isGenerating = false;
         this.hydrateWorldSessionMap();
+        this.hydrateGlobalWorldId();
+    }
+
+    loadGlobalWorldId() {
+        try {
+            const raw = localStorage.getItem('global_world_id_v1');
+            return raw ? String(raw) : null;
+        } catch {
+            return null;
+        }
     }
 
     loadWorldSessionMap() {
@@ -101,9 +114,27 @@ class AppBridge {
         }
     }
 
+    async hydrateGlobalWorldId() {
+        try {
+            const kv = await safeInvoke('load_kv', { name: 'global_world_id_v1' });
+            if (kv && typeof kv === 'string' && kv.trim()) {
+                this.globalWorldId = kv.trim();
+                try { localStorage.setItem('global_world_id_v1', this.globalWorldId); } catch {}
+            }
+        } catch (err) {
+            logger.debug('global world id 磁碟加載失敗（可能非 Tauri）', err);
+        }
+    }
+
     persistWorldSessionMap() {
         localStorage.setItem('world_session_map_v1', JSON.stringify(this.worldSessionMap || {}));
         safeInvoke('save_kv', { name: 'world_session_map_v1', data: this.worldSessionMap }).catch(() => {});
+    }
+
+    persistGlobalWorldId() {
+        try { localStorage.setItem('global_world_id_v1', this.globalWorldId || ''); } catch {}
+        // 保存为 string（kv 支持任意 JSON；这里用 string 简化）
+        safeInvoke('save_kv', { name: 'global_world_id_v1', data: String(this.globalWorldId || '') }).catch(() => {});
     }
 
     /**
@@ -115,6 +146,7 @@ class AppBridge {
 
             // 加载配置
             await this.presets.ready;
+            await this.regex.ready;
             let config = await this.config.load();
 
             // 若当前启用的“生成参数/提示词区块”预设绑定了连接配置，则优先切换到该 profile（ST 风格：预设可携带/绑定连接）
@@ -168,6 +200,31 @@ class AppBridge {
         window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: this.currentWorldId } }));
     }
 
+    getRegexContext() {
+        const presetState = this.presets?.getState?.() || {};
+        return {
+            sessionId: this.activeSessionId,
+            worldId: this.currentWorldId,
+            activePresets: presetState?.active || {},
+        };
+    }
+
+    applyInputRegex(text) {
+        try {
+            return this.regex.apply(text, this.getRegexContext(), 'input');
+        } catch {
+            return String(text ?? '');
+        }
+    }
+
+    applyOutputRegex(text) {
+        try {
+            return this.regex.apply(text, this.getRegexContext(), 'output');
+        } catch {
+            return String(text ?? '');
+        }
+    }
+
     /**
      * 生成 AI 回复
      * @param {string} userMessage - 用户消息
@@ -194,14 +251,16 @@ class AppBridge {
         this.isGenerating = true;
 
         try {
-            const messages = this.buildMessages(userMessage, context);
+            const originalInput = userMessage;
+            const processedInput = this.applyInputRegex(userMessage);
+            const messages = this.buildMessages(processedInput, context);
             const config = this.config.get();
             const genOptions = this.getGenerationOptions();
 
             logger.debug('发送消息到 LLM:', { messageCount: messages.length, stream: config.stream });
 
             if (config.stream) {
-                return this.generateStream(messages, genOptions);
+                return this.generateStream(messages, genOptions, originalInput);
             } else {
                 const response = await retryWithBackoff(
                     () => this.client.chat(messages, genOptions),
@@ -212,9 +271,10 @@ class AppBridge {
                 );
 
                 // 保存到历史记录
-                await this.saveToHistory(userMessage, response);
+                const processedOutput = this.applyOutputRegex(response);
+                await this.saveToHistory(originalInput, processedOutput);
 
-                return response;
+                return processedOutput;
             }
         } catch (error) {
             logger.error('生成失败:', error);
@@ -227,9 +287,8 @@ class AppBridge {
     /**
      * 流式生成
      */
-    async *generateStream(messages, genOptions = {}) {
+    async *generateStream(messages, genOptions = {}, originalUserMessage = '') {
         let fullResponse = '';
-        const userMessage = messages[messages.length - 1].content;
 
         try {
             for await (const chunk of this.client.streamChat(messages, genOptions)) {
@@ -238,7 +297,8 @@ class AppBridge {
             }
 
             // 流式完成后保存到历史记录
-            await this.saveToHistory(userMessage, fullResponse);
+            const processedOutput = this.applyOutputRegex(fullResponse);
+            await this.saveToHistory(originalUserMessage || '', processedOutput);
         } catch (error) {
             logger.error('流式生成失败:', error);
             throw error;
@@ -604,17 +664,30 @@ class AppBridge {
         window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId } }));
     }
 
-    /**
-        * 生成當前世界書的提示串
-        */
-    getActiveWorldPrompt() {
-        if (!this.currentWorldId) return '';
-        const data = this.worldStore.load(this.currentWorldId);
+    setGlobalWorld(worldId) {
+        this.globalWorldId = worldId || null;
+        this.persistGlobalWorldId();
+        window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: this.currentWorldId, globalWorldId: this.globalWorldId } }));
+    }
+
+    formatWorldPrompt(worldId, label) {
+        if (!worldId) return '';
+        const data = this.worldStore.load(worldId);
         if (!data || !Array.isArray(data.entries)) return '';
         const entries = [...data.entries].sort((a, b) => (b.priority || 0) - (a.priority || 0));
         const parts = entries.map(e => e.content).filter(Boolean);
         if (!parts.length) return '';
-        return `世界書提示（${this.currentWorldId}）：\n` + parts.join('\n\n');
+        return `${label}（${worldId}）：\n` + parts.join('\n\n');
+    }
+
+    /**
+        * 生成當前世界書的提示串
+        */
+    getActiveWorldPrompt() {
+        const globalPart = this.formatWorldPrompt(this.globalWorldId, '全局世界书提示');
+        const sessionPart = this.formatWorldPrompt(this.currentWorldId, '世界书提示');
+        if (globalPart && sessionPart) return `${globalPart}\n\n${sessionPart}`;
+        return globalPart || sessionPart || '';
     }
 
     getWorldForSession(sessionId = this.activeSessionId) {

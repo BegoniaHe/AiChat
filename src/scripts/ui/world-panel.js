@@ -15,6 +15,7 @@ export class WorldPanel {
         this.listEl = null;
         this.importTextarea = null;
         this.fileInput = null;
+        this.scope = 'session'; // session | global
         this.editor = new WorldEditorModal({
             onSaved: async () => {
                 await this.refreshList();
@@ -22,7 +23,8 @@ export class WorldPanel {
         });
     }
 
-    async show() {
+    async show({ scope = 'session' } = {}) {
+        this.scope = scope === 'global' ? 'global' : 'session';
         if (!this.panel) {
             this.createUI();
         }
@@ -41,10 +43,14 @@ export class WorldPanel {
         this.listEl.innerHTML = '';
         try {
             const sessionId = window.appBridge?.activeSessionId || 'default';
-            const currentId = window.appBridge.currentWorldId || '';
+            const currentId = this.scope === 'global'
+                ? (window.appBridge.globalWorldId || '')
+                : (window.appBridge.currentWorldId || '');
             const indicator = this.panel?.querySelector('#world-current');
             if (indicator) {
-                indicator.textContent = `會話 ${sessionId} 當前：${currentId || '未啟用'}`;
+                indicator.textContent = this.scope === 'global'
+                    ? `全局當前：${currentId || '未啟用'}`
+                    : `會話 ${sessionId} 當前：${currentId || '未啟用'}`;
             }
             const names = await window.appBridge.listWorlds?.();
             if (!names || !names.length) {
@@ -95,7 +101,11 @@ export class WorldPanel {
                     activate.style.opacity = '0.7';
                 }
                 activate.onclick = async () => {
-                    await window.appBridge.setCurrentWorld(name);
+                    if (this.scope === 'global') {
+                        await window.appBridge.setGlobalWorld(name);
+                    } else {
+                        await window.appBridge.setCurrentWorld(name);
+                    }
                     const data = await window.appBridge.getWorldInfo(name);
                     logger.info('Activated world', name, data);
                     window.toastr?.success(`已啟用世界書：${name}`);
@@ -233,6 +243,64 @@ export class WorldPanel {
             const name = nameFromJson || nameHint || 'imported';
             const simplified = convertSTWorld(json, name);
             await window.appBridge.saveWorldInfo(name, simplified);
+
+            // 若导入文件包含绑定的正则集合，则一并导入并绑定到该世界书
+            const boundSets = json?.boundRegexSets || json?.bound_regex_sets || json?.bound_regex_sets_v1 || null;
+            if (Array.isArray(boundSets) && boundSets.length) {
+                try {
+                    const ok = confirm(`检测到世界书包含绑定的正规表达式（${boundSets.length} 组）。是否一并导入并绑定？\n取消：仅导入世界书，不导入正则。`);
+                    if (!ok) {
+                        await this.refreshList();
+                        window.toastr?.success(`導入成功：${name}`);
+                        if (this.fileInput) this.fileInput.value = '';
+                        this.importTextarea.value = '';
+                        return;
+                    }
+
+                    await window.appBridge?.regex?.ready;
+                    const existingSigs = new Set();
+                    try {
+                        const sets = window.appBridge?.regex?.listLocalSets?.() || [];
+                        sets.forEach(s => (Array.isArray(s?.rules) ? s.rules : []).forEach(r => {
+                            const when = String(r?.when || 'both');
+                            const pattern = String(r?.pattern || '').trim();
+                            const flags = (r?.flags === undefined || r?.flags === null) ? 'g' : String(r?.flags);
+                            const replacement = String(r?.replacement ?? '');
+                            existingSigs.add(`${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`);
+                        }));
+                    } catch {}
+
+                    for (const s of boundSets) {
+                        const rulesRaw = Array.isArray(s?.rules) ? s.rules : [];
+                        const rules = [];
+                        const localSeen = new Set();
+                        for (const rr of rulesRaw) {
+                            const when = String(rr?.when || 'both');
+                            const pattern = String(rr?.pattern || '').trim();
+                            const flags = (rr?.flags === undefined || rr?.flags === null) ? 'g' : String(rr?.flags);
+                            const replacement = String(rr?.replacement ?? '');
+                            const sig = `${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`;
+                            if (!sig || localSeen.has(sig) || existingSigs.has(sig)) continue;
+                            localSeen.add(sig);
+                            existingSigs.add(sig);
+                            rules.push(rr);
+                        }
+                        if (!rules.length) continue;
+                        const setName = String(s?.name || '正则').trim() || '正则';
+                        await window.appBridge.regex.upsertLocalSet({
+                            name: `${setName} (${name})`,
+                            enabled: s?.enabled !== false,
+                            bind: { type: 'world', worldId: name },
+                            rules,
+                        });
+                    }
+                    window.toastr?.success('已导入并绑定正则');
+                    window.dispatchEvent(new CustomEvent('regex-changed'));
+                } catch (err) {
+                    logger.warn('导入绑定正则失败', err);
+                }
+            }
+
             await this.refreshList();
             window.toastr?.success(`導入成功：${name}`);
             if (this.fileInput) this.fileInput.value = '';
@@ -244,13 +312,26 @@ export class WorldPanel {
     }
 
     async onExportCurrent() {
-        const current = window.appBridge.currentWorldId || '未啟用';
+        const current = this.scope === 'global'
+            ? (window.appBridge.globalWorldId || '未啟用')
+            : (window.appBridge.currentWorldId || '未啟用');
         const data = await window.appBridge.getWorldInfo(current);
         if (!data) {
             window.toastr?.warning('沒有可導出的世界書');
             return;
         }
-        const text = JSON.stringify(data, null, 2);
+        const payload = { ...(data || {}), name: current };
+
+        // 追加绑定正则集合（便于导入时自动带上）
+        try {
+            await window.appBridge?.regex?.ready;
+            const sets = window.appBridge?.regex?.listLocalSets?.() || [];
+            const bound = sets.filter(s => s?.bind?.type === 'world' && s.bind.worldId === current)
+                .map(s => ({ name: s.name, enabled: s.enabled !== false, rules: s.rules || [] }));
+            if (bound.length) payload.boundRegexSets = bound;
+        } catch {}
+
+        const text = JSON.stringify(payload, null, 2);
         if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(text);
             window.toastr?.success(`已複製：${current}`);
