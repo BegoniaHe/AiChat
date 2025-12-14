@@ -857,6 +857,32 @@ export class PresetPanel {
     renderOpenAIParamsEditor(p) {
         const wrap = this.renderSection('生成参数', '参照 ST：编辑常用生成参数；提示词区块请到「自定义」tab 管理（不限制特定 LLM，可自行绑定连接配置）');
 
+        const maxContext = document.createElement('input');
+        maxContext.id = 'gen-max-context';
+        maxContext.type = 'range';
+        maxContext.min = '256';
+        maxContext.max = '200000';
+        maxContext.step = '256';
+        maxContext.style.cssText = 'width:100%;';
+        maxContext.value = String(p.openai_max_context ?? 4095);
+
+        const maxContextNum = document.createElement('input');
+        maxContextNum.id = 'gen-max-context-num';
+        maxContextNum.type = 'number';
+        maxContextNum.step = '1';
+        maxContextNum.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+        maxContextNum.value = String(p.openai_max_context ?? 4095);
+
+        const syncMaxContext = (val) => {
+            const n = Number(val);
+            if (!Number.isFinite(n)) return;
+            const clamped = Math.max(0, Math.min(200000, Math.trunc(n)));
+            maxContext.value = String(clamped);
+            maxContextNum.value = String(clamped);
+        };
+        maxContext.addEventListener('input', () => syncMaxContext(maxContext.value));
+        maxContextNum.addEventListener('input', () => syncMaxContext(maxContextNum.value));
+
         const temperature = document.createElement('input');
         temperature.id = 'gen-temperature';
         temperature.type = 'number';
@@ -899,13 +925,27 @@ export class PresetPanel {
         frequency.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
         frequency.value = String(p.frequency_penalty ?? 0);
 
+        const ctxBlock = document.createElement('div');
+        ctxBlock.style.cssText = 'margin-top:10px;';
+        ctxBlock.innerHTML = `
+            <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">最大上下文长度（max_context）</div>
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <div style="flex:2; min-width:200px;" id="gen-max-context-range-wrap"></div>
+                <div style="flex:1; min-width:160px;" id="gen-max-context-num-wrap"></div>
+            </div>
+            <div style="color:#64748b; font-size:12px; margin-top:6px;">用于限制可用上下文窗口（后续可用于自动裁剪历史）。</div>
+        `;
+        ctxBlock.querySelector('#gen-max-context-range-wrap').appendChild(maxContext);
+        ctxBlock.querySelector('#gen-max-context-num-wrap').appendChild(maxContextNum);
+        wrap.appendChild(ctxBlock);
+
         wrap.appendChild(this.renderInputRow([
             { label: 'temperature', el: temperature },
             { label: 'top_p', el: topP },
             { label: 'top_k', el: topK },
         ]));
         wrap.appendChild(this.renderInputRow([
-            { label: 'max_tokens', el: maxTokens },
+            { label: '最大输出 token（max_output_tokens）', el: maxTokens },
             { label: 'presence_penalty', el: presence },
             { label: 'frequency_penalty', el: frequency },
         ]));
@@ -1211,6 +1251,7 @@ export class PresetPanel {
             current.temperature = getNum(root.querySelector('#gen-temperature')?.value, current.temperature ?? 1);
             current.top_p = getNum(root.querySelector('#gen-top-p')?.value, current.top_p ?? 1);
             current.top_k = getInt(root.querySelector('#gen-top-k')?.value, current.top_k ?? 0);
+            current.openai_max_context = getInt(root.querySelector('#gen-max-context-num')?.value ?? root.querySelector('#gen-max-context')?.value, current.openai_max_context ?? 4095);
             current.openai_max_tokens = getInt(root.querySelector('#gen-max-tokens')?.value, current.openai_max_tokens ?? 300);
             current.presence_penalty = getNum(root.querySelector('#gen-presence')?.value, current.presence_penalty ?? 0);
             current.frequency_penalty = getNum(root.querySelector('#gen-frequency')?.value, current.frequency_penalty ?? 0);

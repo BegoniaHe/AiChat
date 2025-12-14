@@ -554,3 +554,10 @@
     - 修改：`src/scripts/ui/preset-panel.js`
     - 修改：`src/scripts/ui/world-panel.js`
     - 修改：`src/scripts/storage/regex-store.js`
+
+- 2025-12-14 22:55 - UI 文案 + 预设生成参数补全
+  - **头像菜单**：将「设定」改为「API设定」。
+  - **生成参数**：新增最大上下文长度（拉条）与最大输出 token（`openai_max_context/openai_max_tokens`）。
+  - 文件修改：
+    - 修改：`src/index.html`
+    - 修改：`src/scripts/ui/preset-panel.js`
