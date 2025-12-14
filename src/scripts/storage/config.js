@@ -41,6 +41,18 @@ const maskKey = (key) => {
     return `${raw.slice(0, 2)}••••••••${raw.slice(-2)}`;
 };
 
+const isLikelyPlainApiKey = (val) => {
+    const s = String(val || '').trim();
+    if (!s) return false;
+    if (s.length < 8 || s.length > 512) return false;
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        // API key 通常為可打印 ASCII；若出現控制字元，極可能是 AES 密文 bytes 被誤當成字串
+        if (c < 0x20 || c > 0x7e) return false;
+    }
+    return true;
+};
+
 const normalizeProfile = (p = {}) => ({
     id: p.id || genId('profile'),
     name: p.name || '未命名',
@@ -65,6 +77,7 @@ export class ConfigManager {
         this.profileStore = null;
         this.keyringStore = null;
         this.cryptoKey = null;
+        this.storesEnsured = false;
     }
 
     /**
@@ -166,7 +179,7 @@ export class ConfigManager {
     }
 
     async ensureStores() {
-        if (this.profileStore && this.keyringStore && this.cryptoKey) return;
+        if (this.storesEnsured && this.profileStore && this.keyringStore) return;
 
         // profiles
         let profiles = null;
@@ -196,6 +209,13 @@ export class ConfigManager {
                 } catch (err) {
                     logger.debug('load_kv master key failed (可能非 Tauri)', err);
                 }
+                // browser fallback (dev mode): KEYRING_MASTER_KEY 可能直接存 string
+                if (!masterB64) {
+                    try {
+                        const raw = localStorage.getItem(KEYRING_MASTER_KEY);
+                        if (raw) masterB64 = raw;
+                    } catch {}
+                }
                 if (!masterB64) {
                     const bytes = crypto.getRandomValues(new Uint8Array(32));
                     masterB64 = encodeB64(bytes);
@@ -203,7 +223,9 @@ export class ConfigManager {
                         await safeInvoke('save_kv', { name: KEYRING_MASTER_KEY, data: { master: masterB64 } });
                     } catch (err) {
                         logger.warn('save_kv master key failed (可能非 Tauri)', err);
-                        localStorage.setItem(KEYRING_MASTER_KEY, masterB64);
+                        try {
+                            localStorage.setItem(KEYRING_MASTER_KEY, masterB64);
+                        } catch {}
                     }
                 }
                 const rawKey = decodeB64(masterB64);
@@ -264,6 +286,8 @@ export class ConfigManager {
             this.profileStore.activeProfileId = Object.keys(this.profileStore.profiles)[0] || null;
             await this.persistProfiles(this.profileStore);
         }
+
+        this.storesEnsured = true;
     }
 
     async migrateLegacyConfig() {
@@ -411,6 +435,7 @@ export class ConfigManager {
         if (!key) throw new Error('API Key 为空');
 
         let enc = '';
+        let alg = 'b64';
         if (this.cryptoKey && crypto?.subtle?.encrypt && crypto?.getRandomValues) {
             const iv = crypto.getRandomValues(new Uint8Array(12));
             const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.cryptoKey, new TextEncoder().encode(key));
@@ -418,6 +443,7 @@ export class ConfigManager {
             packed.set(iv, 0);
             packed.set(new Uint8Array(ct), iv.byteLength);
             enc = encodeB64(packed);
+            alg = 'aesgcm';
         } else {
             enc = btoa(key);
         }
@@ -427,6 +453,7 @@ export class ConfigManager {
             label: String(label || '').trim() || 'API Key',
             preview: maskKey(key),
             enc,
+            alg,
             createdAt: Date.now(),
         };
         if (!this.keyringStore.keysByProfile[pid]) this.keyringStore.keysByProfile[pid] = [];
@@ -455,14 +482,51 @@ export class ConfigManager {
         const pid = profileId || this.getActiveProfileId();
         const record = (this.keyringStore.keysByProfile[pid] || []).find(k => k.id === keyId);
         if (!record) return '';
-        if (this.cryptoKey && crypto?.subtle?.decrypt) {
+
+        // 已標記算法：嚴格按算法解密
+        if (record.alg === 'b64') {
+            try {
+                return atob(record.enc);
+            } catch {
+                return '';
+            }
+        }
+
+        if (record.alg === 'aesgcm') {
+            if (!this.cryptoKey || !crypto?.subtle?.decrypt) return '';
             const bytes = decodeB64(record.enc);
             const iv = bytes.slice(0, 12);
             const ct = bytes.slice(12);
             const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, this.cryptoKey, ct);
             return new TextDecoder().decode(pt);
         }
-        return atob(record.enc);
+
+        // 舊資料遷移：先嘗試 AES-GCM，再嘗試 base64 明文（可打印判斷）
+        if (this.cryptoKey && crypto?.subtle?.decrypt) {
+            try {
+                const bytes = decodeB64(record.enc);
+                const iv = bytes.slice(0, 12);
+                const ct = bytes.slice(12);
+                const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, this.cryptoKey, ct);
+                const plain = new TextDecoder().decode(pt);
+                record.alg = 'aesgcm';
+                await this.persistKeyring();
+                return plain;
+            } catch (err) {
+                logger.debug('AES-GCM decrypt failed, try b64 fallback', err);
+            }
+        }
+
+        try {
+            const plain = atob(record.enc);
+            if (isLikelyPlainApiKey(plain)) {
+                record.alg = 'b64';
+                await this.persistKeyring();
+                return plain;
+            }
+        } catch {}
+
+        return '';
     }
 
     async buildRuntimeConfig(profile) {

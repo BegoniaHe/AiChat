@@ -11,10 +11,12 @@ import { MediaPicker } from './media-picker.js';
 import { WorldInfoIndicator } from './worldinfo-indicator.js';
 import { runCommand } from './command-runner.js';
 import { logger } from '../utils/logger.js';
+import { PresetPanel } from './preset-panel.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
     const configPanel = new ConfigPanel();
+    const presetPanel = new PresetPanel();
     const worldPanel = new WorldPanel();
     const chatStore = new ChatStore();
     const contactsStore = new ContactsStore();
@@ -275,6 +277,7 @@ const initApp = async () => {
         btn.addEventListener('click', () => {
             const action = btn.dataset.action;
             if (action === 'session') sessionPanel.show();
+            if (action === 'preset') presetPanel.show();
             if (action === 'config') configPanel.show();
             hideMenus();
         });
@@ -473,6 +476,25 @@ const initApp = async () => {
         if (!text) return;
 
         const sessionId = chatStore.getCurrent();
+        const contact = contactsStore.getContact(sessionId);
+        const characterName = contact?.name || (sessionId.startsWith('group:') ? sessionId.replace(/^group:/, '') : sessionId) || 'assistant';
+        const userName = 'user';
+        const buildHistoryForLLM = (pendingUserText) => {
+            const all = chatStore.getMessages(sessionId) || [];
+            const history = all
+                .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+                .map(m => ({ role: m.role, content: m.content }));
+            const last = history[history.length - 1];
+            if (pendingUserText && last?.role === 'user' && String(last.content || '').trim() === String(pendingUserText).trim()) {
+                history.pop();
+            }
+            return history;
+        };
+        const llmContext = (pendingUserText) => ({
+            user: { name: userName },
+            character: { name: characterName },
+            history: buildHistoryForLLM(pendingUserText),
+        });
 
         // slash command support
         if (text.startsWith('/')) {
@@ -515,7 +537,7 @@ const initApp = async () => {
             if (config.stream) {
                 ui.showTyping();
                 const streamBubble = ui.startAssistantStream();
-                const stream = await window.appBridge.generate(text);
+                const stream = await window.appBridge.generate(text, llmContext(text));
                 let full = '';
                 for await (const chunk of stream) {
                     full += chunk;
@@ -534,7 +556,7 @@ const initApp = async () => {
                 refreshChatAndContacts();
             } else {
                 ui.showTyping();
-                const result = await window.appBridge.generate(text);
+                const result = await window.appBridge.generate(text, llmContext(text));
                 ui.hideTyping();
                 const parsed = {
                     role: 'assistant',
@@ -598,7 +620,7 @@ const initApp = async () => {
                 let full = '';
                 if (config.stream) {
                     const streamBubble = ui.startAssistantStream();
-                    const stream = await window.appBridge.generate(text);
+                    const stream = await window.appBridge.generate(text, llmContext(text));
                     for await (const chunk of stream) {
                         full += chunk;
                         streamBubble.update(full);
@@ -615,7 +637,7 @@ const initApp = async () => {
                     chatStore.appendMessage(parsed, sessionId);
                     refreshChatAndContacts();
                 } else {
-                    const result = await window.appBridge.generate(text);
+                    const result = await window.appBridge.generate(text, llmContext(text));
                     ui.hideTyping();
                     const parsed = {
                         role: 'assistant',

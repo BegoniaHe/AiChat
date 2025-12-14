@@ -6,6 +6,7 @@ import { LLMClient } from '../api/client.js';
 import { ConfigManager } from '../storage/config.js';
 import { ChatStorage } from '../storage/chat.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
+import { PresetStore } from '../storage/preset-store.js';
 import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
@@ -17,11 +18,51 @@ const safeInvoke = async (cmd, args) => {
     return invoker(cmd, args);
 };
 
+const truthy = (v) => {
+    if (v === null || v === undefined) return false;
+    if (typeof v === 'string') return v.trim().length > 0;
+    if (Array.isArray(v)) return v.length > 0;
+    return Boolean(v);
+};
+
+const renderStTemplate = (template, vars) => {
+    let out = String(template || '');
+    // {{#if var}}...{{else}}...{{/if}} (SillyTavern preset format)
+    const ifRe = /{{#if\s+([a-zA-Z0-9_]+)\s*}}([\s\S]*?)({{else}}([\s\S]*?))?{{\/if}}/g;
+    // Loop to handle multiple blocks (no nesting expected in presets)
+    for (let i = 0; i < 100; i++) {
+        const next = out.replace(ifRe, (_m, key, ifTrue, _elseBlock, ifFalse) => {
+            return truthy(vars?.[key]) ? ifTrue : (ifFalse || '');
+        });
+        if (next === out) break;
+        out = next;
+    }
+    // Replace variables {{var}} and {{trim}}
+    out = out.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, key) => {
+        if (key === 'trim') return '';
+        const v = vars?.[key];
+        return (v === null || v === undefined) ? '' : String(v);
+    });
+    // Cleanup any leftover trim token and trim surrounding whitespace
+    out = out.replace(/{{\s*trim\s*}}/g, '');
+    return out.trim();
+};
+
+const applyMacros = (text, vars) => {
+    const raw = String(text || '');
+    if (!raw) return '';
+    return raw.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, key) => {
+        const v = vars?.[key];
+        return (v === null || v === undefined) ? '' : String(v);
+    });
+};
+
 class AppBridge {
     constructor() {
         this.config = new ConfigManager();
         this.chatStorage = new ChatStorage();
         this.worldStore = new WorldInfoStore();
+        this.presets = new PresetStore();
         this.client = null;
         this.initialized = false;
         this.currentCharacterId = 'default';
@@ -74,6 +115,7 @@ class AppBridge {
 
             // 加载配置
             const config = await this.config.load();
+            await this.presets.ready;
 
             // 初始化 LLM 客户端
             if (config.apiKey) {
@@ -138,14 +180,15 @@ class AppBridge {
         try {
             const messages = this.buildMessages(userMessage, context);
             const config = this.config.get();
+            const genOptions = this.getGenerationOptions();
 
             logger.debug('发送消息到 LLM:', { messageCount: messages.length, stream: config.stream });
 
             if (config.stream) {
-                return this.generateStream(messages);
+                return this.generateStream(messages, genOptions);
             } else {
                 const response = await retryWithBackoff(
-                    () => this.client.chat(messages),
+                    () => this.client.chat(messages, genOptions),
                     {
                         maxRetries: config.maxRetries || 3,
                         shouldRetry: isRetryableError
@@ -168,12 +211,12 @@ class AppBridge {
     /**
      * 流式生成
      */
-    async *generateStream(messages) {
+    async *generateStream(messages, genOptions = {}) {
         let fullResponse = '';
         const userMessage = messages[messages.length - 1].content;
 
         try {
-            for await (const chunk of this.client.streamChat(messages)) {
+            for await (const chunk of this.client.streamChat(messages, genOptions)) {
                 fullResponse += chunk;
                 yield chunk;
             }
@@ -192,50 +235,214 @@ class AppBridge {
     buildMessages(userMessage, context = {}) {
         const messages = [];
 
-        // 系统提示词
-        if (context.systemPrompt) {
-            messages.push({
-                role: 'system',
-                content: context.systemPrompt
-            });
-        }
-
-        // 世界書提示
+        const name1 = context?.user?.name || 'user';
+        const name2 = context?.character?.name || 'assistant';
         const worldPrompt = this.getActiveWorldPrompt();
-        if (worldPrompt) {
-            messages.push({
-                role: 'system',
-                content: worldPrompt
-            });
+
+        const presetState = this.presets?.getState?.() || null;
+        const useSysprompt = Boolean(presetState?.enabled?.sysprompt);
+        const useContext = Boolean(presetState?.enabled?.context);
+        const useOpenAIPreset = Boolean(presetState?.enabled?.openai);
+        const sysp = useSysprompt ? this.presets.getActive('sysprompt') : null;
+        const ctxp = useContext ? this.presets.getActive('context') : null;
+        const openp = useOpenAIPreset ? this.presets.getActive('openai') : null;
+
+        const openaiPromptEnabled = (identifier) => {
+            if (!openp || !Array.isArray(openp.prompt_order)) return true;
+            // Use the first order block (character_id 100000/100001 in ST defaults)
+            const block = openp.prompt_order?.[0];
+            const order = Array.isArray(block?.order) ? block.order : [];
+            const item = order.find(x => x?.identifier === identifier);
+            return item ? Boolean(item.enabled) : true;
+        };
+
+        const openaiPromptContent = (identifier) => {
+            const list = Array.isArray(openp?.prompts) ? openp.prompts : [];
+            const item = list.find(x => x?.identifier === identifier);
+            return (item && typeof item.content === 'string') ? item.content : '';
+        };
+
+        // Prefer ST OpenAI preset's editable prompts when enabled
+        const mainPrompt = (useOpenAIPreset && openaiPromptEnabled('main'))
+            ? openaiPromptContent('main')
+            : '';
+        const auxPrompt = (useOpenAIPreset && openaiPromptEnabled('nsfw'))
+            ? openaiPromptContent('nsfw')
+            : '';
+        const enhancePrompt = (useOpenAIPreset && openaiPromptEnabled('enhanceDefinitions'))
+            ? openaiPromptContent('enhanceDefinitions')
+            : '';
+        const jailbreakPrompt = (useOpenAIPreset && openaiPromptEnabled('jailbreak'))
+            ? openaiPromptContent('jailbreak')
+            : '';
+
+        // Formatting helpers from OpenAI preset (optional)
+        const wiFormat = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
+        const scenarioFormat = typeof openp?.scenario_format === 'string' ? openp.scenario_format : '{{scenario}}';
+        const personalityFormat = typeof openp?.personality_format === 'string' ? openp.personality_format : '{{personality}}';
+
+        const vars = {
+            user: name1,
+            char: name2,
+            system: (() => {
+                if (mainPrompt) return applyMacros(mainPrompt, { user: name1, char: name2 });
+                if (useSysprompt && sysp?.content) return applyMacros(sysp.content, { user: name1, char: name2 });
+                return (context.systemPrompt || '');
+            })(),
+            description: context?.character?.description || '',
+            personality: applyMacros(personalityFormat, { personality: (context?.character?.personality || '') }),
+            scenario: applyMacros(scenarioFormat, { scenario: (context?.character?.scenario || '') }),
+            persona: context?.user?.persona || '',
+            wiBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
+            wiAfter: '',
+            loreBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
+            loreAfter: '',
+            anchorBefore: '',
+            anchorAfter: '',
+            mesExamples: '',
+            mesExamplesRaw: '',
+            trim: '',
+        };
+
+        // 1) Context preset: render story_string as ST-like template
+        const combinedStoryString = (ctxp?.story_string && useContext)
+            ? renderStTemplate(ctxp.story_string, vars)
+            : '';
+
+        // 2) Place story string according to story_string_position
+        // ST: extension_prompt_types => IN_PROMPT:0, IN_CHAT:1, BEFORE_PROMPT:2, NONE:-1
+        const position = Number(ctxp?.story_string_position ?? 0);
+        const injectDepth = Math.max(0, Number(ctxp?.story_string_depth ?? 1));
+        const injectRole = Number(ctxp?.story_string_role ?? 0);
+
+        // BEFORE_PROMPT: put as the very first system message
+        if (combinedStoryString && position === 2) {
+            messages.push({ role: 'system', content: combinedStoryString });
         }
 
-        // 角色设定
-        if (context.character) {
-            let characterPrompt = `你正在扮演: ${context.character.name}`;
-            if (context.character.description) {
-                characterPrompt += `\n\n角色描述:\n${context.character.description}`;
+        // IN_PROMPT: also system message near start (we keep same behavior as openai-style)
+        if (combinedStoryString && position === 0) {
+            messages.push({ role: 'system', content: combinedStoryString });
+        }
+
+        // If context preset disabled, fall back to legacy system prompt building
+        if (!useContext) {
+            if (context.systemPrompt) {
+                messages.push({ role: 'system', content: context.systemPrompt });
             }
-            if (context.character.personality) {
-                characterPrompt += `\n\n性格特点:\n${context.character.personality}`;
+            if (vars.system) {
+                messages.push({ role: 'system', content: vars.system });
             }
-            messages.push({
-                role: 'system',
-                content: characterPrompt
-            });
+            if (worldPrompt) {
+                messages.push({ role: 'system', content: wiFormat.replace('{0}', worldPrompt) });
+            }
+            if (enhancePrompt) {
+                const enh = applyMacros(enhancePrompt, { user: name1, char: name2 });
+                if (enh) messages.push({ role: 'system', content: enh });
+            }
+            if (auxPrompt) {
+                const aux = applyMacros(auxPrompt, { user: name1, char: name2 });
+                if (aux) messages.push({ role: 'system', content: aux });
+            }
+            if (context.character) {
+                let characterPrompt = `你正在扮演: ${context.character.name}`;
+                if (context.character.description) characterPrompt += `\n\n角色描述:\n${context.character.description}`;
+                if (context.character.personality) characterPrompt += `\n\n性格特点:\n${context.character.personality}`;
+                messages.push({ role: 'system', content: characterPrompt });
+            }
         }
 
-        // 历史消息
-        if (context.history && context.history.length > 0) {
-            messages.push(...context.history);
+        // 3) History
+        const history = Array.isArray(context.history) ? context.history.slice() : [];
+
+        // IN_CHAT: inject story string into history (depth + role)
+        if (combinedStoryString && position === 1) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[injectRole] || 'system';
+            const idx = Math.max(0, history.length - injectDepth);
+            history.splice(idx, 0, { role, content: combinedStoryString });
         }
 
-        // 当前用户消息
-        messages.push({
-            role: 'user',
-            content: userMessage
-        });
+        if (history.length > 0) {
+            messages.push(...history);
+        }
 
+        // 4) Post-history instructions: prefer OpenAI preset jailbreak, else sysprompt.post_history
+        const postHistory = jailbreakPrompt || (useSysprompt ? (sysp?.post_history || '') : '');
+        if (postHistory) {
+            const phi = applyMacros(postHistory, { user: name1, char: name2 });
+            if (phi) {
+                messages.push({ role: 'user', content: phi });
+            }
+        }
+
+        // 5) Current user message
+        messages.push({ role: 'user', content: userMessage });
         return messages;
+    }
+
+    /**
+     * SillyTavern-like generation parameters (from OpenAI preset)
+     * We store the full OpenAI preset JSON, but only map common fields into provider options.
+     */
+    getGenerationOptions() {
+        try {
+            const state = this.presets?.getState?.();
+            if (!state?.enabled?.openai) return {};
+            const p = this.presets.getActive('openai');
+            if (!p || typeof p !== 'object') return {};
+
+            const num = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : undefined;
+            const int = (v) => (typeof v === 'number' && Number.isFinite(v)) ? Math.trunc(v) : undefined;
+
+            const base = {
+                temperature: num(p.temperature),
+                top_p: num(p.top_p),
+                top_k: int(p.top_k),
+                presence_penalty: num(p.presence_penalty),
+                frequency_penalty: num(p.frequency_penalty),
+                seed: int(p.seed),
+                n: int(p.n),
+            };
+
+            const maxTokens = int(p.openai_max_tokens);
+            const provider = this.config.get()?.provider;
+
+            // Provider-specific mapping
+            if (provider === 'gemini' || provider === 'makersuite' || provider === 'vertexai') {
+                return {
+                    temperature: base.temperature,
+                    top_p: base.top_p,
+                    top_k: base.top_k,
+                    maxTokens,
+                };
+            }
+
+            if (provider === 'anthropic') {
+                // our AnthropicProvider expects maxTokens (camelCase), but will pass other fields through
+                return {
+                    temperature: base.temperature,
+                    top_p: base.top_p,
+                    top_k: base.top_k,
+                    maxTokens,
+                };
+            }
+
+            // openai-like (openai/deepseek/custom)
+            const options = {
+                temperature: base.temperature,
+                top_p: base.top_p,
+                presence_penalty: base.presence_penalty,
+                frequency_penalty: base.frequency_penalty,
+                seed: base.seed,
+                n: base.n,
+            };
+            if (typeof maxTokens === 'number') options.max_tokens = maxTokens;
+            return options;
+        } catch (err) {
+            logger.debug('getGenerationOptions failed', err);
+            return {};
+        }
     }
 
     /**

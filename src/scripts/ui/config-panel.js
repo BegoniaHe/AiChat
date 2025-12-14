@@ -649,8 +649,18 @@ export class ConfigPanel {
      * 获取表单数据
      */
     getFormData() {
-        const provider = document.getElementById('config-provider').value;
-        const apiKeyInput = document.getElementById('config-apikey');
+        const panel = this.element || document;
+
+        // 在部分移动端输入法下，点击按钮时输入可能还在 composition 状态；先 blur 提交文本
+        try {
+            const activeEl = panel?.ownerDocument?.activeElement || document.activeElement;
+            if (activeEl && panel?.contains?.(activeEl) && typeof activeEl.blur === 'function') {
+                activeEl.blur();
+            }
+        } catch {}
+
+        const provider = panel.querySelector('#config-provider')?.value;
+        const apiKeyInput = panel.querySelector('#config-apikey');
         const rawKey = (apiKeyInput?.value || '').trim();
         const masked = apiKeyInput?.dataset?.masked || '';
         // apiKey 为 null => 不修改 key（继续使用已保存的 active key）
@@ -658,18 +668,18 @@ export class ConfigPanel {
 
         const formData = {
             provider: provider,
-            baseUrl: document.getElementById('config-baseurl').value,
+            baseUrl: (panel.querySelector('#config-baseurl')?.value || '').trim(),
             apiKey: apiKey,
-            model: document.getElementById('config-model').value,
-            stream: document.getElementById('config-stream').checked,
+            model: (panel.querySelector('#config-model')?.value || '').trim(),
+            stream: Boolean(panel.querySelector('#config-stream')?.checked),
             timeout: 60000,
             maxRetries: 3
         };
 
         // Add Vertex AI specific fields
         if (provider === 'vertexai') {
-            const region = document.getElementById('config-region')?.value;
-            const saInput = document.getElementById('config-serviceaccount');
+            const region = panel.querySelector('#config-region')?.value;
+            const saInput = panel.querySelector('#config-serviceaccount');
             let serviceAccount = saInput?.value;
 
             // Handle masked Service Account JSON
@@ -687,8 +697,9 @@ export class ConfigPanel {
     }
 
     toggleApiKey() {
-        const input = document.getElementById('config-apikey');
-        const btn = document.getElementById('toggle-apikey');
+        const panel = this.element || document;
+        const input = panel.querySelector('#config-apikey');
+        const btn = panel.querySelector('#toggle-apikey');
         if (input.type === 'password') {
             input.type = 'text';
             btn.textContent = '隱藏';
@@ -699,8 +710,9 @@ export class ConfigPanel {
     }
 
     toggleServiceAccount() {
-        const input = document.getElementById('config-serviceaccount');
-        const btn = document.getElementById('toggle-sa');
+        const panel = this.element || document;
+        const input = panel.querySelector('#config-serviceaccount');
+        const btn = panel.querySelector('#toggle-sa');
         if (!input || !btn) return;
 
         if (input.style.webkitTextSecurity === 'disc' || input.style.webkitTextSecurity === '') {
@@ -896,7 +908,8 @@ export class ConfigPanel {
      * 显示状态消息
      */
     showStatus(message, type = 'info') {
-        const statusEl = document.getElementById('config-status');
+        const statusEl = (this.element || document).querySelector('#config-status');
+        if (!statusEl) return;
         const colors = {
             success: '#d4edda',
             error: '#f8d7da',
@@ -925,15 +938,23 @@ export class ConfigPanel {
         const formData = this.getFormData();
 
         try {
-            const existingKey = (this.configManager.get()?.apiKey || '').trim();
-            const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
-            if (!keyToUse || !formData.baseUrl || !formData.model) {
-                this.showStatus('請填寫 Base URL / 模型，並確保已保存至少一個 API Key（🔑）', 'error');
+            if (!formData.baseUrl || !formData.model) {
+                this.showStatus('請填寫 Base URL / 模型', 'error');
+                return;
+            }
+
+            // Key：允許「已保存 Key（🔑）」但輸入框仍顯示遮罩（formData.apiKey 會是 null）
+            const active = this.configManager.getActiveProfile?.();
+            const keys = this.configManager.listKeys?.(active?.id) || [];
+            const hasTypedKey = typeof formData.apiKey === 'string' && formData.apiKey.trim().length > 0;
+            const hasSavedKey = keys.length > 0;
+            if (!hasTypedKey && !hasSavedKey && formData.provider !== 'vertexai') {
+                this.showStatus('請先用 🔑 保存至少一個 API Key，或在此欄貼上 Key 後保存', 'error');
                 return;
             }
             this.setLoading(true);
             // 验证配置
-            await this.configManager.validate({ ...formData, apiKey: keyToUse });
+            await this.configManager.validate({ ...formData, apiKey: hasTypedKey ? formData.apiKey.trim() : null });
 
             // 保存
             await this.configManager.save(formData);
@@ -943,6 +964,12 @@ export class ConfigPanel {
                 const runtime = await this.configManager.load();
                 window.appBridge.client = runtime.apiKey ? new LLMClient(runtime) : null;
                 window.appBridge.config.set(runtime);
+
+                // 若保存後仍拿不到 key（解密/保存失敗），給出明確提示並不自動關閉
+                if (!runtime.apiKey) {
+                    this.showStatus('已保存，但當前 Key 不可用（請用 🔑 重新保存 Key）', 'error');
+                    return;
+                }
             }
 
             this.showStatus('配置保存成功！', 'success');
@@ -973,8 +1000,13 @@ export class ConfigPanel {
             this.testButton.textContent = '测试中...';
             this.testButton.disabled = true;
 
-            const existingKey = (this.configManager.get()?.apiKey || '').trim();
+            const runtime = await this.configManager.load();
+            const existingKey = (runtime?.apiKey || '').trim();
             const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
+            if (!keyToUse) {
+                this.showStatus('請先用 🔑 保存至少一個 API Key，或在此欄貼上 Key', 'error');
+                return;
+            }
             const tempClient = new LLMClient({ ...formData, apiKey: keyToUse });
             const result = await tempClient.healthCheck();
 

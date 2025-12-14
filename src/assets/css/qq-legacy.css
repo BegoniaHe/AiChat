@@ -112,13 +112,13 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    padding-top: calc(8px + clamp(0px, env(safe-area-inset-top, 0px), 12px)); /* 限制安全區高度，避免過大 */
-    background: rgba(230, 230, 230, 0.85);
+    padding: 10px 12px;
+    /* 避免部分 WebView 對 env()/clamp() 計算異常導致頂欄高度不穩定 */
+    background: rgba(230, 230, 230, 0.9);
     backdrop-filter: blur(10px);
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
     flex-shrink: 0;
-    min-height: 44px;
+    min-height: 52px;
     box-sizing: border-box;
 }
 
@@ -142,7 +142,7 @@
     font-size: 16px;
     font-weight: 600;
     color: #1a1a1a;
-    line-height: 32px;
+    line-height: 1.2;
 }
 
 .chat-menu-btn {
@@ -188,8 +188,8 @@
     /* 间距 */
     padding-left: 8px;
     padding-right: 8px;
-    padding-top: 10px; /* 首條消息與頂欄留出間距 */
-    margin-bottom: calc(var(--qq-spacing-2xl) + 20px); /* 为输入框预留空间（輸入框加高後） */
+    padding-top: 14px; /* 首條消息與頂欄留出間距 */
+    margin-bottom: 96px; /* 为输入框预留空间（輸入框加高後） */
 
     /* 隐藏滚动条 */
     scrollbar-width: none;
@@ -363,13 +363,14 @@
 
 .chat-input {
     flex: 1;
-    height: 54px;
+    height: 58px;
+    min-height: 58px;
     padding: 0 20px;
-    border-radius: 27px;
+    border-radius: 29px;
     border: 1px solid rgba(0, 0, 0, 0.12);
     background: rgba(255, 255, 255, 0.9);
     font-size: 16px;
-    line-height: 54px;
+    line-height: 58px;
     outline: none;
 }
 
