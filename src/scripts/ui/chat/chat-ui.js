@@ -25,9 +25,40 @@ export class ChatUI {
         this.actionHandler = null;
 
         setupIframeResizeListener();
+        this.bindIframeLongPressForwarding();
         this.bindInputAutosize();
         this.bindFocusScroll();
         this.bindNetworkEvents();
+    }
+
+    bindIframeLongPressForwarding() {
+        if (this.__chatappIframePressBound) return;
+        this.__chatappIframePressBound = true;
+
+        window.addEventListener('chatapp-iframe-press', (ev) => {
+            const d = ev?.detail;
+            if (!d || typeof d !== 'object') return;
+            const phase = String(d.phase || '');
+            const msgId = String(d.msgId || '');
+            const iframeId = String(d.id || '');
+            const clientX = Number(d.clientX);
+            const clientY = Number(d.clientY);
+            if (!phase || !msgId || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+
+            const esc = (CSS && typeof CSS.escape === 'function') ? CSS.escape : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+            const wrapper = this.scrollEl?.querySelector?.(`[data-msg-id="${esc(msgId)}"]`);
+            const message = wrapper?.__chatappMessage;
+            if (!message) return;
+
+            if (phase === 'down') {
+                const iframe = iframeId ? document.querySelector(`iframe[data-iframe-id="${esc(iframeId)}"]`) : null;
+                this.startLongPress({ clientX, clientY, target: iframe || wrapper }, message);
+                return;
+            }
+            if (phase === 'up' || phase === 'cancel') {
+                this.clearLongPress();
+            }
+        }, { passive: true });
     }
 
     bindInputAutosize() {
@@ -176,6 +207,7 @@ export class ChatUI {
         wrapper.className = isUser ? 'QQ_chat_mymsg' : 'QQ_chat_charmsg';
         wrapper.dataset.msgId = message.id;
         wrapper.dataset.role = message.role || '';
+        wrapper.__chatappMessage = message;
 
         // 头像
         const avatarImg = document.createElement('img');
@@ -515,9 +547,149 @@ export class ChatUI {
         return menu;
     }
 
+    async copyToClipboard(text) {
+        const s = String(text ?? '');
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(s);
+                return true;
+            }
+        } catch {}
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = s;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '0';
+            ta.setAttribute('readonly', 'true');
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            ta.remove();
+            return ok;
+        } catch {
+            return false;
+        }
+    }
+
+    openCodeViewer({ lang = '', code = '' } = {}) {
+        const language = String(lang || '').trim();
+        const content = String(code ?? '');
+
+        if (!this.__chatappCodeViewer) {
+            const overlay = document.createElement('div');
+            overlay.id = 'code-viewer-modal';
+            overlay.style.cssText = `
+                position: fixed;
+                inset: 0;
+                z-index: 22000;
+                display: none;
+                background: rgba(0,0,0,0.32);
+                padding: calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom)) 14px;
+                box-sizing: border-box;
+            `;
+
+            const panel = document.createElement('div');
+            panel.style.cssText = `
+                height: 100%;
+                background: #fff;
+                border-radius: 14px;
+                box-shadow: 0 18px 50px rgba(0,0,0,0.18);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+            `;
+            panel.addEventListener('click', (e) => e.stopPropagation());
+
+            const header = document.createElement('div');
+            header.style.cssText = `
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+                padding: 12px 12px;
+                background: #f3f4f6;
+                border-bottom: 1px solid #e5e7eb;
+            `;
+            const title = document.createElement('div');
+            title.style.cssText = 'font-size:14px; font-weight:700; color:#111827;';
+            title.textContent = '代码';
+
+            const meta = document.createElement('div');
+            meta.style.cssText = 'font-size:12px; color:#6b7280; margin-left:auto; max-width: 55vw; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;';
+            meta.dataset.role = 'lang';
+
+            const closeBtn = document.createElement('button');
+            closeBtn.type = 'button';
+            closeBtn.textContent = '关闭';
+            closeBtn.style.cssText = `
+                border: 1px solid #e5e7eb;
+                background: #fff;
+                color: #111827;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 13px;
+            `;
+
+            const body = document.createElement('div');
+            body.style.cssText = `
+                flex: 1;
+                overflow: auto;
+                -webkit-overflow-scrolling: touch;
+                background: #0b1220;
+                padding: 12px;
+            `;
+            const pre = document.createElement('pre');
+            pre.dataset.role = 'code';
+            pre.style.cssText = `
+                margin: 0;
+                color: #e2e8f0;
+                font-size: 12px;
+                line-height: 1.45;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;
+                white-space: pre-wrap;
+                overflow-x: hidden;
+                overflow-wrap: anywhere;
+                word-break: break-word;
+            `;
+            body.appendChild(pre);
+
+            header.appendChild(title);
+            header.appendChild(meta);
+            header.appendChild(closeBtn);
+            panel.appendChild(header);
+            panel.appendChild(body);
+            overlay.appendChild(panel);
+
+            const hide = () => { overlay.style.display = 'none'; };
+            overlay.addEventListener('click', hide);
+            closeBtn.addEventListener('click', hide);
+            window.addEventListener('keydown', (e) => {
+                if (overlay.style.display !== 'none' && e.key === 'Escape') hide();
+            });
+
+            document.body.appendChild(overlay);
+            this.__chatappCodeViewer = overlay;
+        }
+
+        const overlay = this.__chatappCodeViewer;
+        const langEl = overlay.querySelector('[data-role="lang"]');
+        const codeEl = overlay.querySelector('[data-role="code"]');
+        if (langEl) langEl.textContent = language ? language.toUpperCase() : '';
+        if (codeEl) codeEl.textContent = content;
+        overlay.style.display = 'block';
+    }
+
     showContextMenu(evt, message) {
         if (!this.contextMenu) return;
         const actions = [];
+        const target = evt?.target;
+        const codeBlock = target?.closest?.('.chat-codeblock') || null;
+        const hasCode = !!(codeBlock && typeof codeBlock.__chatappCode === 'string' && codeBlock.__chatappCode.length);
+        if (hasCode) {
+            actions.push({ key: 'view-code', label: '代码' });
+            actions.push({ key: 'copy-code', label: '复制' });
+        }
         if (message.role === 'assistant') {
             actions.push({ key: 'regenerate', label: '重新生成' });
             actions.push({ key: 'delete', label: '删除' });
@@ -545,6 +717,15 @@ export class ChatUI {
                 e.stopPropagation();
                 this.contextMenu.style.display = 'none';
                 this.clearLongPress();
+                if (act.key === 'copy-code' && hasCode) {
+                    this.copyToClipboard(codeBlock.__chatappCode)
+                        .then((ok) => ok ? window.toastr?.success?.('已複製到剪貼簿') : window.toastr?.warning?.('複製失敗'));
+                    return;
+                }
+                if (act.key === 'view-code' && hasCode) {
+                    this.openCodeViewer({ lang: codeBlock.__chatappLang, code: codeBlock.__chatappCode });
+                    return;
+                }
                 this.actionHandler?.(act.key, message);
             };
             this.contextMenu.appendChild(btn);

@@ -73,6 +73,8 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
 (() => {
   const id = ${JSON.stringify(String(iframeId || ''))};
   let lastH = 0;
+  let pressTimer = null;
+  let pressActive = false;
 
   const post = () => {
     try {
@@ -118,6 +120,36 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
   const start = () => {
     fitToWidth();
     post();
+
+    // Forward long-press gestures to parent (iframe events don't bubble to outer document)
+    const sendPress = (phase, ev) => {
+      try {
+        const x = (ev && typeof ev.clientX === 'number') ? ev.clientX : 0;
+        const y = (ev && typeof ev.clientY === 'number') ? ev.clientY : 0;
+        parent.postMessage({ type: 'chatapp:iframe-press', id, phase, x, y }, '*');
+      } catch {}
+    };
+    const clear = () => {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (pressActive) { sendPress('cancel', { clientX: 0, clientY: 0 }); pressActive = false; }
+    };
+    document.addEventListener('pointerdown', (ev) => {
+      clear();
+      pressActive = true;
+      sendPress('down', ev);
+      pressTimer = setTimeout(() => {
+        sendPress('longpress', ev);
+      }, 520);
+    }, { passive: true });
+    ['pointerup','pointercancel','pointerleave','pointerout'].forEach((t) => {
+      document.addEventListener(t, (ev) => {
+        if (!pressActive) return;
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        sendPress('up', ev);
+        pressActive = false;
+      }, { passive: true });
+    });
+
     try {
       const ro = new ResizeObserver(() => { fitToWidth(); });
       ro.observe(document.documentElement);
@@ -207,42 +239,10 @@ const processAllVhUnits = (htmlContent) => {
 const makeCodeBlock = ({ lang, code, messageId }) => {
     const wrap = document.createElement('div');
     wrap.className = 'chat-codeblock';
-    wrap.style.cssText = 'border:1px solid rgba(0,0,0,0.10); border-radius:12px; overflow:hidden; margin:8px 0; background:#0b1220;';
-
-    const header = document.createElement('div');
-    header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background:rgba(255,255,255,0.06); color:#e2e8f0;';
-    const left = document.createElement('div');
-    left.style.cssText = 'font-size:12px; font-weight:700; opacity:0.95;';
-    left.textContent = lang ? lang : 'code';
-    const right = document.createElement('div');
-    right.style.cssText = 'display:flex; gap:8px; align-items:center;';
-
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.textContent = '复制';
-    copyBtn.style.cssText = 'padding:6px 10px; border-radius:10px; border:1px solid rgba(148,163,184,0.35); background:transparent; color:#e2e8f0; font-size:12px; cursor:pointer;';
-    copyBtn.onclick = async () => {
-        const ok = await copyToClipboard(code);
-        if (ok) window.toastr?.success?.('已复制');
-        else window.toastr?.error?.('复制失败');
-    };
-
-    right.appendChild(copyBtn);
-    header.appendChild(left);
-    header.appendChild(right);
-    wrap.appendChild(header);
-
-    const body = document.createElement('div');
-    body.style.cssText = 'padding:10px; color:#e2e8f0;';
-
-    const pre = document.createElement('pre');
-    pre.style.cssText = 'margin:0; white-space:pre; overflow:auto; max-height:420px; font-size:12px; line-height:1.45;';
-    const codeEl = document.createElement('code');
-    codeEl.textContent = escapeText(code);
-    pre.appendChild(codeEl);
-
-    body.appendChild(pre);
-    wrap.appendChild(body);
+    wrap.style.cssText = 'border:1px solid rgba(0,0,0,0.10); border-radius:12px; overflow:hidden; margin:8px 0;';
+    // Store payload for long-press menu actions (no inline buttons)
+    wrap.__chatappCode = String(code ?? '');
+    wrap.__chatappLang = String(lang || '');
 
     // HTML preview (ST 酒馆助手：包含 <body> 且 </body> 才自动渲染)
     const looksLikeHtmlDoc = /<body[\s>]/i.test(code) && /<\/body>/i.test(code);
@@ -252,23 +252,13 @@ const makeCodeBlock = ({ lang, code, messageId }) => {
         /<details[\s>]/i.test(code) ||
         /<div[\s>]/i.test(code);
     if (looksLikeHtmlDoc || isHtmlLang) {
-        const previewBtn = document.createElement('button');
-        previewBtn.type = 'button';
-        previewBtn.textContent = '预览';
-        previewBtn.style.cssText = 'padding:6px 10px; border-radius:10px; border:1px solid rgba(148,163,184,0.35); background:transparent; color:#e2e8f0; font-size:12px; cursor:pointer;';
-        const codeBtn = document.createElement('button');
-        codeBtn.type = 'button';
-        codeBtn.textContent = '代码';
-        codeBtn.style.cssText = 'padding:6px 10px; border-radius:10px; border:1px solid rgba(148,163,184,0.35); background:transparent; color:#e2e8f0; font-size:12px; cursor:pointer;';
-        right.insertBefore(previewBtn, copyBtn);
-        right.insertBefore(codeBtn, copyBtn);
-
         const previewWrap = document.createElement('div');
-        previewWrap.style.cssText = 'background:#fff; border-top:1px solid rgba(0,0,0,0.08); display:none;';
+        previewWrap.style.cssText = 'background:#fff;';
         const iframe = document.createElement('iframe');
         const iframeId = `msg-${String(messageId || 'x')}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
         iframe.dataset.iframeId = iframeId;
-        iframe.style.cssText = 'width:100%; border:0; display:block; height:240px;';
+        iframe.dataset.msgId = String(messageId || '');
+        iframe.style.cssText = 'width:100%; border:0; display:block; height:240px; background:#fff;';
         iframe.loading = 'lazy';
         iframe.setAttribute('sandbox', 'allow-scripts'); // no same-origin
 
@@ -280,32 +270,28 @@ const makeCodeBlock = ({ lang, code, messageId }) => {
         iframe.srcdoc = buildIframeSrcDoc(html, { iframeId, needsVhHandling });
         previewWrap.appendChild(iframe);
 
-        wrap.insertBefore(previewWrap, body);
+        wrap.appendChild(previewWrap);
+        // Match ST 酒馆助手体验：渲染后不显示源码（源码/复制转移到长按菜单）
 
-        const setMode = (mode) => {
-            const isPreview = mode === 'preview';
-            previewWrap.style.display = isPreview ? 'block' : 'none';
-            body.style.display = isPreview ? 'none' : 'block';
-            previewBtn.style.background = isPreview ? 'rgba(255,255,255,0.12)' : 'transparent';
-            codeBtn.style.background = isPreview ? 'transparent' : 'rgba(255,255,255,0.12)';
-            // notify iframe about viewport height changes (for vh handling)
-            if (isPreview && needsVhHandling) {
-                try {
-                    iframe.contentWindow?.postMessage({ type: 'chatapp:updateViewportHeight', height: window.innerHeight }, '*');
-                } catch {}
-            }
-        };
-
-        previewBtn.onclick = () => setMode('preview');
-        codeBtn.onclick = () => setMode('code');
-
-        // Default: match ST 酒馆助手体验（渲染后不展示原始代码块）
-        // 若确实需要看源码，可手动点「代码」。
-        if (looksLikeHtmlDoc || (isHtmlLang && looksLikeHtmlSnippet)) {
-            setMode('preview');
-        } else {
-            setMode('code');
+        // notify iframe about viewport height changes (for vh handling)
+        if (needsVhHandling) {
+            setTimeout(() => {
+                try { iframe.contentWindow?.postMessage({ type: 'chatapp:updateViewportHeight', height: window.innerHeight }, '*'); } catch {}
+            }, 0);
         }
+    }
+
+    // Default code block (mobile wrapped, no horizontal scrolling)
+    if (!(looksLikeHtmlDoc || isHtmlLang)) {
+        const body = document.createElement('div');
+        body.style.cssText = 'padding:10px; color:#e2e8f0; background:#0b1220;';
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'margin:0; white-space:pre-wrap; overflow-x:hidden; overflow-y:auto; max-height:420px; font-size:12px; line-height:1.45; overflow-wrap:anywhere; word-break:break-word;';
+        const codeEl = document.createElement('code');
+        codeEl.textContent = escapeText(code);
+        pre.appendChild(codeEl);
+        body.appendChild(pre);
+        wrap.appendChild(body);
     }
 
     return wrap;
@@ -318,15 +304,35 @@ export const setupIframeResizeListener = () => {
     window.addEventListener('message', (e) => {
         const data = e?.data;
         if (!data || typeof data !== 'object') return;
-        if (data.type !== 'chatapp:iframe-resize') return;
-        const id = String(data.id || '');
-        const height = Number(data.height);
-        if (!id || !Number.isFinite(height)) return;
         const esc = (CSS && typeof CSS.escape === 'function') ? CSS.escape : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
-        const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
-        if (!iframe) return;
-        const clamped = Math.max(120, Math.min(height + 4, 2000));
-        iframe.style.height = `${clamped}px`;
+        if (data.type === 'chatapp:iframe-resize') {
+            const id = String(data.id || '');
+            const height = Number(data.height);
+            if (!id || !Number.isFinite(height)) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            const clamped = Math.max(120, Math.min(height + 4, 2000));
+            iframe.style.height = `${clamped}px`;
+            return;
+        }
+
+        // Forward iframe pointer events to outer UI (for long-press context menu)
+        if (data.type === 'chatapp:iframe-press') {
+            const id = String(data.id || '');
+            const phase = String(data.phase || '');
+            const x = Number(data.x);
+            const y = Number(data.y);
+            if (!id || !phase || !Number.isFinite(x) || !Number.isFinite(y)) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            const rect = iframe.getBoundingClientRect();
+            const clientX = rect.left + x;
+            const clientY = rect.top + y;
+            const msgId = String(iframe.dataset.msgId || '');
+            window.dispatchEvent(new CustomEvent('chatapp-iframe-press', {
+                detail: { id, phase, clientX, clientY, msgId }
+            }));
+        }
     });
 };
 
