@@ -114,8 +114,24 @@ class AppBridge {
             logger.info('初始化 AppBridge...');
 
             // 加载配置
-            const config = await this.config.load();
             await this.presets.ready;
+            let config = await this.config.load();
+
+            // 若当前启用的“生成参数/提示词区块”预设绑定了连接配置，则优先切换到该 profile（ST 风格：预设可携带/绑定连接）
+            try {
+                const presetState = this.presets.getState?.();
+                const useOpenAIPreset = Boolean(presetState?.enabled?.openai);
+                if (useOpenAIPreset) {
+                    const openp = this.presets.getActive('openai');
+                    const boundId = openp?.boundProfileId;
+                    if (boundId && this.config.getActiveProfileId?.() !== boundId) {
+                        const runtime = await this.config.setActiveProfile(boundId);
+                        config = runtime || this.config.get();
+                    }
+                }
+            } catch (err) {
+                logger.debug('预设绑定连接初始化失败（忽略）', err);
+            }
 
             // 初始化 LLM 客户端
             if (config.apiKey) {
@@ -247,45 +263,95 @@ class AppBridge {
         const ctxp = useContext ? this.presets.getActive('context') : null;
         const openp = useOpenAIPreset ? this.presets.getActive('openai') : null;
 
-        const openaiPromptEnabled = (identifier) => {
-            if (!openp || !Array.isArray(openp.prompt_order)) return true;
-            // Use the first order block (character_id 100000/100001 in ST defaults)
-            const block = openp.prompt_order?.[0];
-            const order = Array.isArray(block?.order) ? block.order : [];
-            const item = order.find(x => x?.identifier === identifier);
-            return item ? Boolean(item.enabled) : true;
-        };
-
-        const openaiPromptContent = (identifier) => {
-            const list = Array.isArray(openp?.prompts) ? openp.prompts : [];
-            const item = list.find(x => x?.identifier === identifier);
-            return (item && typeof item.content === 'string') ? item.content : '';
-        };
-
-        // Prefer ST OpenAI preset's editable prompts when enabled
-        const mainPrompt = (useOpenAIPreset && openaiPromptEnabled('main'))
-            ? openaiPromptContent('main')
-            : '';
-        const auxPrompt = (useOpenAIPreset && openaiPromptEnabled('nsfw'))
-            ? openaiPromptContent('nsfw')
-            : '';
-        const enhancePrompt = (useOpenAIPreset && openaiPromptEnabled('enhanceDefinitions'))
-            ? openaiPromptContent('enhanceDefinitions')
-            : '';
-        const jailbreakPrompt = (useOpenAIPreset && openaiPromptEnabled('jailbreak'))
-            ? openaiPromptContent('jailbreak')
-            : '';
-
         // Formatting helpers from OpenAI preset (optional)
         const wiFormat = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
         const scenarioFormat = typeof openp?.scenario_format === 'string' ? openp.scenario_format : '{{scenario}}';
         const personalityFormat = typeof openp?.personality_format === 'string' ? openp.personality_format : '{{personality}}';
 
+        // When OpenAI preset has prompt_order: use ST-like block ordering (drag & drop in UI)
+        const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
+        if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
+            const history = Array.isArray(context.history) ? context.history.slice() : [];
+            const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
+            const byId = new Map();
+            prompts.forEach(p => { if (p?.identifier) byId.set(p.identifier, p); });
+
+            const macroVars = { user: name1, char: name2, scenario: context?.character?.scenario || '', personality: context?.character?.personality || '' };
+            const formatScenario = applyMacros(scenarioFormat, { scenario: macroVars.scenario });
+            const formatPersonality = applyMacros(personalityFormat, { personality: macroVars.personality });
+            const formatWorld = worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '';
+
+            const resolveMarker = (identifier) => {
+                switch (identifier) {
+                    case 'worldInfoBefore':
+                    case 'worldInfoAfter':
+                        return formatWorld;
+                    case 'charDescription':
+                        return context?.character?.description || '';
+                    case 'charPersonality':
+                        return formatPersonality || '';
+                    case 'scenario':
+                        return formatScenario || '';
+                    case 'personaDescription':
+                        return context?.user?.persona || '';
+                    // dialogueExamples/chatHistory are markers without content here
+                    default:
+                        return '';
+                }
+            };
+
+            let historyInserted = false;
+
+            for (const item of openaiOrder) {
+                const identifier = item?.identifier;
+                const enabled = item?.enabled !== false;
+                if (!identifier || !enabled) continue;
+
+                if (identifier === 'chatHistory') {
+                    if (history.length) messages.push(...history);
+                    historyInserted = true;
+                    continue;
+                }
+
+                const pr = byId.get(identifier);
+                const isMarker = Boolean(pr?.marker) || ['chatHistory', 'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter', 'charDescription', 'charPersonality', 'scenario', 'personaDescription'].includes(identifier);
+
+                if (isMarker) {
+                    const content = resolveMarker(identifier);
+                    if (content) {
+                        messages.push({ role: 'system', content });
+                    }
+                    continue;
+                }
+
+                // Custom/editable prompt block
+                let content = (typeof pr?.content === 'string') ? pr.content : '';
+                // Special case: main prompt fallback
+                if (identifier === 'main' && !content) {
+                    if (useSysprompt && sysp?.content) content = sysp.content;
+                    else if (context.systemPrompt) content = context.systemPrompt;
+                }
+                content = applyMacros(content, { user: name1, char: name2 });
+                if (!content) continue;
+
+                const role = String(pr?.role || 'system').toLowerCase();
+                const mappedRole = (role === 'user' || role === 'assistant' || role === 'system') ? role : 'system';
+                messages.push({ role: mappedRole, content });
+            }
+
+            if (!historyInserted && history.length) {
+                messages.push(...history);
+            }
+
+            // Append current user message
+            messages.push({ role: 'user', content: userMessage });
+            return messages;
+        }
+
         const vars = {
             user: name1,
             char: name2,
             system: (() => {
-                if (mainPrompt) return applyMacros(mainPrompt, { user: name1, char: name2 });
                 if (useSysprompt && sysp?.content) return applyMacros(sysp.content, { user: name1, char: name2 });
                 return (context.systemPrompt || '');
             })(),
@@ -336,14 +402,6 @@ class AppBridge {
             if (worldPrompt) {
                 messages.push({ role: 'system', content: wiFormat.replace('{0}', worldPrompt) });
             }
-            if (enhancePrompt) {
-                const enh = applyMacros(enhancePrompt, { user: name1, char: name2 });
-                if (enh) messages.push({ role: 'system', content: enh });
-            }
-            if (auxPrompt) {
-                const aux = applyMacros(auxPrompt, { user: name1, char: name2 });
-                if (aux) messages.push({ role: 'system', content: aux });
-            }
             if (context.character) {
                 let characterPrompt = `你正在扮演: ${context.character.name}`;
                 if (context.character.description) characterPrompt += `\n\n角色描述:\n${context.character.description}`;
@@ -367,8 +425,8 @@ class AppBridge {
             messages.push(...history);
         }
 
-        // 4) Post-history instructions: prefer OpenAI preset jailbreak, else sysprompt.post_history
-        const postHistory = jailbreakPrompt || (useSysprompt ? (sysp?.post_history || '') : '');
+        // 4) Post-history instructions (sysprompt.post_history)
+        const postHistory = useSysprompt ? (sysp?.post_history || '') : '';
         if (postHistory) {
             const phi = applyMacros(postHistory, { user: name1, char: name2 });
             if (phi) {

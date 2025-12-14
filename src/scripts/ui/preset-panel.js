@@ -9,6 +9,7 @@
  */
 
 import { PresetStore } from '../storage/preset-store.js';
+import { LLMClient } from '../api/client.js';
 import { logger } from '../utils/logger.js';
 
 const PRESET_TYPES = [
@@ -16,6 +17,7 @@ const PRESET_TYPES = [
     { id: 'context', label: '上下文模板' },
     { id: 'instruct', label: 'Instruct 模板' },
     { id: 'openai', label: '生成参数' },
+    { id: 'custom', label: '自定义' },
 ];
 
 const EXT_PROMPT_TYPES = {
@@ -29,6 +31,35 @@ const EXT_PROMPT_ROLES = {
     SYSTEM: 0,
     USER: 1,
     ASSISTANT: 2,
+};
+
+const OPENAI_KNOWN_BLOCKS = {
+    main: { label: 'Main Prompt', marker: false },
+    nsfw: { label: 'Auxiliary Prompt', marker: false },
+    dialogueExamples: { label: 'Chat Examples', marker: true },
+    jailbreak: { label: 'Post-History Instructions', marker: false },
+    chatHistory: { label: 'Chat History', marker: true },
+    worldInfoAfter: { label: 'World Info (after)', marker: true },
+    worldInfoBefore: { label: 'World Info (before)', marker: true },
+    enhanceDefinitions: { label: 'Enhance Definitions', marker: false },
+    charDescription: { label: 'Char Description', marker: true },
+    charPersonality: { label: 'Char Personality', marker: true },
+    scenario: { label: 'Scenario', marker: true },
+    personaDescription: { label: 'Persona Description', marker: true },
+};
+
+const roleIdToName = (role) => {
+    const r = String(role || '').toLowerCase();
+    if (r === 'system' || r === 'user' || r === 'assistant') return r;
+    // ST preset uses role string; fallback
+    return 'system';
+};
+
+const roleNameToId = (name) => {
+    const r = String(name || '').toLowerCase();
+    if (r === 'user') return EXT_PROMPT_ROLES.USER;
+    if (r === 'assistant') return EXT_PROMPT_ROLES.ASSISTANT;
+    return EXT_PROMPT_ROLES.SYSTEM;
 };
 
 const deepClone = (v) => {
@@ -60,6 +91,39 @@ export class PresetPanel {
         this.statusEl = null;
     }
 
+    getTypeLabel(type) {
+        const hit = PRESET_TYPES.find(t => t.id === type);
+        return hit?.label || String(type || '');
+    }
+
+    async applyBoundConfigIfAny() {
+        // 仅对“生成参数/自定义（OpenAI store）”做绑定，以免切换系统提示词等意外更换连接
+        const storeType = this.getStoreType();
+        if (storeType !== 'openai') return;
+
+        const preset = this.store.getActive('openai') || {};
+        const boundId = preset?.boundProfileId;
+        if (!boundId) return;
+
+        const cm = window.appBridge?.config;
+        if (!cm?.setActiveProfile) return;
+
+        const currentId = cm.getActiveProfileId?.();
+        if (currentId && currentId === boundId) return;
+
+        try {
+            const runtime = await cm.setActiveProfile(boundId);
+            const cfg = runtime || cm.get?.();
+            if (window.appBridge) {
+                window.appBridge.config.set(cfg);
+                window.appBridge.client = cfg?.apiKey ? new LLMClient(cfg) : null;
+            }
+            window.dispatchEvent(new CustomEvent('preset-bound-config-applied', { detail: { profileId: boundId } }));
+        } catch (err) {
+            logger.warn('应用预设绑定的 API 配置失败', err);
+        }
+    }
+
     async show() {
         await this.store.ready;
         if (!this.element) this.createUI();
@@ -85,11 +149,12 @@ export class PresetPanel {
         // Important: fixed top/bottom/left/right + flex layout so inner can scroll on mobile
         this.element.style.cssText = `
             display:none; position:fixed;
-            /* 以 inset 直接吃 safe-area，避免面板内部出现多余空白 */
+            /* 使用 dvh 避免部分移动端 WebView 100vh 计算导致上下被“切掉” */
             top: calc(10px + env(safe-area-inset-top, 0px));
             left: calc(10px + env(safe-area-inset-left, 0px));
             right: calc(10px + env(safe-area-inset-right, 0px));
-            bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+            height: calc(100vh - 20px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+            height: calc(100dvh - 20px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
             box-sizing: border-box;
             background:#fff; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.25);
             z-index: 21000;
@@ -178,14 +243,15 @@ export class PresetPanel {
         });
 
         this.element.querySelector('#preset-enabled').onchange = async (e) => {
-            await this.store.setEnabled(this.activeType, !!e.target.checked);
+            await this.store.setEnabled(this.getStoreType(), !!e.target.checked);
             this.showStatus('已更新启用状态', 'success');
             window.dispatchEvent(new CustomEvent('preset-changed'));
         };
 
         this.element.querySelector('#preset-select').onchange = async (e) => {
-            await this.store.setActive(this.activeType, e.target.value);
+            await this.store.setActive(this.getStoreType(), e.target.value);
             await this.refreshEditor();
+            await this.applyBoundConfigIfAny();
             window.dispatchEvent(new CustomEvent('preset-changed'));
         };
 
@@ -236,10 +302,11 @@ export class PresetPanel {
 
     async exportCurrent() {
         await this.store.ready;
-        const type = this.activeType;
+        const type = this.getStoreType();
         const preset = this.store.getActive(type) || {};
         const name = String(preset.name || type).replace(/[\\/:*?"<>|]+/g, '_');
-        this.downloadJson(`${type}-${name}.json`, preset);
+        const prefix = type === 'openai' ? 'preset' : type;
+        this.downloadJson(`${prefix}-${name}.json`, preset);
         this.showStatus('已导出当前预设', 'success');
     }
 
@@ -281,17 +348,22 @@ export class PresetPanel {
             return;
         }
 
-        const type = (detected && detected !== 'store') ? detected : this.activeType;
-        if (type !== this.activeType) {
-            const ok = confirm(`检测到预设类型为「${type}」。要导入到该类型吗？（取消=导入到当前tab）`);
+        const currentStoreType = this.getStoreType();
+        const detectedType = (detected && detected !== 'store') ? detected : null;
+        let importType = detectedType || currentStoreType;
+
+        if (detectedType && detectedType !== currentStoreType) {
+            const ok = confirm(`检测到预设格式为「${this.getTypeLabel(detectedType)}」。要导入到该类型吗？（取消=导入到当前tab）`);
             if (!ok) {
-                // keep current type
+                importType = currentStoreType;
             } else {
-                this.activeType = type;
+                importType = detectedType;
             }
         }
 
-        const importType = this.activeType;
+        // Switch tab after deciding import target (OpenAI goes to "自定义" for prompt blocks)
+        this.activeType = importType === 'openai' ? 'custom' : importType;
+
         const name = prompt('导入预设名称', json?.name || '导入预设');
         if (!name) return;
         await this.store.upsert(importType, { name, data: { ...json, name } });
@@ -330,11 +402,11 @@ export class PresetPanel {
         this.setActiveTabStyles();
 
         const enabledEl = this.element.querySelector('#preset-enabled');
-        enabledEl.checked = this.store.getEnabled(this.activeType);
+        enabledEl.checked = this.store.getEnabled(this.getStoreType());
 
         const selectEl = this.element.querySelector('#preset-select');
-        const presets = this.store.list(this.activeType);
-        const activeId = this.store.getActiveId(this.activeType);
+        const presets = this.store.list(this.getStoreType());
+        const activeId = this.store.getActiveId(this.getStoreType());
         selectEl.innerHTML = '';
         presets.forEach(p => {
             const opt = document.createElement('option');
@@ -353,7 +425,7 @@ export class PresetPanel {
         if (!root) return;
         root.innerHTML = '';
 
-        const p = this.store.getActive(this.activeType) || {};
+        const p = this.store.getActive(this.getStoreType()) || {};
 
         if (this.activeType === 'sysprompt') {
             root.appendChild(this.renderSyspromptEditor(p));
@@ -368,9 +440,18 @@ export class PresetPanel {
             return;
         }
         if (this.activeType === 'openai') {
-            root.appendChild(this.renderOpenAIEditor(p));
+            root.appendChild(this.renderOpenAIParamsEditor(p));
             return;
         }
+        if (this.activeType === 'custom') {
+            root.appendChild(this.renderOpenAIBlocksEditor(p));
+            return;
+        }
+    }
+
+    getStoreType() {
+        // “自定义”tab 是 OpenAI preset 的区块视图
+        return this.activeType === 'custom' ? 'openai' : this.activeType;
     }
 
     renderSection(title, desc) {
@@ -576,8 +657,8 @@ export class PresetPanel {
         return wrap;
     }
 
-    renderOpenAIEditor(p) {
-        const wrap = this.renderSection('生成参数（OpenAI Preset）', '参照 ST：编辑常用生成参数；提示词只显示可编辑项（隐藏 chat_history 等 marker）');
+    renderOpenAIParamsEditor(p) {
+        const wrap = this.renderSection('生成参数', '参照 ST：编辑常用生成参数；提示词区块请到「自定义」tab 管理（不限制特定 LLM，可自行绑定连接配置）');
 
         const temperature = document.createElement('input');
         temperature.id = 'gen-temperature';
@@ -632,38 +713,271 @@ export class PresetPanel {
             { label: 'frequency_penalty', el: frequency },
         ]));
 
-        // Editable prompts (hide markers such as chatHistory/worldInfoBefore/etc)
-        const prompts = Array.isArray(p.prompts) ? p.prompts : [];
-        const editable = prompts.filter(x => x && typeof x === 'object' && x.marker !== true && typeof x.content === 'string');
-        if (editable.length) {
-            const box = document.createElement('div');
-            box.style.cssText = 'margin-top:12px; padding-top:12px; border-top:1px solid rgba(0,0,0,0.06);';
-            const title = document.createElement('div');
-            title.style.cssText = 'font-weight:800; color:#0f172a;';
-            title.textContent = '提示词（可编辑）';
-            box.appendChild(title);
-            const desc = document.createElement('div');
-            desc.style.cssText = 'color:#64748b; font-size:12px; margin-top:4px;';
-            desc.textContent = '与 ST 相同：仅展示可编辑内容（不展示 chat_history/world_info 等 marker 模块）';
-            box.appendChild(desc);
+        return wrap;
+    }
 
-            editable.forEach((pr) => {
-                const id = `openai-prompt-${pr.identifier || pr.name || Math.random().toString(16).slice(2, 8)}`;
-                const label = `${pr.name || pr.identifier || 'Prompt'}${pr.role ? ` · ${pr.role}` : ''}`;
-                box.appendChild(this.renderTextarea(label, id, pr.content || '', ''));
-                const ta = box.querySelector(`#${id}`);
-                if (ta) ta.dataset.promptIdentifier = pr.identifier || '';
+    renderOpenAIBlocksEditor(p) {
+        const wrap = this.renderSection('自定义提示词区块（Prompt Blocks）', '与 ST 类似：区块默认折叠，点击展开；可拖拽排序并可新增自定义区块');
+
+        // Prompt blocks (ST-like): show blocks in prompt_order, allow drag reorder
+        const prompts = Array.isArray(p.prompts) ? p.prompts : [];
+        const promptById = new Map();
+        prompts.forEach(pr => {
+            if (pr?.identifier) promptById.set(pr.identifier, pr);
+        });
+        const orderBlock = Array.isArray(p.prompt_order) ? p.prompt_order[0] : null;
+        const order = Array.isArray(orderBlock?.order) ? orderBlock.order : [];
+
+        const blocks = order.length
+            ? order.map(o => ({ identifier: o.identifier, enabled: o.enabled !== false }))
+            : prompts
+                .filter(pr => pr?.identifier)
+                .map(pr => ({ identifier: pr.identifier, enabled: true }));
+
+        const box = document.createElement('div');
+        box.style.cssText = 'margin-top:12px; padding-top:12px; border-top:1px solid rgba(0,0,0,0.06);';
+
+        const headRow = document.createElement('div');
+        headRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;';
+        headRow.innerHTML = `
+            <div>
+                <div style="font-weight:800; color:#0f172a;">提示词区块（可拖拽排序）</div>
+                <div style="color:#64748b; font-size:12px; margin-top:4px;">
+                    与 ST 相同：可拖拽调整顺序；marker（如 Chat History/World Info）不显示内容
+                </div>
+            </div>
+            <button type="button" id="openai-add-block" style="padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; font-size:12px;">
+                ＋ 新增区块
+            </button>
+        `;
+        box.appendChild(headRow);
+
+        const list = document.createElement('div');
+        list.id = 'openai-blocks';
+        list.style.cssText = 'margin-top:10px; display:flex; flex-direction:column; gap:10px;';
+
+        const makeBlockEl = ({ identifier, enabled }) => {
+            const pr = promptById.get(identifier);
+            const known = OPENAI_KNOWN_BLOCKS[identifier];
+            const isMarker = Boolean(pr?.marker) || Boolean(known?.marker);
+            const canEdit = !isMarker && (typeof pr?.content === 'string' || !pr);
+            const title = pr?.name || known?.label || identifier;
+            const roleName = roleIdToName(pr?.role || 'system');
+            const sysPrompt = (typeof pr?.system_prompt === 'boolean') ? pr.system_prompt : true;
+
+            const card = document.createElement('div');
+            card.className = 'openai-block';
+            card.draggable = true;
+            card.dataset.identifier = identifier;
+            card.dataset.collapsed = 'true';
+            card.style.cssText = `
+                border: 1px solid rgba(0,0,0,0.08);
+                border-radius: 12px;
+                background: #fff;
+                overflow: hidden;
+            `;
+
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; background:rgba(248,250,252,0.85);';
+
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex; align-items:center; gap:10px; min-width:0;';
+            left.innerHTML = `
+                <div class="collapse-toggle" style="font-size:16px; color:#64748b; user-select:none; width:18px;">▸</div>
+                <div class="drag-handle" style="font-size:16px; color:#64748b; cursor:grab; user-select:none;">☰</div>
+                <div style="min-width:0;">
+                    <div style="font-weight:800; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${title}</div>
+                    <div style="color:#64748b; font-size:12px;">${isMarker ? 'marker（自动填充）' : `role: ${roleName}`}</div>
+                </div>
+            `;
+            header.appendChild(left);
+
+            const right = document.createElement('div');
+            right.style.cssText = 'display:flex; align-items:center; gap:10px;';
+            const enabledWrap = document.createElement('label');
+            enabledWrap.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:12px; color:#334155; cursor:pointer;';
+            enabledWrap.innerHTML = `<input type="checkbox" class="block-enabled" style="width:16px; height:16px;">启用`;
+            const enabledInput = enabledWrap.querySelector('input');
+            enabledInput.checked = enabled !== false;
+            enabledInput.addEventListener('click', (e) => e.stopPropagation());
+            right.appendChild(enabledWrap);
+
+            if (canEdit) {
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'block-delete';
+                del.textContent = '删除';
+                del.style.cssText = 'padding:6px 10px; border:1px solid #fecaca; border-radius:10px; background:#fee2e2; color:#b91c1c; cursor:pointer; font-size:12px;';
+                del.onclick = () => {
+                    if (!confirm(`删除区块「${identifier}」？`)) return;
+                    card.remove();
+                };
+                del.addEventListener('click', (e) => e.stopPropagation());
+                right.appendChild(del);
+            }
+
+            header.appendChild(right);
+            card.appendChild(header);
+
+            const applyEnabledStyle = (isEnabled) => {
+                if (isEnabled) {
+                    card.style.opacity = '';
+                    card.style.filter = '';
+                    card.style.background = '#fff';
+                    header.style.background = 'rgba(248,250,252,0.85)';
+                } else {
+                    // 视觉区分：整体灰化（ST 类似“禁用区块”效果）
+                    card.style.opacity = '0.62';
+                    card.style.filter = 'grayscale(1)';
+                    card.style.background = '#f1f5f9';
+                    header.style.background = '#e2e8f0';
+                }
+            };
+            enabledInput.addEventListener('change', () => applyEnabledStyle(enabledInput.checked));
+            applyEnabledStyle(enabledInput.checked);
+
+            const setCollapsed = (collapsed) => {
+                card.dataset.collapsed = collapsed ? 'true' : 'false';
+                const toggle = header.querySelector('.collapse-toggle');
+                if (toggle) toggle.textContent = collapsed ? '▸' : '▾';
+                const body = card.querySelector('.block-body');
+                if (body) body.style.display = collapsed ? 'none' : 'block';
+            };
+            header.addEventListener('click', () => {
+                const collapsed = card.dataset.collapsed === 'true';
+                setCollapsed(!collapsed);
             });
 
-            wrap.appendChild(box);
-        }
+            if (canEdit) {
+                const body = document.createElement('div');
+                body.className = 'block-body';
+                body.style.cssText = 'padding:10px 12px; display:none; flex-direction:column; gap:10px;';
+
+                const nameInput = document.createElement('input');
+                nameInput.type = 'text';
+                nameInput.className = 'block-name';
+                nameInput.placeholder = '区块名称';
+                nameInput.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+                nameInput.value = pr?.name || title;
+
+                const roleSel = document.createElement('select');
+                roleSel.className = 'block-role';
+                roleSel.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+                roleSel.innerHTML = `
+                    <option value="system">system</option>
+                    <option value="user">user</option>
+                    <option value="assistant">assistant</option>
+                `;
+                roleSel.value = roleName;
+
+                const sysChkWrap = document.createElement('label');
+                sysChkWrap.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer;';
+                sysChkWrap.innerHTML = `<input type="checkbox" class="block-system" style="width:16px; height:16px;">system_prompt`;
+                sysChkWrap.querySelector('input').checked = sysPrompt;
+
+                const metaRow = document.createElement('div');
+                metaRow.style.cssText = 'display:flex; gap:10px; flex-wrap:wrap;';
+                const leftCell = document.createElement('div');
+                leftCell.style.cssText = 'flex:1; min-width:180px;';
+                leftCell.appendChild(nameInput);
+                const rightCell = document.createElement('div');
+                rightCell.style.cssText = 'flex:1; min-width:180px; display:flex; flex-direction:column; gap:8px;';
+                rightCell.appendChild(roleSel);
+                rightCell.appendChild(sysChkWrap);
+                metaRow.appendChild(leftCell);
+                metaRow.appendChild(rightCell);
+                body.appendChild(metaRow);
+
+                const taId = `openai-block-content-${identifier.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+                const label = `${identifier}`;
+                const taBlock = this.renderTextarea(label, taId, pr?.content || '', '');
+                const ta = taBlock.querySelector(`#${taId}`);
+                if (ta) {
+                    ta.dataset.promptIdentifier = identifier;
+                    ta.classList.add('block-content');
+                    ta.style.minHeight = '120px';
+                }
+                body.appendChild(taBlock);
+
+                card.appendChild(body);
+            } else {
+                const hint = document.createElement('div');
+                hint.className = 'block-body';
+                hint.style.cssText = 'display:none; padding:10px 12px; color:#64748b; font-size:12px;';
+                hint.textContent = '该区块为 marker，将在构建 prompt 时自动填充内容（不在此处编辑）。';
+                card.appendChild(hint);
+            }
+
+            // Drag reorder
+            card.addEventListener('dragstart', (e) => {
+                e.dataTransfer?.setData('text/plain', identifier);
+                e.dataTransfer?.setDragImage(card, 20, 20);
+                card.style.opacity = '0.6';
+            });
+            card.addEventListener('dragend', () => {
+                card.style.opacity = '';
+                list.querySelectorAll('.openai-block').forEach(el => el.classList.remove('drop-target'));
+            });
+            card.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                card.classList.add('drop-target');
+            });
+            card.addEventListener('dragleave', () => {
+                card.classList.remove('drop-target');
+            });
+            card.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const fromId = e.dataTransfer?.getData('text/plain');
+                if (!fromId || fromId === identifier) return;
+                const fromEl = list.querySelector(`.openai-block[data-identifier="${CSS.escape(fromId)}"]`);
+                if (!fromEl) return;
+                list.insertBefore(fromEl, card);
+                card.classList.remove('drop-target');
+            });
+
+            // default collapsed
+            setCollapsed(true);
+            return card;
+        };
+
+        blocks.forEach(b => {
+            if (!b?.identifier) return;
+            list.appendChild(makeBlockEl(b));
+        });
+        box.appendChild(list);
+
+        // Add block action
+        headRow.querySelector('#openai-add-block').onclick = () => {
+            const identifier = prompt('区块 identifier（唯一，如 myPrompt）', `custom_${Date.now()}`);
+            if (!identifier) return;
+            const exists = list.querySelector(`.openai-block[data-identifier="${CSS.escape(identifier)}"]`);
+            if (exists) {
+                window.toastr?.warning?.('identifier 已存在');
+                return;
+            }
+            const name = prompt('区块名称', identifier) || identifier;
+            const role = (prompt('role: system/user/assistant', 'system') || 'system').toLowerCase();
+            const content = prompt('区块内容（可稍后再改）', '') ?? '';
+            promptById.set(identifier, {
+                identifier,
+                name,
+                role,
+                system_prompt: true,
+                marker: false,
+                content,
+            });
+            list.appendChild(makeBlockEl({ identifier, enabled: true }));
+        };
+
+        wrap.appendChild(box);
 
         return wrap;
     }
 
     collectEditorData() {
         const root = this.element.querySelector('#preset-editor');
-        const current = deepClone(this.store.getActive(this.activeType) || {});
+        const storeType = this.getStoreType();
+        const current = deepClone(this.store.getActive(storeType) || {});
 
         if (this.activeType === 'sysprompt') {
             current.content = root.querySelector('#sysprompt-content')?.value ?? '';
@@ -703,19 +1017,62 @@ export class PresetPanel {
             current.openai_max_tokens = getInt(root.querySelector('#gen-max-tokens')?.value, current.openai_max_tokens ?? 300);
             current.presence_penalty = getNum(root.querySelector('#gen-presence')?.value, current.presence_penalty ?? 0);
             current.frequency_penalty = getNum(root.querySelector('#gen-frequency')?.value, current.frequency_penalty ?? 0);
+            current.boundProfileId = window.appBridge?.config?.getActiveProfileId?.() || current.boundProfileId || null;
+            return current;
+        }
 
-            // Save editable prompts back
+        if (this.activeType === 'custom') {
+            // Save prompts + prompt_order from blocks
             const prompts = Array.isArray(current.prompts) ? current.prompts : [];
+            const promptById = new Map();
+            prompts.forEach(pr => { if (pr?.identifier) promptById.set(pr.identifier, pr); });
+
             const textareas = root.querySelectorAll('textarea[data-prompt-identifier]');
             textareas.forEach((ta) => {
                 const ident = ta.dataset.promptIdentifier;
                 if (!ident) return;
-                const idx = prompts.findIndex(x => x?.identifier === ident);
-                if (idx >= 0) {
-                    prompts[idx] = { ...prompts[idx], content: String(ta.value || '') };
+                const container = ta.closest('.openai-block');
+                const name = container?.querySelector('.block-name')?.value;
+                const role = container?.querySelector('.block-role')?.value;
+                const systemPrompt = container?.querySelector('.block-system')?.checked;
+                const existing = promptById.get(ident) || { identifier: ident };
+                const next = {
+                    ...existing,
+                    identifier: ident,
+                    name: (name || existing.name || ident),
+                    role: roleIdToName(role || existing.role || 'system'),
+                    system_prompt: typeof systemPrompt === 'boolean' ? systemPrompt : (existing.system_prompt ?? true),
+                    marker: false,
+                    content: String(ta.value || ''),
+                };
+                promptById.set(ident, next);
+            });
+
+            const blocks = Array.from(root.querySelectorAll('.openai-block'));
+            const order = blocks
+                .map((el) => {
+                    const identifier = el.dataset.identifier || '';
+                    const enabled = el.querySelector('.block-enabled')?.checked !== false;
+                    return identifier ? { identifier, enabled } : null;
+                })
+                .filter(Boolean);
+
+            order.forEach(({ identifier }) => {
+                if (!identifier) return;
+                if (promptById.has(identifier)) return;
+                const known = OPENAI_KNOWN_BLOCKS[identifier];
+                if (known?.marker) {
+                    promptById.set(identifier, { identifier, name: known.label, system_prompt: true, marker: true });
                 }
             });
-            current.prompts = prompts;
+
+            current.prompts = Array.from(promptById.values());
+            if (!Array.isArray(current.prompt_order)) current.prompt_order = [];
+            if (!current.prompt_order[0] || typeof current.prompt_order[0] !== 'object') {
+                current.prompt_order[0] = { character_id: 100000, order: [] };
+            }
+            current.prompt_order[0].order = order;
+            current.boundProfileId = window.appBridge?.config?.getActiveProfileId?.() || current.boundProfileId || null;
             return current;
         }
 
@@ -724,12 +1081,13 @@ export class PresetPanel {
 
     async onSave() {
         await this.store.ready;
-        const currentId = this.store.getActiveId(this.activeType);
+        const storeType = this.getStoreType();
+        const currentId = this.store.getActiveId(storeType);
         const data = this.collectEditorData();
         const name = String(data.name || '').trim() || currentId || '未命名';
 
         try {
-            await this.store.upsert(this.activeType, { id: currentId, name, data: { ...data, name } });
+            await this.store.upsert(storeType, { id: currentId, name, data: { ...data, name } });
             await this.refreshAll();
             this.showStatus('保存成功', 'success');
             window.dispatchEvent(new CustomEvent('preset-changed'));
@@ -743,10 +1101,10 @@ export class PresetPanel {
         await this.store.ready;
         const name = prompt('新建预设名称', '新预设');
         if (!name) return;
-        const base = this.store.getActive(this.activeType) || {};
+        const base = this.store.getActive(this.getStoreType()) || {};
         const data = { ...deepClone(base), name };
-        const id = await this.store.upsert(this.activeType, { name, data });
-        await this.store.setActive(this.activeType, id);
+        const id = await this.store.upsert(this.getStoreType(), { name, data });
+        await this.store.setActive(this.getStoreType(), id);
         await this.refreshAll();
         this.showStatus('已新建', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));
@@ -754,12 +1112,12 @@ export class PresetPanel {
 
     async onRename() {
         await this.store.ready;
-        const id = this.store.getActiveId(this.activeType);
-        const current = this.store.getActive(this.activeType);
+        const id = this.store.getActiveId(this.getStoreType());
+        const current = this.store.getActive(this.getStoreType());
         if (!id || !current) return;
         const name = prompt('重命名预设', current.name || id);
         if (!name) return;
-        await this.store.upsert(this.activeType, { id, name, data: { ...current, name } });
+        await this.store.upsert(this.getStoreType(), { id, name, data: { ...current, name } });
         await this.refreshAll();
         this.showStatus('已重命名', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));
@@ -767,10 +1125,10 @@ export class PresetPanel {
 
     async onDelete() {
         await this.store.ready;
-        const id = this.store.getActiveId(this.activeType);
+        const id = this.store.getActiveId(this.getStoreType());
         if (!id) return;
         if (!confirm('删除该预设？此操作不可恢复。')) return;
-        await this.store.remove(this.activeType, id);
+        await this.store.remove(this.getStoreType(), id);
         await this.refreshAll();
         this.showStatus('已删除', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));

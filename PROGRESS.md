@@ -449,7 +449,7 @@
     - 修改：`src/assets/presets/st-defaults.json`（新增 `openai.Default`）
     - 修改：`src/scripts/ui/bridge.js`（生成参数注入到请求 options）
 
-- 2025-12-14 21:05 - 预设面板 ST 化（纯文本/表单）+ 隐藏 marker 模块内容
+- 2025-12-14 20:45 - 预设面板 ST 化（纯文本/表单）+ 隐藏 marker 模块内容
   - **UI 修复**：预设面板改为 `top/left/right/bottom` 固定布局并扩大顶部间距，解决手机上方被状态栏覆盖与无法滚动的问题。
   - **ST 风格编辑**：不再用 JSON 编辑器，改为与 ST 类似的表单：
     - `sysprompt`：`content` / `post_history` 纯文本编辑
@@ -464,12 +464,12 @@
     - 修改：`src/scripts/ui/preset-panel.js`
     - 修改：`src/scripts/ui/bridge.js`
 
-- 2025-12-14 21:15 - 修复预设面板被顶栏/底栏遮挡导致“被切掉”
+- 2025-12-14 21:00 - 修复预设面板被顶栏/底栏遮挡导致“被切掉”
   - 将 `#preset-overlay/#preset-panel` 的 `z-index` 提升到高于 `.topbar`/`.bottom-nav`，使弹窗覆盖全屏不再被遮挡。
   - 文件修改：
     - 修改：`src/scripts/ui/preset-panel.js`
 
-- 2025-12-14 21:30 - 预设面板顶部空白优化 + 导入/导出预设设定档
+- 2025-12-14 21:01 - 预设面板顶部空白优化 + 导入/导出预设设定档
   - **UI 优化**：将 safe-area 处理从面板内部 padding 改为 `top/left/right/bottom` 的 `calc(... + env(safe-area-inset-*))`，去掉顶部多余白色空白。
   - **导入/导出**：
     - 支持导出当前预设（按当前 tab）为 JSON 文件
@@ -480,3 +480,29 @@
   - 文件修改：
     - 修改：`src/scripts/ui/preset-panel.js`
     - 修改：`src/scripts/storage/preset-store.js`
+
+- 2025-12-14 21:05 - OpenAI 预设：区块式 Prompt Manager（拖拽排序/自定义区块）并按顺序构建提示词
+  - **ST 风格区块**：在「生成参数」tab 以 `prompt_order` 渲染所有区块（含 marker），支持拖拽调整顺序、启用/禁用、并可新增自定义区块。
+  - **导入可见**：导入带 `prompts/prompt_order` 的 ST OpenAI 预设后，会直接显示对应区块。
+  - **构建方式**：生成时若启用 OpenAI 预设且存在 `prompt_order`，则按区块顺序拼接 messages，并在 `chatHistory` marker 位置插入历史消息。
+  - **当前差异**：未实现 ST 的 token 预算裁剪/对话示例注入/系统消息压缩等高级逻辑（后续可逐步补齐）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-14 21:18 - 预设面板：新增「自定义」tab + 区块默认折叠 + 防止保存时清空区块
+  - **自定义 Tab**：新增「自定义」tab 专门放 ST 的 Prompt Manager 区块（导入/新增的可编辑区块都在这里），「生成参数」tab 只保留常用生成参数。
+  - **默认折叠**：区块默认折叠，点击区块头部展开/收起（marker 区块仅显示提示，不显示内容编辑）。
+  - **导入体验**：导入 OpenAI 预设后自动切到「自定义」tab；从「自定义」导出会正确导出 OpenAI 预设。
+  - **关键修复**：修复在「生成参数」tab 点击保存会把 `prompt_order` 清空导致区块“消失”的问题。
+  - **显示修复**：弹窗高度改用 `100dvh`（带 `100vh` fallback），避免手机上方/下方被切掉。
+  - 文件修改：
+    - 修改：`src/scripts/ui/preset-panel.js`
+
+- 2025-12-14 21:28 - 预设区块禁用灰化 + 预设绑定 API 连接配置（profile）
+  - **区块灰化**：Prompt blocks 未启用时整体呈灰色，方便区分启用/禁用状态。
+  - **绑定连接配置**：在「生成参数/自定义」保存预设时，会记录当前 API 连接 profile id；切换预设时自动切换到绑定的 profile 并更新 LLM client。
+  - **启动加载**：App 初始化时若启用该预设且其绑定了 profile，会优先加载绑定的连接配置，避免重启后提示“未配置”。
+  - 文件修改：
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/ui/bridge.js`
