@@ -7,6 +7,21 @@
  */
 import { logger } from '../utils/logger.js';
 
+// ST-like placement enum (subset used by our app too)
+export const regex_placement = {
+    USER_INPUT: 1,
+    AI_OUTPUT: 2,
+    SLASH_COMMAND: 3,
+    WORLD_INFO: 5,
+    REASONING: 6,
+};
+
+export const substitute_find_regex = {
+    NONE: 0,
+    RAW: 1,
+    ESCAPED: 2,
+};
+
 const safeInvoke = async (cmd, args) => {
     const invoker = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INVOKE__;
     if (typeof invoker !== 'function') {
@@ -30,16 +45,63 @@ const clone = (v) => {
 const ensureObj = (v, fallback) => (v && typeof v === 'object') ? v : fallback;
 const ensureArr = (v) => Array.isArray(v) ? v : [];
 
-const normalizeRule = (r = {}) => ({
-    id: r.id || genId('re'),
-    name: String(r.name || '').trim(),
-    enabled: r.enabled !== false,
-    when: (r.when === 'input' || r.when === 'output' || r.when === 'both') ? r.when : 'both',
-    pattern: String(r.pattern || ''),
-    replacement: String(r.replacement ?? ''),
-    // allow empty flags ('') to represent "no flags"
-    flags: (r.flags === undefined || r.flags === null) ? 'g' : String(r.flags),
-});
+const ensureNumOrNull = (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Normalize a regex script (ST-like)
+ * Back-compat: also accepts legacy {when/pattern/flags/replacement} rules and converts.
+ */
+const normalizeRule = (r = {}) => {
+    // Legacy format -> ST-like
+    const hasLegacy = ('pattern' in r) || ('when' in r) || ('replacement' in r);
+    if (hasLegacy && !('findRegex' in r)) {
+        const when = (r.when === 'input' || r.when === 'output' || r.when === 'both') ? r.when : 'both';
+        const pattern = String(r.pattern || '');
+        const flags = (r.flags === undefined || r.flags === null) ? 'g' : String(r.flags);
+        const repl = String(r.replacement ?? '');
+        const placement = [];
+        if (when === 'input' || when === 'both') placement.push(regex_placement.USER_INPUT);
+        if (when === 'output' || when === 'both') placement.push(regex_placement.AI_OUTPUT);
+        const findRegex = pattern ? `/${pattern}/${flags}` : '';
+        return {
+            id: r.id || genId('re'),
+            scriptName: String(r.name || '').trim(),
+            findRegex,
+            replaceString: repl,
+            trimStrings: [],
+            placement,
+            disabled: r.enabled === false,
+            markdownOnly: false,
+            promptOnly: false,
+            runOnEdit: false,
+            substituteRegex: substitute_find_regex.NONE,
+            minDepth: null,
+            maxDepth: null,
+        };
+    }
+
+    // ST-like format
+    const placement = Array.isArray(r.placement) ? r.placement.map((x) => Number(x)).filter((n) => Number.isFinite(n)) : [];
+    return {
+        id: r.id || genId('re'),
+        scriptName: String(r.scriptName || r.name || '').trim(),
+        findRegex: String(r.findRegex || ''),
+        replaceString: String(r.replaceString ?? r.replacement ?? ''),
+        trimStrings: Array.isArray(r.trimStrings) ? r.trimStrings.map((s) => String(s || '')).filter(Boolean) : [],
+        placement,
+        disabled: Boolean(r.disabled),
+        markdownOnly: Boolean(r.markdownOnly),
+        promptOnly: Boolean(r.promptOnly),
+        runOnEdit: Boolean(r.runOnEdit),
+        substituteRegex: (r.substituteRegex === 1 || r.substituteRegex === 2) ? Number(r.substituteRegex) : 0,
+        minDepth: ensureNumOrNull(r.minDepth),
+        maxDepth: ensureNumOrNull(r.maxDepth),
+    };
+};
 
 const normalizeLocalSet = (s = {}) => ({
     id: s.id || genId('re-set'),
@@ -77,7 +139,10 @@ const matchBind = (bind, ctx) => {
     if (type === 'world') {
         const wid = String(bind.worldId || '');
         if (!wid) return false;
-        return String(ctx?.worldId || '') === wid;
+        const primary = String(ctx?.worldId || '');
+        if (primary === wid) return true;
+        const list = Array.isArray(ctx?.worldIds) ? ctx.worldIds.map(String) : [];
+        return list.includes(wid);
     }
     return false;
 };
@@ -238,15 +303,14 @@ export class RegexStore {
     }
 
     /* ---------------- Apply ---------------- */
-    computeActiveRules(ctx = {}, when = 'both') {
+    computeActiveRules(ctx = {}) {
         const out = [];
-        const w = when === 'input' || when === 'output' ? when : 'both';
 
         const g = this.state?.global;
         if (g?.enabled !== false) {
             for (const r of ensureArr(g?.rules)) {
-                if (r?.enabled === false) continue;
-                if (r.when === 'both' || r.when === w) out.push(r);
+                if (!r) continue;
+                out.push(r);
             }
         }
 
@@ -260,8 +324,8 @@ export class RegexStore {
             if (!bind) continue;
             if (!matchBind(bind, ctx)) continue;
             for (const r of ensureArr(s.rules)) {
-                if (r?.enabled === false) continue;
-                if (r.when === 'both' || r.when === w) out.push(r);
+                if (!r) continue;
+                out.push(r);
             }
         }
 
@@ -269,31 +333,148 @@ export class RegexStore {
         const ses = sid ? this.state?.session?.[sid] : null;
         if (ses?.enabled !== false) {
             for (const r of ensureArr(ses?.rules)) {
-                if (r?.enabled === false) continue;
-                if (r.when === 'both' || r.when === w) out.push(r);
+                if (!r) continue;
+                out.push(r);
             }
         }
 
         return out.map(normalizeRule);
     }
 
-    apply(text, ctx = {}, when = 'both') {
+    regexFromString(input) {
+        try {
+            const str = String(input ?? '');
+            // Same parser as ST: /(\/?)(.+)\1([a-z]*)/i
+            const m = str.match(/(\/?)(.+)\1([a-z]*)/i);
+            if (!m) return;
+            // Invalid flags => let RegExp throw
+            if (m[3] && !/^(?!.*?(.).*?\1)[gmixXsuUAJ]+$/.test(m[3])) {
+                return RegExp(str);
+            }
+            return new RegExp(m[2], m[3]);
+        } catch {
+            return;
+        }
+    }
+
+    sanitizeRegexMacro(x) {
+        return (x && typeof x === 'string') ?
+            x.replace(/[\n\r\t\v\f\0.^$*+?{}[\]\\/|()]/gs, function (s) {
+                switch (s) {
+                    case '\n': return '\\\\n';
+                    case '\r': return '\\\\r';
+                    case '\t': return '\\\\t';
+                    case '\v': return '\\\\v';
+                    case '\f': return '\\\\f';
+                    case '\0': return '\\\\0';
+                    default: return '\\\\' + s;
+                }
+            }) : x;
+    }
+
+    applyMacros(text, vars, { escape = false } = {}) {
+        const raw = String(text ?? '');
+        if (!raw) return '';
+        return raw.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, key) => {
+            let v = vars?.[key];
+            v = (v === null || v === undefined) ? '' : String(v);
+            return escape ? this.sanitizeRegexMacro(v) : v;
+        });
+    }
+
+    filterString(rawString, trimStrings = [], vars) {
+        let out = String(rawString ?? '');
+        (Array.isArray(trimStrings) ? trimStrings : []).forEach((t) => {
+            const sub = this.applyMacros(String(t || ''), vars, { escape: false });
+            if (!sub) return;
+            out = out.split(sub).join('');
+        });
+        return out;
+    }
+
+    runRegexScript(script, rawString, vars) {
+        let newString = String(rawString ?? '');
+        if (!script || script.disabled || !script.findRegex || !newString) return newString;
+
+        const getRegexString = () => {
+            const mode = Number(script.substituteRegex ?? 0);
+            switch (mode) {
+                case substitute_find_regex.NONE:
+                    return script.findRegex;
+                case substitute_find_regex.RAW:
+                    return this.applyMacros(script.findRegex, vars, { escape: false });
+                case substitute_find_regex.ESCAPED:
+                    return this.applyMacros(script.findRegex, vars, { escape: true });
+                default:
+                    return script.findRegex;
+            }
+        };
+
+        const regexString = getRegexString();
+        const findRegex = this.regexFromString(regexString);
+        if (!findRegex) return newString;
+
+        newString = newString.replace(findRegex, function () {
+            const args = [...arguments];
+            const replaceString = String(script.replaceString ?? '').replace(/{{match}}/gi, '$0');
+            const replaceWithGroups = replaceString.replace(/\$(\d+)|\$<([^>]+)>/g, (_m, num, groupName) => {
+                let match = '';
+                if (num) {
+                    match = args[Number(num)] || '';
+                } else if (groupName) {
+                    const groups = args[args.length - 1];
+                    match = (groups && typeof groups === 'object' && groups[groupName]) ? groups[groupName] : '';
+                }
+                if (!match) return '';
+                return this.filterString(match, script.trimStrings, vars);
+            });
+
+            return this.applyMacros(replaceWithGroups, vars, { escape: false });
+        }.bind(this));
+
+        return newString;
+    }
+
+    /**
+     * ST-like apply:
+     * - placement controls where it applies
+     * - markdownOnly/promptOnly control ephemerality
+     */
+    apply(text, ctx = {}, placement, { isMarkdown = false, isPrompt = false, isEdit = false, depth } = {}) {
         const raw = String(text ?? '');
         if (!raw) return raw;
-        const rules = this.computeActiveRules(ctx, when);
+        const scripts = this.computeActiveRules(ctx);
+        const vars = ctx?.macroVars || {};
         let out = raw;
-        for (const r of rules) {
-            const pattern = String(r.pattern || '');
-            if (!pattern) continue;
-            try {
-                const flags = (r.flags === undefined || r.flags === null) ? 'g' : String(r.flags);
-                const re = new RegExp(pattern, flags);
-                out = out.replace(re, String(r.replacement ?? ''));
-            } catch (err) {
-                // ignore invalid regex
-                continue;
+
+        const p = Number(placement);
+        for (const s of scripts) {
+            if (!s || s.disabled) continue;
+
+            const mdOnly = Boolean(s.markdownOnly);
+            const prOnly = Boolean(s.promptOnly);
+            const allow =
+                (mdOnly && isMarkdown) ||
+                (prOnly && isPrompt) ||
+                (!mdOnly && !prOnly && !isMarkdown && !isPrompt);
+            if (!allow) continue;
+
+            if (isEdit && !s.runOnEdit) continue;
+
+            if (typeof depth === 'number' && Number.isFinite(depth)) {
+                const minD = (typeof s.minDepth === 'number' && Number.isFinite(s.minDepth)) ? s.minDepth : null;
+                const maxD = (typeof s.maxDepth === 'number' && Number.isFinite(s.maxDepth)) ? s.maxDepth : null;
+                if (minD !== null && minD >= -1 && depth < minD) continue;
+                if (maxD !== null && maxD >= 0 && depth > maxD) continue;
+                if (minD !== null && maxD !== null && maxD < minD) continue;
             }
+
+            const placements = Array.isArray(s.placement) ? s.placement : [];
+            if (Number.isFinite(p) && placements.length && !placements.includes(p)) continue;
+
+            out = this.runRegexScript(s, out, vars);
         }
+
         return out;
     }
 }

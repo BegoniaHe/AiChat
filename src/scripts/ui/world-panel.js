@@ -258,15 +258,37 @@ export class WorldPanel {
                     }
 
                     await window.appBridge?.regex?.ready;
-                    const existingSigs = new Set();
-                    try {
-                        const sets = window.appBridge?.regex?.listLocalSets?.() || [];
-                        sets.forEach(s => (Array.isArray(s?.rules) ? s.rules : []).forEach(r => {
+                    const ruleSig = (r) => {
+                        const findRegex = String(r?.findRegex || '').trim();
+                        const replaceString = String(r?.replaceString ?? '');
+                        const trim = Array.isArray(r?.trimStrings) ? r.trimStrings.map(String).join('\n') : '';
+                        const placement = Array.isArray(r?.placement) ? r.placement.map(n => Number(n)).filter(Number.isFinite).sort((a, b) => a - b).join(',') : '';
+                        const disabled = r?.disabled ? '1' : '0';
+                        const markdownOnly = r?.markdownOnly ? '1' : '0';
+                        const promptOnly = r?.promptOnly ? '1' : '0';
+                        const runOnEdit = r?.runOnEdit ? '1' : '0';
+                        const sub = String(Number(r?.substituteRegex ?? 0));
+                        const minD = (r?.minDepth === null || r?.minDepth === undefined || r?.minDepth === '') ? '' : String(r?.minDepth);
+                        const maxD = (r?.maxDepth === null || r?.maxDepth === undefined || r?.maxDepth === '') ? '' : String(r?.maxDepth);
+                        if (!findRegex && !String(r?.pattern || '').trim()) {
+                            // legacy fallback signature
                             const when = String(r?.when || 'both');
                             const pattern = String(r?.pattern || '').trim();
                             const flags = (r?.flags === undefined || r?.flags === null) ? 'g' : String(r?.flags);
                             const replacement = String(r?.replacement ?? '');
-                            existingSigs.add(`${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`);
+                            return `${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`;
+                        }
+                        return [
+                            findRegex, replaceString, trim, placement,
+                            disabled, markdownOnly, promptOnly, runOnEdit, sub, minD, maxD
+                        ].join('\u0000');
+                    };
+
+                    const existingSigs = new Set();
+                    try {
+                        const sets = window.appBridge?.regex?.listLocalSets?.() || [];
+                        sets.forEach(s => (Array.isArray(s?.rules) ? s.rules : []).forEach(r => {
+                            existingSigs.add(ruleSig(r));
                         }));
                     } catch {}
 
@@ -275,11 +297,7 @@ export class WorldPanel {
                         const rules = [];
                         const localSeen = new Set();
                         for (const rr of rulesRaw) {
-                            const when = String(rr?.when || 'both');
-                            const pattern = String(rr?.pattern || '').trim();
-                            const flags = (rr?.flags === undefined || rr?.flags === null) ? 'g' : String(rr?.flags);
-                            const replacement = String(rr?.replacement ?? '');
-                            const sig = `${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`;
+                            const sig = ruleSig(rr);
                             if (!sig || localSeen.has(sig) || existingSigs.has(sig)) continue;
                             localSeen.add(sig);
                             existingSigs.add(sig);

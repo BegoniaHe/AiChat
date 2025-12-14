@@ -561,3 +561,56 @@
   - 文件修改：
     - 修改：`src/index.html`
     - 修改：`src/scripts/ui/preset-panel.js`
+
+- 2025-12-14 23:17 - 聊天体验：时间戳修复 + 好友头像/设置入口
+  - **时间戳**：修复使用 `toLocaleTimeString().slice(0,5)` 导致「下午 7:4」被截断的问题，统一改为 `hour/minute` 格式化。
+  - **添加好友头像**：添加好友时可选择头像（本地图片），保存到联系人资料并用于聊天列表/聊天头像。
+  - **好友设置**：点击聊天室标题弹出下拉菜单，新增「设置」打开好友设置面板，可修改头像与显示名称（不改会话 ID）。
+  - 文件修改：
+    - 修改：`src/index.html`
+    - 新增：`src/scripts/ui/contact-settings-panel.js`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/session-panel.js`
+    - 修改：`src/scripts/ui/chat/chat-ui.js`
+
+- 2025-12-14 23:36 - 头像存储稳定性 + GIF 支持 + 流式 UI 修复 + 世界书绑定正则生效
+  - **头像压缩**：添加好友/好友设置选择头像时，非 GIF 图片会自动压缩（缩放+质量控制）后保存，减少 `exceeds quota` 发生概率。
+  - **GIF 头像**：GIF 头像不做 canvas 转换，保留动图效果（依赖 `save_kv` 持久化，localStorage 仅尽力写入）。
+  - **联系人存储健壮性**：联系人持久化改为优先 `save_kv`，localStorage 写入失败（配额不足）时不会阻断保存。
+  - **正则作用域**：世界书绑定的局部正则在「全局世界书」启用时也能正确生效（regex ctx 增加 `worldIds`）。
+  - **流式多余点修复**：流式发送不再同时渲染「打字指示器 + 空白流式气泡」，改为单一流式气泡内显示跳动动画，避免多出一个小点。
+  - 文件修改：
+    - 新增：`src/scripts/utils/image.js`
+    - 修改：`src/scripts/storage/contacts-store.js`
+    - 修改：`src/scripts/ui/session-panel.js`
+    - 修改：`src/scripts/ui/contact-settings-panel.js`
+    - 修改：`src/scripts/ui/bridge.js`
+    - 修改：`src/scripts/storage/regex-store.js`
+    - 修改：`src/scripts/ui/chat/chat-ui.js`
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 00:16 - 正则系统对齐 ST：预设绑定生效 + 完整选项 + 暂时性语义
+  - **预设/世界书绑定正则生效**：切换到绑定对象时自动启用，并按 ST 逻辑作用于 AI 气泡显示与 prompt 构建。
+  - **ST 完整字段**：支持 Affects(placement)、Disabled、Run On Edit、Min/Max Depth、Find Regex 宏替换（不替换/raw/escaped）、Trim Out、Ephemerality（仅影响显示/仅影响 prompt）。
+  - **暂时性语义**：不勾选暂时性时视为“直接改存档内容”（保存到 `raw`）；勾选“仅影响显示”时只改 `content` 显示；勾选“仅影响 prompt”只在构建 prompt 时生效。
+  - **自动重渲染**：修改正则/切换预设/切换世界书后，当前聊天室会基于 `raw` 自动重算显示文本；编辑用户消息时尊重 Run On Edit。
+  - 文件修改：
+    - 修改：`src/scripts/storage/regex-store.js`
+    - 修改：`src/scripts/ui/bridge.js`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/ui/world-panel.js`
+    - 修改：`src/scripts/ui/regex-panel.js`
+    - 修改：`src/scripts/ui/regex-session-panel.js`
+
+- 2025-12-15 00:22 - 修复移动端无法点击：避免 worldinfo-changed 事件递归
+  - **问题**：worldinfo-changed 事件触发重渲染时再次调用 `setActiveSession()`，导致事件递归触发，页面卡死按钮无法点击。
+  - **修复**：重渲染当前会话不再调用 `setActiveSession()`，仅重算显示并刷新列表。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 00:31 - 修复 Android 真机白屏/不可点击：regex-store.js 正则字面量语法错误
+  - **问题**：`src/scripts/storage/regex-store.js` 中把 ST 的 `/(\/?)(.+)\1([a-z]*)/i` 误写成包含未转义 `/` 的形式，Android WebView 直接抛 `Invalid regular expression`，导致脚本中断、UI 按钮无法点击。
+  - **修复**：对齐 ST 原实现（regexFromString + flags 校验 + 宏替换正则），并修正 `replace` 回调绑定写法，避免语法错误。
+  - 文件修改：
+    - 修改：`src/scripts/storage/regex-store.js`

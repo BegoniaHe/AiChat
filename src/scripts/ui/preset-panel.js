@@ -287,67 +287,55 @@ export class PresetPanel {
         return null;
     }
 
-    parseStRegexFromString(str) {
-        const raw = String(str || '').trim();
-        if (!raw) return { pattern: '', flags: '' };
-        if (raw.startsWith('/') && raw.length > 2) {
-            // find last unescaped /
-            let end = -1;
-            for (let i = raw.length - 1; i > 0; i--) {
-                if (raw[i] !== '/') continue;
-                let backslashes = 0;
-                for (let j = i - 1; j >= 0 && raw[j] === '\\\\'; j--) backslashes++;
-                if (backslashes % 2 === 0) { end = i; break; }
-            }
-            if (end > 0) {
-                return { pattern: raw.slice(1, end), flags: raw.slice(end + 1) };
-            }
-        }
-        // No delimiter form => treat as raw pattern (no flags)
-        return { pattern: raw, flags: '' };
-    }
-
     convertStRegexScriptsToRules(regexes = []) {
         const scripts = Array.isArray(regexes) ? regexes : [];
         const rules = [];
         scripts.forEach((s) => {
-            const { pattern, flags } = this.parseStRegexFromString(s?.findRegex);
-            if (!pattern) return;
-
-            // Map ST placement/promptOnly/markdownOnly into our simple when model
-            let when = 'both';
-            if (s?.promptOnly) when = 'input';
-            else if (s?.markdownOnly) when = 'output';
-            else if (Array.isArray(s?.placement)) {
-                const p = new Set(s.placement.map(n => Number(n)));
-                const hasIn = p.has(1) || p.has(3) || p.has(5);
-                const hasOut = p.has(2);
-                if (hasIn && !hasOut) when = 'input';
-                else if (!hasIn && hasOut) when = 'output';
-                else if (hasIn && hasOut) when = 'both';
-            }
-
-            const repl = String(s?.replaceString ?? '').replace(/{{match}}/gi, '$0');
+            const findRegex = String(s?.findRegex || '').trim();
+            if (!findRegex) return;
             rules.push({
                 id: s?.id || undefined,
-                name: s?.scriptName || '',
-                enabled: s?.disabled ? false : true,
-                when,
-                pattern,
-                replacement: repl,
-                flags: flags ?? '',
+                scriptName: String(s?.scriptName || '').trim(),
+                findRegex,
+                replaceString: String(s?.replaceString ?? ''),
+                trimStrings: Array.isArray(s?.trimStrings) ? s.trimStrings : [],
+                placement: Array.isArray(s?.placement) ? s.placement : [],
+                disabled: Boolean(s?.disabled),
+                markdownOnly: Boolean(s?.markdownOnly),
+                promptOnly: Boolean(s?.promptOnly),
+                runOnEdit: Boolean(s?.runOnEdit),
+                substituteRegex: Number(s?.substituteRegex ?? 0),
+                minDepth: s?.minDepth ?? null,
+                maxDepth: s?.maxDepth ?? null,
             });
         });
         return rules;
     }
 
     getRuleSignature(r) {
-        const when = String(r?.when || 'both');
-        const pattern = String(r?.pattern || '').trim();
-        const flags = (r?.flags === undefined || r?.flags === null) ? 'g' : String(r?.flags);
-        const replacement = String(r?.replacement ?? '');
-        // ignore name/id; focus on semantic behavior
-        return `${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`;
+        const findRegex = String(r?.findRegex || '').trim();
+        const replaceString = String(r?.replaceString ?? '');
+        const trim = Array.isArray(r?.trimStrings) ? r.trimStrings.map(String).join('\n') : '';
+        const placement = Array.isArray(r?.placement) ? r.placement.map(n => Number(n)).filter(Number.isFinite).sort((a, b) => a - b).join(',') : '';
+        const disabled = r?.disabled ? '1' : '0';
+        const markdownOnly = r?.markdownOnly ? '1' : '0';
+        const promptOnly = r?.promptOnly ? '1' : '0';
+        const runOnEdit = r?.runOnEdit ? '1' : '0';
+        const sub = String(Number(r?.substituteRegex ?? 0));
+        const minD = (r?.minDepth === null || r?.minDepth === undefined || r?.minDepth === '') ? '' : String(r?.minDepth);
+        const maxD = (r?.maxDepth === null || r?.maxDepth === undefined || r?.maxDepth === '') ? '' : String(r?.maxDepth);
+        if (!findRegex && String(r?.pattern || '').trim()) {
+            const when = String(r?.when || 'both');
+            const pattern = String(r?.pattern || '').trim();
+            const flags = (r?.flags === undefined || r?.flags === null) ? 'g' : String(r?.flags);
+            const replacement = String(r?.replacement ?? '');
+            return `${when}\u0000${pattern}\u0000${flags}\u0000${replacement}`;
+        }
+        // ignore id/scriptName; focus on behavior
+        return [
+            findRegex, replaceString, trim, placement,
+            disabled, markdownOnly, promptOnly, runOnEdit, sub, minD, maxD
+        ].join('\u0000');
     }
 
     getExistingLocalRuleSigs() {

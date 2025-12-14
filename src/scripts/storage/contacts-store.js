@@ -43,7 +43,11 @@ export class ContactsStore {
             const kv = await safeInvoke('load_kv', { name: STORE_KEY });
             if (kv && kv.contacts) {
                 this.state = kv;
-                localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                try {
+                    localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                } catch (err) {
+                    logger.warn('contacts store hydrate -> localStorage failed (quota?)', err);
+                }
                 logger.info('contacts store hydrated from disk');
             }
         } catch (err) {
@@ -52,8 +56,15 @@ export class ContactsStore {
     }
 
     _persist() {
-        localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
-        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch(() => {});
+        // Always try disk first; localStorage is best-effort (may exceed quota due to base64 avatars)
+        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+            logger.debug('contacts store save_kv failed (可能非 Tauri)', err);
+        });
+        try {
+            localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+        } catch (err) {
+            logger.warn('contacts store persist -> localStorage failed (quota?)', err);
+        }
     }
 
     listContacts() {

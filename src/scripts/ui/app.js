@@ -14,6 +14,7 @@ import { logger } from '../utils/logger.js';
 import { PresetPanel } from './preset-panel.js';
 import { RegexPanel } from './regex-panel.js';
 import { RegexSessionPanel } from './regex-session-panel.js';
+import { ContactSettingsPanel } from './contact-settings-panel.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -25,9 +26,22 @@ const initApp = async () => {
     const contactsStore = new ContactsStore();
     await chatStore.ready;
     await contactsStore.ready;
+    await window.appBridge?.regex?.ready;
+    await window.appBridge?.presets?.ready;
     window.appBridge.setActiveSession(chatStore.getCurrent());
     const sessionPanel = new SessionPanel(chatStore, contactsStore, ui);
     const regexSessionPanel = new RegexSessionPanel(() => chatStore.getCurrent());
+    const contactSettingsPanel = new ContactSettingsPanel({
+        contactsStore,
+        getSessionId: () => chatStore.getCurrent(),
+        onSaved: () => {
+            refreshChatAndContacts();
+            const id = chatStore.getCurrent();
+            const c = contactsStore.getContact(id);
+            const titleEl = document.getElementById('current-chat-title');
+            if (titleEl) titleEl.textContent = c?.name || id;
+        }
+    });
     const stickerPicker = new StickerPicker((tag) => handleSticker(tag));
     const mediaPicker = new MediaPicker({
         onUrl: (url) => handleImage(url),
@@ -53,7 +67,39 @@ const initApp = async () => {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     };
 
+    const formatNowTime = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
     const isConversationMessage = (m) => m && (m.role === 'user' || m.role === 'assistant');
+
+    const decorateMessagesForDisplay = (messages = []) => {
+        const list = Array.isArray(messages) ? messages : [];
+        const convPos = new Map(); // index -> conversation order
+        list.forEach((m, i) => {
+            if (m && (m.role === 'user' || m.role === 'assistant')) convPos.set(i, convPos.size);
+        });
+        const total = convPos.size;
+
+        return list.map((m, i) => {
+            if (!m || typeof m !== 'object') return m;
+            const base = (typeof m.raw === 'string') ? m.raw : (typeof m.content === 'string' ? m.content : '');
+            if (!base) return m;
+            const j = convPos.has(i) ? convPos.get(i) : null;
+            const depth = (j === null) ? undefined : (total - 1 - j);
+
+            if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
+                return { ...m, content: window.appBridge.applyOutputDisplayRegex(base, { depth }) };
+            }
+            if (m.role === 'user' && (m.type === 'text' || !m.type)) {
+                return { ...m, content: window.appBridge.applyInputDisplayRegex(base, { depth }) };
+            }
+            return m;
+        });
+    };
+
+    const getAssistantAvatarForSession = (sessionId) => {
+        const c = contactsStore.getContact(sessionId);
+        return c?.avatar || avatars.assistant;
+    };
 
     const getLastVisibleMessage = (sessionId) => {
         const msgs = chatStore.getMessages(sessionId) || [];
@@ -213,6 +259,7 @@ const initApp = async () => {
         settingsMenu?.classList.add('hidden');
         quickMenu?.classList.add('hidden');
         chatroomMenu?.classList.add('hidden');
+        document.getElementById('chat-title-menu')?.classList.add('hidden');
     };
 
     const positionSheet = (menuEl, anchorEl, offsetX = 0, offsetY = 0, alignRight = false) => {
@@ -298,9 +345,23 @@ const initApp = async () => {
         });
     });
 
+    // Chat title menu (click current title)
+    const chatTitleMenu = document.getElementById('chat-title-menu');
+    const currentChatTitle = document.getElementById('current-chat-title');
+    currentChatTitle?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleSheetAt(chatTitleMenu, currentChatTitle, { kind: 'title' });
+    });
+    chatTitleMenu?.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.action;
+            if (action === 'contact-settings') contactSettingsPanel.show();
+            hideMenus();
+        });
+    });
+
     /* ---------------- 聊天列表 <-> 聊天室切换 ---------------- */
     const backToListBtn = document.getElementById('back-to-list');
-    const currentChatTitle = document.getElementById('current-chat-title');
     let chatOriginPage = 'chat';
 
     const enterChatRoom = (sessionId, sessionName, originPage = activePage) => {
@@ -314,7 +375,8 @@ const initApp = async () => {
         if (messageTopbar) messageTopbar.style.display = 'none';
         if (bottomNav) bottomNav.style.display = 'none';
 
-        if (currentChatTitle) currentChatTitle.textContent = sessionName || sessionId;
+        const contact = contactsStore.getContact(sessionId);
+        if (currentChatTitle) currentChatTitle.textContent = sessionName || contact?.name || sessionId;
         // 切换会话
         chatStore.switchSession(sessionId);
         window.appBridge.setActiveSession(sessionId);
@@ -402,7 +464,7 @@ const initApp = async () => {
                     meta: { artist, url: audioUrl },
                     name: '我',
                     avatar: avatars.user,
-                    time: new Date().toLocaleTimeString().slice(0, 5)
+                    time: formatNowTime()
                 };
                 ui.addMessage(msg);
                 chatStore.appendMessage(msg);
@@ -417,7 +479,7 @@ const initApp = async () => {
                 content: amount,
                 name: '我',
                 avatar: avatars.user,
-                time: new Date().toLocaleTimeString().slice(0, 5)
+                time: formatNowTime()
             };
             ui.addMessage(msg);
             chatStore.appendMessage(msg);
@@ -469,7 +531,7 @@ const initApp = async () => {
         const history = chatStore.getMessages(currentId);
         ui.setSessionLabel(currentId);
         if (history && history.length) {
-            ui.preloadHistory(history);
+            ui.preloadHistory(decorateMessagesForDisplay(history));
         }
         const draft = chatStore.getDraft(currentId);
         if (draft) ui.setInputText(draft);
@@ -490,7 +552,7 @@ const initApp = async () => {
             const all = chatStore.getMessages(sessionId) || [];
             const history = all
                 .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-                .map(m => ({ role: m.role, content: m.content }));
+                .map(m => ({ role: m.role, content: (typeof m.raw === 'string' ? m.raw : m.content) }));
             const last = history[history.length - 1];
             if (pendingUserText && last?.role === 'user' && String(last.content || '').trim() === String(pendingUserText).trim()) {
                 history.pop();
@@ -524,13 +586,16 @@ const initApp = async () => {
             return;
         }
 
+        const storedUser = window.appBridge.applyInputStoredRegex(text, { isEdit: false });
+        const displayUser = window.appBridge.applyInputDisplayRegex(storedUser, { isEdit: false, depth: 0 });
         const userMsg = {
             role: 'user',
             type: 'text',
-            content: text,
+            content: displayUser,
+            raw: storedUser,
             name: '我',
             avatar: avatars.user,
-            time: new Date().toLocaleTimeString().slice(0, 5)
+            time: formatNowTime()
         };
         ui.addMessage(userMsg);
         chatStore.appendMessage(userMsg, sessionId);
@@ -540,50 +605,56 @@ const initApp = async () => {
 
         const config = window.appBridge.config.get();
 
+        let streamCtrl = null;
         try {
             if (config.stream) {
-                ui.showTyping();
-                const streamBubble = ui.startAssistantStream();
+                const assistantAvatar = getAssistantAvatarForSession(sessionId);
+                streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
                 const stream = await window.appBridge.generate(text, llmContext(text));
                 let full = '';
                 for await (const chunk of stream) {
                     full += chunk;
-                    streamBubble.update(full);
+                    streamCtrl.update(full);
                 }
-                ui.hideTyping();
+                let stored = full;
+                let display = full;
                 try {
-                    const processed = window.appBridge.applyOutputRegex(full);
-                    if (processed !== full) {
-                        full = processed;
-                        streamBubble.update(full);
-                    }
+                    stored = window.appBridge.applyOutputStoredRegex(full);
+                    display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                    streamCtrl.update(display);
                 } catch {}
                 const parsed = {
                     role: 'assistant',
                     name: '助手',
-                    avatar: avatars.assistant,
-                    time: new Date().toLocaleTimeString().slice(0, 5),
-                    ...parseSpecialMessage(full)
+                    avatar: assistantAvatar,
+                    time: formatNowTime(),
+                    raw: stored,
+                    ...parseSpecialMessage(display)
                 };
-                streamBubble.finish(parsed);
+                streamCtrl.finish(parsed);
                 chatStore.appendMessage(parsed, sessionId);
                 refreshChatAndContacts();
             } else {
-                ui.showTyping();
-                const result = await window.appBridge.generate(text, llmContext(text));
+                const assistantAvatar = getAssistantAvatarForSession(sessionId);
+                ui.showTyping(assistantAvatar);
+                const resultRaw = await window.appBridge.generate(text, llmContext(text));
                 ui.hideTyping();
+                const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
+                const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
                 const parsed = {
                     role: 'assistant',
                     name: '助手',
-                    avatar: avatars.assistant,
-                    time: new Date().toLocaleTimeString().slice(0, 5),
-                    ...parseSpecialMessage(result)
+                    avatar: assistantAvatar,
+                    time: formatNowTime(),
+                    raw: stored,
+                    ...parseSpecialMessage(display)
                 };
                 ui.addMessage(parsed);
                 chatStore.appendMessage(parsed, sessionId);
                 refreshChatAndContacts();
             }
         } catch (error) {
+            streamCtrl?.cancel?.();
             ui.hideTyping();
             logger.error('发送失败', error);
             ui.showErrorBanner(error.message || '发送失败，請檢查網絡或 API 設置', {
@@ -609,7 +680,9 @@ const initApp = async () => {
         if (action === 'edit' && message.role === 'user') {
             const newText = prompt('編輯消息', message.content || '');
             if (newText === null) return;
-            const updated = chatStore.updateMessage(message.id, { content: newText, time: new Date().toLocaleTimeString().slice(0, 5) }, sessionId);
+            const stored = window.appBridge.applyInputStoredRegex(newText, { isEdit: true });
+            const display = window.appBridge.applyInputDisplayRegex(stored, { isEdit: true, depth: 0 });
+            const updated = chatStore.updateMessage(message.id, { content: display, raw: stored, time: formatNowTime() }, sessionId);
             if (updated) {
                 ui.updateMessage(message.id, { ...updated, role: 'user', type: 'text', avatar: avatars.user, name: '我' });
                 refreshChatAndContacts();
@@ -627,66 +700,91 @@ const initApp = async () => {
             }
             ui.removeMessage(message.id);
             chatStore.deleteMessage(message.id, sessionId);
+            let streamCtrl = null;
             try {
-                ui.showTyping();
+                const assistantAvatar = getAssistantAvatarForSession(sessionId);
                 const text = prevUser.content;
                 const config = window.appBridge.config.get();
                 let full = '';
                 if (config.stream) {
-                    const streamBubble = ui.startAssistantStream();
+                    streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
                     const stream = await window.appBridge.generate(text, llmContext(text));
                     for await (const chunk of stream) {
                         full += chunk;
-                        streamBubble.update(full);
+                        streamCtrl.update(full);
                     }
-                    ui.hideTyping();
+                    let stored = full;
+                    let display = full;
                     try {
-                        const processed = window.appBridge.applyOutputRegex(full);
-                        if (processed !== full) {
-                            full = processed;
-                            streamBubble.update(full);
-                        }
+                        stored = window.appBridge.applyOutputStoredRegex(full);
+                        display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                        streamCtrl.update(display);
                     } catch {}
                     const parsed = {
                         role: 'assistant',
                         name: '助手',
-                        avatar: avatars.assistant,
-                        time: new Date().toLocaleTimeString().slice(0, 5),
-                        ...parseSpecialMessage(full)
+                        avatar: assistantAvatar,
+                        time: formatNowTime(),
+                        raw: stored,
+                        ...parseSpecialMessage(display)
                     };
-                    streamBubble.finish(parsed);
+                    streamCtrl.finish(parsed);
                     chatStore.appendMessage(parsed, sessionId);
                     refreshChatAndContacts();
                 } else {
-                    const result = await window.appBridge.generate(text, llmContext(text));
+                    ui.showTyping(assistantAvatar);
+                    const resultRaw = await window.appBridge.generate(text, llmContext(text));
                     ui.hideTyping();
+                    const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
+                    const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
                     const parsed = {
                         role: 'assistant',
                         name: '助手',
-                        avatar: avatars.assistant,
-                        time: new Date().toLocaleTimeString().slice(0, 5),
-                        ...parseSpecialMessage(result)
+                        avatar: assistantAvatar,
+                        time: formatNowTime(),
+                        raw: stored,
+                        ...parseSpecialMessage(display)
                     };
                     ui.addMessage(parsed);
                     chatStore.appendMessage(parsed, sessionId);
                     refreshChatAndContacts();
                 }
             } catch (err) {
+                streamCtrl?.cancel?.();
                 ui.hideTyping();
                 window.toastr?.error(err.message || '重新生成失敗');
             }
             return;
         }
     });
-    window.addEventListener('worldinfo-changed', () => updateWorldIndicator());
+    const rerenderCurrentSession = () => {
+        try {
+            const id = chatStore.getCurrent();
+            const msgs = chatStore.getMessages(id);
+            ui.clearMessages();
+            ui.preloadHistory(decorateMessagesForDisplay(msgs));
+            refreshChatAndContacts();
+        } catch {}
+    };
+
+    window.addEventListener('worldinfo-changed', () => {
+        updateWorldIndicator();
+        rerenderCurrentSession();
+    });
+    window.addEventListener('preset-changed', () => rerenderCurrentSession());
+    window.addEventListener('regex-changed', () => {
+        rerenderCurrentSession();
+    });
     window.addEventListener('session-changed', (e) => {
         const id = e.detail?.id;
         if (id) {
             window.appBridge.setActiveSession(id);
+            const c = contactsStore.getContact(id);
+            if (currentChatTitle) currentChatTitle.textContent = c?.name || id;
             const msgs = chatStore.getMessages(id);
             const draft = chatStore.getDraft(id);
             ui.clearMessages();
-            ui.preloadHistory(msgs);
+            ui.preloadHistory(decorateMessagesForDisplay(msgs));
             ui.setInputText(draft || '');
             ui.setSessionLabel(id);
             refreshChatAndContacts();
@@ -704,7 +802,7 @@ const initApp = async () => {
             content: tag,
             name: '我',
             avatar: avatars.user,
-            time: new Date().toLocaleTimeString().slice(0, 5)
+            time: formatNowTime()
         };
         ui.addMessage(msg);
         chatStore.appendMessage(msg, sessionId);
@@ -718,7 +816,7 @@ const initApp = async () => {
             content: url,
             name: '我',
             avatar: avatars.user,
-            time: new Date().toLocaleTimeString().slice(0, 5)
+            time: formatNowTime()
         };
         ui.addMessage(msg);
         chatStore.appendMessage(msg, sessionId);
@@ -733,7 +831,7 @@ const initApp = async () => {
             meta: { artist: '本地', url: dataUrl },
             name: '我',
             avatar: avatars.user,
-            time: new Date().toLocaleTimeString().slice(0, 5)
+            time: formatNowTime()
         };
         ui.addMessage(msg);
         chatStore.appendMessage(msg, sessionId);

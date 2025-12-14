@@ -4,6 +4,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { avatarDataUrlFromFile } from '../utils/image.js';
 
 export class SessionPanel {
     constructor(chatStore, contactsStore, ui, { onUpdated } = {}) {
@@ -185,7 +186,10 @@ export class SessionPanel {
 
         this.panel.innerHTML = `
             <h3 style="margin:0 0 12px;">好友列表</h3>
-            <div style="display:flex; gap:8px; margin-bottom:8px;">
+            <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+                <button id="session-avatar-btn" type="button" title="设置好友头像" style="width:44px; height:44px; border-radius:12px; border:1px solid #e2e8f0; background:#fff; padding:0; overflow:hidden; cursor:pointer;">
+                    <img id="session-avatar-preview" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" src="./assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp">
+                </button>
                 <input id="session-name" placeholder="新好友名稱" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;">
                 <button id="session-add" style="padding:8px 12px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">添加</button>
                 <button id="session-clear" style="padding:8px 12px; border:1px solid #fca5a5; border-radius:8px; background:#fee2e2; color:#b91c1c;">清空聊天</button>
@@ -193,10 +197,33 @@ export class SessionPanel {
             <ul id="session-list" style="list-style:none; padding:0; margin:0; border:1px solid #eee; border-radius:8px;"></ul>
         `;
 
+        this.newAvatar = '';
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/*';
+        fileInput.style.display = 'none';
+        fileInput.onchange = async () => {
+            const file = fileInput.files?.[0];
+            if (!file) return;
+            try {
+                this.newAvatar = await avatarDataUrlFromFile(file, { maxDim: 256, quality: 0.84, maxBytes: 420_000 });
+                const img = this.panel.querySelector('#session-avatar-preview');
+                if (img) img.src = this.newAvatar || img.src;
+            } catch (err) {
+                logger.warn('读取/压缩头像失败', err);
+                window.toastr?.error?.('读取头像失败');
+            }
+        };
+        this.panel.appendChild(fileInput);
+
         this.listEl = this.panel.querySelector('#session-list');
         this.nameInput = this.panel.querySelector('#session-name');
         this.panel.querySelector('#session-add').onclick = () => this.addSession();
         this.panel.querySelector('#session-clear').onclick = () => this.clearCurrent();
+        this.panel.querySelector('#session-avatar-btn').onclick = () => {
+            fileInput.value = '';
+            fileInput.click();
+        };
 
         document.body.appendChild(this.overlay);
         document.body.appendChild(this.panel);
@@ -220,11 +247,14 @@ export class SessionPanel {
         }
 
         // 创建独立聊天室（会话）与联系人记录
-        this.contactsStore?.upsertContact?.({ id: name, name, isGroup: false, addedAt: Date.now() });
+        this.contactsStore?.upsertContact?.({ id: name, name, avatar: this.newAvatar || '', isGroup: false, addedAt: Date.now() });
         this.store.switchSession(name);
         window.appBridge?.setActiveSession?.(name);
 
         this.nameInput.value = '';
+        this.newAvatar = '';
+        const img = this.panel?.querySelector('#session-avatar-preview');
+        if (img) img.src = './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
         this.switchTo(name);
         this.refresh();
         this.onUpdated?.();

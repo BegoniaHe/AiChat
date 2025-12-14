@@ -352,7 +352,7 @@ export class ChatUI {
         return wrapper;
     }
 
-    showTyping() {
+    showTyping(avatarUrl = '') {
         if (this.typingEl) return;
         const wrap = document.createElement('div');
         wrap.className = 'QQ_chat_charmsg';
@@ -361,7 +361,7 @@ export class ChatUI {
         // 头像（使用默认助手头像）
         const avatar = document.createElement('img');
         avatar.className = 'QQ_chat_head';
-        avatar.src = './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png';
+        avatar.src = avatarUrl || './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png';
 
         // 气泡
         const bubble = document.createElement('div');
@@ -391,14 +391,28 @@ export class ChatUI {
     /**
      * Start a streaming assistant bubble
      */
-    startAssistantStream() {
+    startAssistantStream(meta = {}) {
         const messageEl = this.addMessage({
             role: 'assistant',
             type: 'text',
-            content: ''
+            content: ' ',
+            avatar: meta.avatar,
+            name: meta.name,
+            time: meta.time
         });
+        // Default: show typing animation inside the streaming bubble (avoid an extra placeholder bubble)
+        if (meta?.typing !== false && messageEl) {
+            messageEl.innerHTML = `
+                <div class="typing">
+                    <span class="typing-dot"></span>
+                    <span class="typing-dot"></span>
+                    <span class="typing-dot"></span>
+                </div>
+            `;
+        }
         const bufferIndex = this.messageBuffer.push({ role: 'assistant', type: 'text', content: '' }) - 1;
         this.isStreaming = true;
+        const wrapperEl = messageEl?.closest?.('.QQ_chat_charmsg, .QQ_chat_mymsg') || messageEl?.parentElement || null;
         return {
             update: (text) => {
                 messageEl.textContent = text;
@@ -416,7 +430,12 @@ export class ChatUI {
                 } else {
                     this.messageBuffer[bufferIndex] = finalMessage || this.messageBuffer[bufferIndex];
                 }
-            }
+            },
+            cancel: () => {
+                this.isStreaming = false;
+                try { wrapperEl?.remove?.(); } catch {}
+                try { this.messageBuffer.splice(bufferIndex, 1); } catch {}
+            },
         };
     }
 

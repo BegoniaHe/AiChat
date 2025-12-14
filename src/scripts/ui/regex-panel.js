@@ -3,7 +3,7 @@
  * - Global rules always apply
  * - Local sets apply when their bound preset/world is active
  */
-import { RegexStore } from '../storage/regex-store.js';
+import { RegexStore, regex_placement, substitute_find_regex } from '../storage/regex-store.js';
 import { logger } from '../utils/logger.js';
 
 const deepClone = (v) => {
@@ -16,15 +16,56 @@ const deepClone = (v) => {
 
 const genId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
-const normalizeRule = (r = {}) => ({
-    id: r.id || genId('re'),
-    name: String(r.name || '').trim(),
-    enabled: r.enabled !== false,
-    when: (r.when === 'input' || r.when === 'output' || r.when === 'both') ? r.when : 'both',
-    pattern: String(r.pattern || ''),
-    replacement: String(r.replacement ?? ''),
-    flags: (r.flags === undefined || r.flags === null) ? 'g' : String(r.flags),
-});
+const normalizeScript = (r = {}) => {
+    // Legacy support
+    if (!('findRegex' in r) && (('pattern' in r) || ('when' in r) || ('replacement' in r))) {
+        const when = (r.when === 'input' || r.when === 'output' || r.when === 'both') ? r.when : 'both';
+        const pattern = String(r.pattern || '');
+        const flags = (r.flags === undefined || r.flags === null) ? 'g' : String(r.flags);
+        const placement = [];
+        if (when === 'input' || when === 'both') placement.push(regex_placement.USER_INPUT);
+        if (when === 'output' || when === 'both') placement.push(regex_placement.AI_OUTPUT);
+        return {
+            id: r.id || genId('re'),
+            scriptName: String(r.name || '').trim(),
+            findRegex: pattern ? `/${pattern}/${flags}` : '',
+            replaceString: String(r.replacement ?? ''),
+            trimStrings: [],
+            placement,
+            disabled: r.enabled === false,
+            markdownOnly: false,
+            promptOnly: false,
+            runOnEdit: false,
+            substituteRegex: substitute_find_regex.NONE,
+            minDepth: null,
+            maxDepth: null,
+        };
+    }
+
+    return {
+        id: r.id || genId('re'),
+        scriptName: String(r.scriptName || r.name || '').trim(),
+        findRegex: String(r.findRegex || ''),
+        replaceString: String(r.replaceString ?? r.replacement ?? ''),
+        trimStrings: Array.isArray(r.trimStrings) ? r.trimStrings.map((s) => String(s || '')).filter(Boolean) : [],
+        placement: Array.isArray(r.placement) ? r.placement.map((n) => Number(n)).filter(Number.isFinite) : [],
+        disabled: Boolean(r.disabled),
+        markdownOnly: Boolean(r.markdownOnly),
+        promptOnly: Boolean(r.promptOnly),
+        runOnEdit: Boolean(r.runOnEdit),
+        substituteRegex: (r.substituteRegex === 1 || r.substituteRegex === 2) ? Number(r.substituteRegex) : 0,
+        minDepth: (r.minDepth === '' || r.minDepth === undefined) ? null : (r.minDepth === null ? null : Number(r.minDepth)),
+        maxDepth: (r.maxDepth === '' || r.maxDepth === undefined) ? null : (r.maxDepth === null ? null : Number(r.maxDepth)),
+    };
+};
+
+const placementLabels = {
+    [regex_placement.USER_INPUT]: '用户输入',
+    [regex_placement.AI_OUTPUT]: 'AI输出',
+    [regex_placement.SLASH_COMMAND]: 'Slash',
+    [regex_placement.WORLD_INFO]: '世界书',
+    [regex_placement.REASONING]: '推理',
+};
 
 const PRESET_TYPES = [
     { id: 'sysprompt', label: '系统提示词' },
@@ -142,7 +183,7 @@ export class RegexPanel {
     }
 
     renderRuleCard(rule) {
-        const r = normalizeRule(rule);
+        const r = normalizeScript(rule);
         const card = document.createElement('div');
         card.className = 'regex-rule';
         card.dataset.ruleId = r.id;
@@ -184,54 +225,108 @@ export class RegexPanel {
 
         body.innerHTML = `
             <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                <div style="flex:1; min-width: 200px;">
-                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">名称（可选）</div>
+                <div style="flex:1; min-width: 220px;">
+                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">脚本名称</div>
                     <input class="re-name" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px;">
                 </div>
-                <div style="flex:1; min-width: 180px;">
-                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">生效位置</div>
-                    <select class="re-when" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px;">
-                        <option value="both">输入+输出</option>
-                        <option value="input">仅输入（发送前）</option>
-                        <option value="output">仅输出（显示前）</option>
-                    </select>
-                </div>
-                <div style="width:140px;">
-                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">flags</div>
-                    <input class="re-flags" placeholder="gimsuy" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px;">
+                <div style="flex:1; min-width: 280px;">
+                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">Find Regex</div>
+                    <input class="re-find" spellcheck="false" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
                 </div>
             </div>
+
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-                <div style="flex:1; min-width: 240px;">
-                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">匹配（pattern）</div>
-                    <input class="re-pattern" spellcheck="false" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
+                <div style="flex:1; min-width: 260px;">
+                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">Replace With</div>
+                    <textarea class="re-repl" rows="3" spellcheck="false" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;"></textarea>
+                    <div style="color:#64748b; font-size:12px; margin-top:6px;">支持 {{match}}、$1/$2…、$&lt;name&gt;。</div>
                 </div>
-                <div style="flex:1; min-width: 240px;">
-                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">替换（replacement）</div>
-                    <input class="re-repl" spellcheck="false" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
+                <div style="flex:1; min-width: 260px;">
+                    <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">Trim Out（每行一个）</div>
+                    <textarea class="re-trim" rows="3" spellcheck="false" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:13px;"></textarea>
+                </div>
+            </div>
+
+            <div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:12px;">
+                <div style="flex:1; min-width: 260px; border:1px solid rgba(0,0,0,0.06); border-radius:12px; padding:10px;">
+                    <div style="font-weight:800; color:#0f172a; margin-bottom:8px;">影响条目（Affects）</div>
+                    <div style="display:flex; gap:12px; flex-wrap:wrap; color:#334155; font-size:13px;">
+                        <label style="display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-place" value="1">用户输入</label>
+                        <label style="display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-place" value="2">AI输出</label>
+                        <label style="display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-place" value="3">Slash</label>
+                        <label style="display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-place" value="5">世界书</label>
+                        <label style="display:flex; gap:6px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-place" value="6">推理</label>
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; align-items:center;">
+                        <div style="font-size:13px; color:#334155; font-weight:700;">深度</div>
+                        <input class="re-min-depth" type="number" min="-1" max="9999" placeholder="Min" style="width:120px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px;">
+                        <input class="re-max-depth" type="number" min="0" max="9999" placeholder="Max" style="width:120px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px;">
+                        <div style="color:#64748b; font-size:12px;">0=最后一条，1=倒数第二条…</div>
+                    </div>
+                </div>
+
+                <div style="flex:1; min-width: 260px; border:1px solid rgba(0,0,0,0.06); border-radius:12px; padding:10px;">
+                    <div style="font-weight:800; color:#0f172a; margin-bottom:8px;">其他选项</div>
+                    <div style="display:flex; flex-direction:column; gap:8px; color:#334155; font-size:13px;">
+                        <label style="display:flex; gap:8px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-disabled">停用（Disabled）</label>
+                        <label style="display:flex; gap:8px; align-items:center; cursor:pointer;"><input type="checkbox" class="re-run-on-edit">编辑消息时执行（Run On Edit）</label>
+                        <label style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                            <span style="font-weight:700;">Find Regex 宏</span>
+                            <select class="re-substitute" style="padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px;">
+                                <option value="0">不替换</option>
+                                <option value="1">替换（raw）</option>
+                                <option value="2">替换（escaped）</option>
+                            </select>
+                        </label>
+                        <div style="margin-top:6px;">
+                            <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">暂时性（Ephemerality）</div>
+                            <label style="display:flex; gap:8px; align-items:center; cursor:pointer; margin-bottom:6px;">
+                                <input type="checkbox" class="re-md-only">仅影响聊天显示（不改存档）
+                            </label>
+                            <label style="display:flex; gap:8px; align-items:center; cursor:pointer;">
+                                <input type="checkbox" class="re-prompt-only">仅影响发送给 LLM 的 prompt（不改存档）
+                            </label>
+                            <div style="color:#64748b; font-size:12px; margin-top:6px;">两者都不勾选：将直接修改聊天存档内容（不可逆）。</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
 
         const enabledInput = enabledWrap.querySelector('input');
-        enabledInput.checked = r.enabled !== false;
-        body.querySelector('.re-name').value = r.name || '';
-        body.querySelector('.re-when').value = r.when;
-        body.querySelector('.re-flags').value = r.flags ?? 'g';
-        body.querySelector('.re-pattern').value = r.pattern || '';
-        body.querySelector('.re-repl').value = r.replacement ?? '';
+        enabledInput.checked = !r.disabled;
+        body.querySelector('.re-name').value = r.scriptName || '';
+        body.querySelector('.re-find').value = r.findRegex || '';
+        body.querySelector('.re-repl').value = r.replaceString ?? '';
+        body.querySelector('.re-trim').value = (Array.isArray(r.trimStrings) ? r.trimStrings.join('\n') : '');
+        body.querySelector('.re-disabled').checked = Boolean(r.disabled);
+        body.querySelector('.re-run-on-edit').checked = Boolean(r.runOnEdit);
+        body.querySelector('.re-md-only').checked = Boolean(r.markdownOnly);
+        body.querySelector('.re-prompt-only').checked = Boolean(r.promptOnly);
+        body.querySelector('.re-substitute').value = String(Number(r.substituteRegex ?? 0));
+        body.querySelector('.re-min-depth').value = (r.minDepth === null || r.minDepth === undefined || Number.isNaN(Number(r.minDepth))) ? '' : String(Number(r.minDepth));
+        body.querySelector('.re-max-depth').value = (r.maxDepth === null || r.maxDepth === undefined || Number.isNaN(Number(r.maxDepth))) ? '' : String(Number(r.maxDepth));
+        const placeSet = new Set((Array.isArray(r.placement) ? r.placement : []).map((n) => Number(n)).filter(Number.isFinite));
+        body.querySelectorAll('.re-place').forEach((cb) => {
+            cb.checked = placeSet.has(Number(cb.value));
+        });
 
         const updateHeader = () => {
             const name = body.querySelector('.re-name')?.value?.trim();
-            const pattern = body.querySelector('.re-pattern')?.value?.trim();
-            const repl = body.querySelector('.re-repl')?.value?.trim();
-            const when = body.querySelector('.re-when')?.value || 'both';
-            const title = name || (pattern ? `${pattern.slice(0, 28)}${pattern.length > 28 ? '…' : ''}` : '未命名规则');
-            const sub = `${when} · ${repl ? `→ ${repl.slice(0, 28)}${repl.length > 28 ? '…' : ''}` : '→ (空)'}`;
+            const find = body.querySelector('.re-find')?.value?.trim();
+            const disabled = body.querySelector('.re-disabled')?.checked === true;
+            const mdOnly = body.querySelector('.re-md-only')?.checked === true;
+            const prOnly = body.querySelector('.re-prompt-only')?.checked === true;
+            const placements = Array.from(body.querySelectorAll('.re-place')).filter(x => x.checked).map(x => Number(x.value)).filter(Number.isFinite);
+            const title = name || (find ? `${find.slice(0, 36)}${find.length > 36 ? '…' : ''}` : '未命名正则');
+            const affects = placements.length ? placements.map(p => placementLabels[p] || String(p)).join(' / ') : '未选择';
+            const epi = `${mdOnly ? '显示' : ''}${mdOnly && prOnly ? '+' : ''}${prOnly ? 'Prompt' : ''}`;
+            const sub = `${affects}${epi ? ` · ${epi}` : ''}${disabled ? ' · Disabled' : ''}`;
             left.querySelector('.re-title').textContent = title;
             left.querySelector('.re-sub').textContent = sub;
-            card.style.opacity = enabledInput.checked ? '' : '0.62';
-            card.style.filter = enabledInput.checked ? '' : 'grayscale(1)';
+            enabledInput.checked = !disabled;
+            card.style.opacity = disabled ? '0.62' : '';
+            card.style.filter = disabled ? 'grayscale(1)' : '';
         };
         updateHeader();
 
@@ -250,8 +345,11 @@ export class RegexPanel {
         card.querySelectorAll('input,select,button').forEach(el => {
             el.addEventListener('click', (e) => e.stopPropagation());
         });
-        enabledInput.addEventListener('change', updateHeader);
-        body.querySelectorAll('input,select').forEach(el => el.addEventListener('input', updateHeader));
+        enabledInput.addEventListener('change', () => {
+            body.querySelector('.re-disabled').checked = !enabledInput.checked;
+            updateHeader();
+        });
+        body.querySelectorAll('input,select,textarea').forEach(el => el.addEventListener('input', updateHeader));
 
         card.appendChild(header);
         card.appendChild(body);
@@ -262,14 +360,26 @@ export class RegexPanel {
         const rules = [];
         container.querySelectorAll('.regex-rule').forEach(el => {
             const id = el.dataset.ruleId || genId('re');
-            rules.push(normalizeRule({
+            const placement = Array.from(el.querySelectorAll('.re-place'))
+                .filter(cb => cb.checked)
+                .map(cb => Number(cb.value))
+                .filter(Number.isFinite);
+            const minDepthRaw = el.querySelector('.re-min-depth')?.value;
+            const maxDepthRaw = el.querySelector('.re-max-depth')?.value;
+            rules.push(normalizeScript({
                 id,
-                name: el.querySelector('.re-name')?.value || '',
-                enabled: el.querySelector('.re-enabled')?.checked !== false,
-                when: el.querySelector('.re-when')?.value || 'both',
-                flags: el.querySelector('.re-flags')?.value ?? 'g',
-                pattern: el.querySelector('.re-pattern')?.value || '',
-                replacement: el.querySelector('.re-repl')?.value ?? '',
+                scriptName: el.querySelector('.re-name')?.value || '',
+                findRegex: el.querySelector('.re-find')?.value || '',
+                replaceString: el.querySelector('.re-repl')?.value ?? '',
+                trimStrings: String(el.querySelector('.re-trim')?.value || '').split('\n').map(s => s.trim()).filter(Boolean),
+                placement,
+                disabled: el.querySelector('.re-disabled')?.checked === true,
+                markdownOnly: el.querySelector('.re-md-only')?.checked === true,
+                promptOnly: el.querySelector('.re-prompt-only')?.checked === true,
+                runOnEdit: el.querySelector('.re-run-on-edit')?.checked === true,
+                substituteRegex: Number(el.querySelector('.re-substitute')?.value ?? 0),
+                minDepth: (minDepthRaw === '' || minDepthRaw === null || minDepthRaw === undefined) ? null : Number(minDepthRaw),
+                maxDepth: (maxDepthRaw === '' || maxDepthRaw === null || maxDepthRaw === undefined) ? null : Number(maxDepthRaw),
             }));
         });
         return rules;
@@ -319,7 +429,12 @@ export class RegexPanel {
         wrap.appendChild(list);
 
         head.querySelector('#re-global-add').onclick = () => {
-            list.appendChild(this.renderRuleCard({}));
+            list.appendChild(this.renderRuleCard({
+                placement: [regex_placement.USER_INPUT],
+                markdownOnly: true,
+                runOnEdit: true,
+                disabled: false,
+            }));
         };
         list.addEventListener('click', (e) => {
             const del = e.target.closest('.re-del');
@@ -554,7 +669,12 @@ export class RegexPanel {
         wrap.appendChild(list);
 
         rulesWrap.querySelector('#re-local-add').onclick = () => {
-            list.appendChild(this.renderRuleCard({}));
+            list.appendChild(this.renderRuleCard({
+                placement: [regex_placement.USER_INPUT],
+                markdownOnly: true,
+                runOnEdit: true,
+                disabled: false,
+            }));
         };
         list.addEventListener('click', (e) => {
             const del = e.target.closest('.re-del');

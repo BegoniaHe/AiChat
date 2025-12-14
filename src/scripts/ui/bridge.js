@@ -7,7 +7,7 @@ import { ConfigManager } from '../storage/config.js';
 import { ChatStorage } from '../storage/chat.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
 import { PresetStore } from '../storage/preset-store.js';
-import { RegexStore } from '../storage/regex-store.js';
+import { RegexStore, regex_placement } from '../storage/regex-store.js';
 import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
@@ -202,27 +202,86 @@ class AppBridge {
 
     getRegexContext() {
         const presetState = this.presets?.getState?.() || {};
+        const worldIds = [];
+        if (this.globalWorldId) worldIds.push(String(this.globalWorldId));
+        if (this.currentWorldId) worldIds.push(String(this.currentWorldId));
         return {
             sessionId: this.activeSessionId,
             worldId: this.currentWorldId,
+            worldIds,
             activePresets: presetState?.active || {},
         };
     }
 
-    applyInputRegex(text) {
+    applyInputRegex(text, { isEdit = false, depth } = {}) {
         try {
-            return this.regex.apply(text, this.getRegexContext(), 'input');
+            return this.regex.apply(text, this.getRegexContext(), regex_placement.USER_INPUT, {
+                isMarkdown: false,
+                isPrompt: false,
+                isEdit: Boolean(isEdit),
+                depth,
+            });
         } catch {
             return String(text ?? '');
         }
     }
 
-    applyOutputRegex(text) {
+    applyInputStoredRegex(text, opts) {
+        return this.applyInputRegex(text, opts);
+    }
+
+    applyInputDisplayRegex(text, { isEdit = false, depth } = {}) {
         try {
-            return this.regex.apply(text, this.getRegexContext(), 'output');
+            return this.regex.apply(text, this.getRegexContext(), regex_placement.USER_INPUT, {
+                isMarkdown: true,
+                isPrompt: false,
+                isEdit: Boolean(isEdit),
+                depth,
+            });
         } catch {
             return String(text ?? '');
         }
+    }
+
+    /**
+     * Direct (non-ephemeral) scripts: alter stored chat content irreversibly
+     * - ST semantics: neither "Alter Chat Display" nor "Alter Outgoing Prompt" checked
+     */
+    applyOutputStoredRegex(text, { isEdit = false, depth } = {}) {
+        try {
+            return this.regex.apply(text, this.getRegexContext(), regex_placement.AI_OUTPUT, {
+                isMarkdown: false,
+                isPrompt: false,
+                isEdit: Boolean(isEdit),
+                depth,
+            });
+        } catch {
+            return String(text ?? '');
+        }
+    }
+
+    /**
+     * Ephemeral display scripts: alter what user sees, without changing stored chat text
+     */
+    applyOutputDisplayRegex(text, { isEdit = false, depth } = {}) {
+        try {
+            return this.regex.apply(text, this.getRegexContext(), regex_placement.AI_OUTPUT, {
+                isMarkdown: true,
+                isPrompt: false,
+                isEdit: Boolean(isEdit),
+                depth,
+            });
+        } catch {
+            return String(text ?? '');
+        }
+    }
+
+    /**
+     * Compatibility: raw -> stored -> display
+     */
+    applyOutputRegex(text) {
+        const stored = this.applyOutputStoredRegex(text);
+        return this.applyOutputDisplayRegex(stored);
     }
 
     /**
@@ -252,8 +311,23 @@ class AppBridge {
 
         try {
             const originalInput = userMessage;
-            const processedInput = this.applyInputRegex(userMessage);
-            const messages = this.buildMessages(processedInput, context);
+            // ST semantics:
+            // - direct scripts (non-ephemeral) may alter stored chat content
+            // - promptOnly scripts apply to outgoing prompt only
+            const ctx = this.getRegexContext();
+            const directInput = this.regex.apply(userMessage, ctx, regex_placement.USER_INPUT, {
+                isMarkdown: false,
+                isPrompt: false,
+                isEdit: false,
+                depth: 0,
+            });
+            const promptInput = this.regex.apply(directInput, ctx, regex_placement.USER_INPUT, {
+                isMarkdown: false,
+                isPrompt: true,
+                isEdit: false,
+                depth: 0,
+            });
+            const messages = this.buildMessages(promptInput, context);
             const config = this.config.get();
             const genOptions = this.getGenerationOptions();
 
@@ -271,10 +345,8 @@ class AppBridge {
                 );
 
                 // 保存到历史记录
-                const processedOutput = this.applyOutputRegex(response);
-                await this.saveToHistory(originalInput, processedOutput);
-
-                return processedOutput;
+                await this.saveToHistory(originalInput, response);
+                return response;
             }
         } catch (error) {
             logger.error('生成失败:', error);
@@ -297,8 +369,7 @@ class AppBridge {
             }
 
             // 流式完成后保存到历史记录
-            const processedOutput = this.applyOutputRegex(fullResponse);
-            await this.saveToHistory(originalUserMessage || '', processedOutput);
+            await this.saveToHistory(originalUserMessage || '', fullResponse);
         } catch (error) {
             logger.error('流式生成失败:', error);
             throw error;
@@ -331,7 +402,21 @@ class AppBridge {
         // When OpenAI preset has prompt_order: use ST-like block ordering (drag & drop in UI)
         const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
         if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
-            const history = Array.isArray(context.history) ? context.history.slice() : [];
+            const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
+            // ST promptOnly scripts: apply to outgoing prompt only
+            const history = historyRaw.map((m, idx) => {
+                const role = m?.role === 'user' ? 'user' : 'assistant';
+                const content = String(m?.content ?? '');
+                const depth = (historyRaw.length - 1) - idx; // 0 = last message
+                const placement = role === 'user' ? regex_placement.USER_INPUT : regex_placement.AI_OUTPUT;
+                const out = this.regex.apply(content, this.getRegexContext(), placement, {
+                    isMarkdown: false,
+                    isPrompt: true,
+                    isEdit: false,
+                    depth,
+                });
+                return { role, content: out };
+            });
             const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
             const byId = new Map();
             prompts.forEach(p => { if (p?.identifier) byId.set(p.identifier, p); });
@@ -339,7 +424,17 @@ class AppBridge {
             const macroVars = { user: name1, char: name2, scenario: context?.character?.scenario || '', personality: context?.character?.personality || '' };
             const formatScenario = applyMacros(scenarioFormat, { scenario: macroVars.scenario });
             const formatPersonality = applyMacros(personalityFormat, { personality: macroVars.personality });
-            const formatWorld = worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '';
+            // WORLD_INFO placement for prompt stage (supports promptOnly scripts)
+            let worldForPrompt = worldPrompt || '';
+            if (worldForPrompt) {
+                worldForPrompt = this.regex.apply(worldForPrompt, this.getRegexContext(), regex_placement.WORLD_INFO, {
+                    isMarkdown: false,
+                    isPrompt: true,
+                    isEdit: false,
+                    depth: 0,
+                });
+            }
+            const formatWorld = worldForPrompt ? wiFormat.replace('{0}', worldForPrompt) : '';
 
             const resolveMarker = (identifier) => {
                 switch (identifier) {
