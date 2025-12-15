@@ -12,6 +12,13 @@ import { PresetStore } from '../storage/preset-store.js';
 import { LLMClient } from '../api/client.js';
 import { logger } from '../utils/logger.js';
 
+const canInitClient = (cfg) => {
+    const c = cfg || {};
+    const hasKey = typeof c.apiKey === 'string' && c.apiKey.trim().length > 0;
+    const hasVertexSa = c.provider === 'vertexai' && typeof c.vertexaiServiceAccount === 'string' && c.vertexaiServiceAccount.trim().length > 0;
+    return hasKey || hasVertexSa;
+};
+
 const PRESET_TYPES = [
     { id: 'sysprompt', label: '系统提示词' },
     { id: 'chatprompts', label: '聊天提示词' },
@@ -119,7 +126,7 @@ export class PresetPanel {
             const cfg = runtime || cm.get?.();
             if (window.appBridge) {
                 window.appBridge.config.set(cfg);
-                window.appBridge.client = cfg?.apiKey ? new LLMClient(cfg) : null;
+                window.appBridge.client = canInitClient(cfg) ? new LLMClient(cfg) : null;
             }
             window.dispatchEvent(new CustomEvent('preset-bound-config-applied', { detail: { profileId: boundId } }));
         } catch (err) {

@@ -5,12 +5,119 @@
 
 import { handleSSE } from '../stream.js';
 
+const getTauriInvoker = () => {
+  const g = typeof globalThis !== 'undefined' ? globalThis : undefined;
+  return (
+    g?.__TAURI__?.core?.invoke ||
+    g?.__TAURI__?.invoke ||
+    g?.__TAURI_INVOKE__ ||
+    g?.__TAURI_INTERNALS__?.invoke
+  );
+};
+
+const isTauriWebview = () => {
+  try {
+    const g = typeof globalThis !== 'undefined' ? globalThis : undefined;
+    const origin = String(g?.location?.origin || '');
+    return Boolean(g?.__TAURI__ || g?.__TAURI_INTERNALS__ || origin.includes('tauri.localhost'));
+  } catch (_e) {
+    return false;
+  }
+};
+
+const b64UrlFromBytes = (bytes) => {
+  let str = '';
+  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+};
+
+const b64UrlFromJson = (obj) => {
+  const json = JSON.stringify(obj);
+  const bytes = new TextEncoder().encode(json);
+  return b64UrlFromBytes(bytes);
+};
+
+const pemToArrayBuffer = (pem) => {
+  const raw = String(pem || '')
+    .replace(/-----BEGIN [^-]+-----/g, '')
+    .replace(/-----END [^-]+-----/g, '')
+    .replace(/\s+/g, '');
+  const bin = atob(raw);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+};
+
+const parseSSEText = function* (text) {
+  const raw = String(text ?? '');
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    const data = line.slice(6).trim();
+    if (!data || data === '[DONE]') continue;
+    try {
+      yield JSON.parse(data);
+    } catch (_e) {}
+  }
+};
+
+const request = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 60000 }) => {
+  const invoker = getTauriInvoker();
+  if (typeof invoker === 'function') {
+    return invoker('http_request', {
+      url,
+      method,
+      headers,
+      body: typeof body === 'string' ? body : body == null ? null : String(body),
+      timeout_ms: timeoutMs,
+    });
+  }
+
+  if (isTauriWebview()) {
+    throw new Error('Tauri invoke not available for Vertex AI; cannot use fetch due to CORS');
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { method, headers, body, signal: controller.signal });
+    const text = await resp.text();
+    const outHeaders = {};
+    resp.headers.forEach((v, k) => { outHeaders[k] = v; });
+    return { status: resp.status, ok: resp.ok, headers: outHeaders, body: text };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const requestJson = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 60000 }) => {
+  const res = await request({ url, method, headers, body, timeoutMs });
+  if (!res.ok) {
+    const raw = String(res.body || '').trim();
+    let detail = '';
+    try {
+      const j = JSON.parse(raw);
+      detail = String(j?.error?.message || j?.message || j?.error || '').trim();
+    } catch (_e) {}
+    const err = new Error(`Vertex AI Error: ${res.status}${detail ? ` - ${detail}` : ''}`);
+    err.status = res.status;
+    err.response = res.body;
+    throw err;
+  }
+  return JSON.parse(res.body || '{}');
+};
+
 const GEMINI_SAFETY = [
   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
   { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
   { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
 ];
+
+const getHostForRegion = (region) => {
+  const r = String(region || '').trim() || 'us-central1';
+  return r === 'global' ? 'https://aiplatform.googleapis.com' : `https://${r}-aiplatform.googleapis.com`;
+};
 
 export class VertexAIProvider {
   constructor(config) {
@@ -39,13 +146,11 @@ export class VertexAIProvider {
       this.projectId = config.vertexaiProjectId;
     }
 
-    // Determine base URL
-    const baseUrl = config.baseUrl || (
-      this.region === 'global'
-        ? 'https://aiplatform.googleapis.com'
-        : `https://${this.region}-aiplatform.googleapis.com`
-    );
-    this.baseUrl = baseUrl;
+    const derivedHost = getHostForRegion(this.region);
+    const baseUrl = String(config.baseUrl || '').trim();
+    // If user provided a valid aiplatform host, respect it; otherwise derive from region (ST-like behavior).
+    this.baseUrl = (baseUrl && baseUrl.includes('aiplatform.googleapis.com')) ? baseUrl : derivedHost;
+    this.baseHost = this.baseUrl;
 
     // Cache for OAuth2 token
     this.accessToken = null;
@@ -71,7 +176,15 @@ export class VertexAIProvider {
         ? JSON.parse(this.serviceAccountJson)
         : this.serviceAccountJson;
 
-      // Create JWT for OAuth2
+      if (!serviceAccount?.client_email || !serviceAccount?.private_key) {
+        throw new Error('Invalid Service Account JSON (missing client_email/private_key)');
+      }
+
+      if (!globalThis?.crypto?.subtle) {
+        throw new Error('WebCrypto 不可用，无法在前端签名 Vertex AI JWT');
+      }
+
+      // Create JWT for OAuth2 (same approach as SillyTavern backend, but sign via WebCrypto in WebView)
       const header = {
         alg: 'RS256',
         typ: 'JWT',
@@ -88,23 +201,49 @@ export class VertexAIProvider {
         scope: 'https://www.googleapis.com/auth/cloud-platform',
       };
 
-      // Note: In a real browser environment, we cannot sign JWT with RS256
-      // This would require a backend service to handle authentication
-      // For now, we'll throw an error with instructions
-      throw new Error(
-        'Vertex AI Service Account 需要後端簽名，當前前端環境未實現。請改用 Google AI Studio (Makersuite) 或提供後端代理。'
+      const headerB64 = b64UrlFromJson(header);
+      const payloadB64 = b64UrlFromJson(payload);
+      const signingInput = `${headerB64}.${payloadB64}`;
+
+      const keyBuf = pemToArrayBuffer(serviceAccount.private_key);
+      const cryptoKey = await crypto.subtle.importKey(
+        'pkcs8',
+        keyBuf,
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+        false,
+        ['sign']
       );
 
-      // The proper implementation would be:
-      // 1. Send service account JSON to backend
-      // 2. Backend creates and signs JWT
-      // 3. Backend exchanges JWT for access token
-      // 4. Backend returns access token to frontend
+      const sigBuf = await crypto.subtle.sign(
+        { name: 'RSASSA-PKCS1-v1_5' },
+        cryptoKey,
+        new TextEncoder().encode(signingInput)
+      );
+      const sigB64 = b64UrlFromBytes(new Uint8Array(sigBuf));
+      const jwt = `${signingInput}.${sigB64}`;
+
+      const form = new URLSearchParams();
+      form.set('grant_type', 'urn:ietf:params:oauth:grant-type:jwt-bearer');
+      form.set('assertion', jwt);
+
+      const tok = await requestJson({
+        url: 'https://oauth2.googleapis.com/token',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+        timeoutMs: this.timeout,
+      });
+
+      const accessToken = String(tok?.access_token || '').trim();
+      const expiresIn = Number(tok?.expires_in || 3600);
+      if (!accessToken) throw new Error('Failed to obtain access_token');
+
+      this.accessToken = accessToken;
+      // refresh slightly earlier
+      this.tokenExpiry = Date.now() + Math.max(30, expiresIn - 30) * 1000;
+      return this.accessToken;
 
     } catch (error) {
-      if (error.message.includes('requires a backend service')) {
-        throw error;
-      }
       throw new Error(`Failed to authenticate with Service Account: ${error.message}`);
     }
   }
@@ -134,13 +273,17 @@ export class VertexAIProvider {
    * Build the request URL
    */
   buildUrl(stream = false) {
+    return this.buildUrlFor({ stream, region: this.region, baseHost: this.baseHost, model: this.model });
+  }
+
+  buildUrlFor({ stream = false, region, baseHost, model }) {
     const endpoint = stream ? 'streamGenerateContent' : 'generateContent';
 
     if (!this.projectId) {
       throw new Error('Vertex AI requires projectId');
     }
 
-    const url = `${this.baseUrl}/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/${this.model}:${endpoint}`;
+    const url = `${baseHost}/v1/projects/${this.projectId}/locations/${region}/publishers/google/models/${model}:${endpoint}`;
     return stream ? `${url}?alt=sse` : url;
   }
 
@@ -155,8 +298,7 @@ export class VertexAIProvider {
       headers['Authorization'] = `Bearer ${token}`;
     }
     else {
-      // API Key 不能直接作為 Vertex AI Authorization，提前提示
-      throw new Error('Vertex AI 需要 Service Account (後端簽名)；前端不支持僅用 API Key');
+      throw new Error('Vertex AI 需要 Service Account（JSON）');
     }
 
     return headers;
@@ -193,97 +335,135 @@ export class VertexAIProvider {
    * Send chat message (non-streaming)
    */
   async chat(messages, options = {}) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const url = this.buildUrl(false);
-      const headers = await this.getHeaders();
-      const body = this.buildRequestBody(messages, options);
-
-      const response = await fetch(url, {
+    const headers = await this.getHeaders();
+    const body = this.buildRequestBody(messages, options);
+    const tryOnce = async ({ region, baseHost }) => {
+      const url = this.buildUrlFor({ stream: false, region, baseHost, model: this.model });
+      return requestJson({
+        url,
         method: 'POST',
         headers,
-        signal: controller.signal,
         body: JSON.stringify(body),
+        timeoutMs: this.timeout,
       });
+    };
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        const error = new Error(`Vertex AI Error: ${response.status} ${response.statusText}`);
-        error.status = response.status;
-        error.response = errorText;
-        throw error;
+    let data;
+    try {
+      data = await tryOnce({ region: this.region, baseHost: this.baseHost });
+    } catch (err) {
+      // Some Gemini models are only available in `global` location; ST can still use them.
+      if (err?.status === 404 && this.region !== 'global') {
+        data = await tryOnce({ region: 'global', baseHost: getHostForRegion('global') });
+      } else {
+        throw err;
       }
-
-      const data = await response.json();
-
-      const candidates = data?.candidates;
-      if (!candidates || candidates.length === 0) {
-        let errorMsg = 'No candidates returned';
-        if (data?.promptFeedback?.blockReason) {
-          errorMsg += `: ${data.promptFeedback.blockReason}`;
-        }
-        throw new Error(errorMsg);
-      }
-
-      const responseContent = candidates[0].content ?? candidates[0].output;
-      const responseText = typeof responseContent === 'string'
-        ? responseContent
-        : responseContent?.parts
-            ?.filter(part => !part.thought)
-            ?.map(part => part.text)
-            ?.join('\n\n');
-
-      if (!responseText) {
-        throw new Error('Empty response from Vertex AI');
-      }
-
-      return responseText;
-    } finally {
-      clearTimeout(timeoutId);
     }
+
+    const candidates = data?.candidates;
+    if (!candidates || candidates.length === 0) {
+      let errorMsg = 'No candidates returned';
+      if (data?.promptFeedback?.blockReason) {
+        errorMsg += `: ${data.promptFeedback.blockReason}`;
+      }
+      throw new Error(errorMsg);
+    }
+
+    const responseContent = candidates[0].content ?? candidates[0].output;
+    const responseText = typeof responseContent === 'string'
+      ? responseContent
+      : responseContent?.parts
+          ?.filter(part => !part.thought)
+          ?.map(part => part.text)
+          ?.join('\n\n');
+
+    if (!responseText) {
+      throw new Error('Empty response from Vertex AI');
+    }
+
+    return responseText;
   }
 
   /**
    * Stream chat messages
    */
   async *streamChat(messages, options = {}) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const headers = await this.getHeaders();
+    const body = this.buildRequestBody(messages, options);
 
-    try {
-      const url = this.buildUrl(true);
-      const headers = await this.getHeaders();
-      const body = this.buildRequestBody(messages, options);
+    const invoker = getTauriInvoker();
+    const tryStreamOnce = async function* ({ region, baseHost }) {
+      const url = this.buildUrlFor({ stream: true, region, baseHost, model: this.model });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Vertex AI Error: ${response.status} ${errorText}`);
-      }
-
-      for await (const data of handleSSE(response)) {
-        const candidates = data?.candidates;
-        if (candidates && candidates.length > 0) {
-          const content = candidates[0].content;
-          if (content?.parts) {
-            for (const part of content.parts) {
-              if (part.text) {
-                yield part.text;
+      if (typeof invoker === 'function') {
+        const res = await request({
+          url,
+          method: 'POST',
+          headers: { ...headers, Accept: 'text/event-stream' },
+          body: JSON.stringify(body),
+          timeoutMs: this.timeout,
+        });
+        if (!res.ok) {
+          const err = new Error(`Vertex AI Error: ${res.status}`);
+          err.status = res.status;
+          err.response = res.body;
+          throw err;
+        }
+        for (const data of parseSSEText(res.body)) {
+          const candidates = data?.candidates;
+          if (candidates && candidates.length > 0) {
+            const content = candidates[0].content;
+            if (content?.parts) {
+              for (const part of content.parts) {
+                if (part.text) yield part.text;
               }
             }
           }
         }
+        return;
       }
-    } finally {
-      clearTimeout(timeoutId);
+
+      // Browser fallback
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { ...headers, Accept: 'text/event-stream' },
+          signal: controller.signal,
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          const errorText = await response.text();
+          const err = new Error(`Vertex AI Error: ${response.status} ${errorText}`);
+          err.status = response.status;
+          throw err;
+        }
+        for await (const data of handleSSE(response)) {
+          const candidates = data?.candidates;
+          if (candidates && candidates.length > 0) {
+            const content = candidates[0].content;
+            if (content?.parts) {
+              for (const part of content.parts) {
+                if (part.text) yield part.text;
+              }
+            }
+          }
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }.bind(this);
+
+    try {
+      yield* tryStreamOnce({ region: this.region, baseHost: this.baseHost });
+      return;
+    } catch (err) {
+      if (err?.status === 404 && this.region !== 'global') {
+        yield* tryStreamOnce({ region: 'global', baseHost: getHostForRegion('global') });
+        return;
+      }
+      throw err;
     }
   }
 
@@ -292,33 +472,71 @@ export class VertexAIProvider {
    */
   async listModels() {
     try {
-      if (!this.serviceAccountJson) {
-        throw new Error('Vertex AI 列表需要 Service Account，前端未啟用，請改用 Makersuite');
-      }
       if (!this.projectId) {
         throw new Error('Project ID required');
       }
 
       const headers = await this.getHeaders();
-      const url = `${this.baseUrl}/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models`;
+      const out = [];
+      const seen = new Set();
+      const collectFrom = async ({ region, baseHost }) => {
+        let pageToken = '';
+        const pageTokensSeen = new Set();
+        let pages = 0;
+        while (true) {
+          const qs = new URLSearchParams();
+          qs.set('pageSize', '1000');
+          if (pageToken) qs.set('pageToken', pageToken);
+          const url = `${baseHost}/v1/projects/${this.projectId}/locations/${region}/publishers/google/models?${qs.toString()}`;
 
-      const response = await fetch(url, { headers });
+          const data = await requestJson({ url, method: 'GET', headers, timeoutMs: this.timeout });
+          const models = Array.isArray(data?.models) ? data.models : [];
+          models.forEach((m) => {
+            const id = String(m?.name || '').split('/').pop();
+            if (!id) return;
+            if (seen.has(id)) return;
+            seen.add(id);
+            out.push(id);
+          });
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models: ${response.status}`);
+          pageToken = String(data?.nextPageToken || '').trim();
+          pages++;
+          if (!pageToken) break;
+          if (pageTokensSeen.has(pageToken)) break;
+          pageTokensSeen.add(pageToken);
+          if (pages > 200) break;
+        }
+      };
+
+      await collectFrom({ region: this.region, baseHost: this.baseHost });
+      if (this.region !== 'global') {
+        await collectFrom({ region: 'global', baseHost: getHostForRegion('global') });
       }
 
-      const data = await response.json();
-      const models = data.models || [];
-      return models.map(m => m.name.split('/').pop());
+      // ST usually shows a curated set; here we prefer gemini models on top.
+      const gemini = out.filter(id => id.toLowerCase().includes('gemini'));
+      const rest = out.filter(id => !id.toLowerCase().includes('gemini'));
+      const merged = [...gemini, ...rest];
+      return merged.length ? merged : this.getFallbackModels();
     } catch (error) {
       console.warn('Failed to list Vertex AI models:', error);
-      return [
-        'gemini-2.0-flash-exp',
-        'gemini-1.5-pro',
-        'gemini-1.5-flash',
-      ];
+      return this.getFallbackModels();
     }
+  }
+
+  getFallbackModels() {
+    return [
+      'gemini-2.0-flash-exp',
+      'gemini-2.0-flash',
+      'gemini-2.0-pro-exp',
+      'gemini-1.5-pro',
+      'gemini-1.5-pro-002',
+      'gemini-1.5-flash',
+      'gemini-1.5-flash-002',
+      'gemini-1.0-pro',
+      'text-bison',
+      'chat-bison',
+    ];
   }
 
   /**

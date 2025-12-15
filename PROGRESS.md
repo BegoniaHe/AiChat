@@ -901,3 +901,34 @@
   - 文件修改：
     - 修改：`src/scripts/ui/config-panel.js`
     - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-16 00:10 - API 配置体验修复 + Vertex AI 按 ST 方式接入
+  - **配置面板不再被切顶**：面板定位改为贴合安全区顶部，内容过长也不会把标题挤出屏幕。
+  - **刷新模型不再误报缺 Key**：`刷新列表` 会复用已保存的 Key（遮罩状态下 `apiKey=null` 也能正常拉取模型）。
+  - **Vertex AI**：使用 Service Account JSON 通过 WebCrypto 进行 RS256 签名生成 JWT，并通过原生 `http_request` 交换 OAuth2 token；后续调用 Vertex API 同样走原生请求，避免 WebView CORS（实现路径与 SillyTavern 的“后端签名+换 token”一致，只是签名在 WebCrypto 内完成）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/config-panel.js`
+    - 修改：`src/scripts/api/providers/vertexai.js`
+
+- 2025-12-16 00:14 - 修复启动崩溃：config-panel 重复声明导致语法错误
+  - **问题**：`populateForm()` 中重复声明 `const timeoutEl`，Android WebView 直接抛 `Uncaught SyntaxError` 导致页面无法加载。
+  - **修复**：移除重复代码块。
+  - 文件修改：
+    - 修改：`src/scripts/ui/config-panel.js`
+
+- 2025-12-16 00:23 - Vertex AI 改进：无需 API Key + 模型列表更完整（分页）
+  - **无需 Key**：Vertex AI 使用 Service Account 即可工作；`保存/切换/刷新列表` 不再误判“Key 不可用”，并允许在无 Key 情况下初始化客户端。
+  - **模型列表**：`publishers/google/models` 增加 `pageSize=100` + `nextPageToken` 分页抓取；失败时提供更接近 ST 的 10 项 fallback 列表。
+  - 文件修改：
+    - 修改：`src/scripts/ui/bridge.js`
+    - 修改：`src/scripts/ui/config-panel.js`
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/api/providers/vertexai.js`
+
+- 2025-12-16 00:37 - Vertex AI 模型拉全 + 404 自动回退 global + API 配置弹窗层级对齐
+  - **模型列表**：移除分页抓取的人工页数上限，改为抓取所有分页；并额外合并 `locations/global` 的模型列表（去重后展示）。
+  - **404 回退**：当指定 Region 请求模型返回 404 时，自动用 `locations/global` + `aiplatform.googleapis.com` 重试（用于如 `gemini-3-pro-preview` 这类只在 global 可用的模型）。
+  - **UI 层级**：API 配置弹窗的 `z-index` 调整为与预设弹窗一致，避免被覆盖。
+  - 文件修改：
+    - 修改：`src/scripts/api/providers/vertexai.js`
+    - 修改：`src/scripts/ui/config-panel.js`

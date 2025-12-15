@@ -20,6 +20,13 @@ const safeInvoke = async (cmd, args) => {
     return invoker(cmd, args);
 };
 
+const canInitClient = (cfg) => {
+    const c = cfg || {};
+    const hasKey = typeof c.apiKey === 'string' && c.apiKey.trim().length > 0;
+    const hasVertexSa = c.provider === 'vertexai' && typeof c.vertexaiServiceAccount === 'string' && c.vertexaiServiceAccount.trim().length > 0;
+    return hasKey || hasVertexSa;
+};
+
 const truthy = (v) => {
     if (v === null || v === undefined) return false;
     if (typeof v === 'string') return v.trim().length > 0;
@@ -167,11 +174,11 @@ class AppBridge {
             }
 
             // 初始化 LLM 客户端
-            if (config.apiKey) {
+            if (canInitClient(config)) {
                 this.client = new LLMClient(config);
                 logger.info(`LLM 客户端初始化成功 (provider: ${config.provider})`);
             } else {
-                logger.warn('未配置 API Key，请先配置');
+                logger.warn('未配置 API 认证信息，请先配置');
             }
 
             this.initialized = true;
@@ -189,7 +196,7 @@ class AppBridge {
      */
     isConfigured() {
         const config = this.config.get();
-        return config && config.apiKey && config.apiKey.length > 0;
+        return Boolean(canInitClient(config));
     }
 
     /**

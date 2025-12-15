@@ -6,6 +6,13 @@ import { ConfigManager } from '../storage/config.js';
 import { LLMClient } from '../api/client.js';
 import { logger } from '../utils/logger.js';
 
+const canInitClient = (cfg) => {
+    const c = cfg || {};
+    const hasKey = typeof c.apiKey === 'string' && c.apiKey.trim().length > 0;
+    const hasVertexSa = c.provider === 'vertexai' && typeof c.vertexaiServiceAccount === 'string' && c.vertexaiServiceAccount.trim().length > 0;
+    return hasKey || hasVertexSa;
+};
+
 export class ConfigPanel {
     constructor() {
         this.configManager = new ConfigManager();
@@ -64,7 +71,7 @@ export class ConfigPanel {
             width: 100%;
             height: 100%;
             background: rgba(0, 0, 0, 0.5);
-            z-index: 9999;
+            z-index: 20000;
         `;
         this.overlayElement.onclick = () => this.hide();
 
@@ -73,7 +80,7 @@ export class ConfigPanel {
         this.element.id = 'config-panel';
         this.element.innerHTML = `
             <div style="padding: 20px; background: white; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-                        width: 96vw; max-width: 760px; max-height: 80vh; overflow-y: auto;">
+                        width: 96vw; max-width: 760px; max-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 20px); overflow-y: auto;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
                     <h2 style="margin: 0; color: #0f172a;">API 配置</h2>
                     <span style="color:#64748b; font-size:12px;">(保存後立即生效)</span>
@@ -204,10 +211,10 @@ export class ConfigPanel {
         this.element.style.cssText = `
             display: none;
             position: fixed;
-            top: 50%;
+            top: calc(env(safe-area-inset-top, 0px) + 10px);
             left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 10000;
+            transform: translateX(-50%);
+            z-index: 21000;
         `;
 
         // 阻止点击面板时关闭
@@ -236,7 +243,7 @@ export class ConfigPanel {
             this.populateForm(config);
             if (window.appBridge) {
                 window.appBridge.config.set(config);
-                window.appBridge.client = config.apiKey ? new LLMClient(config) : null;
+                window.appBridge.client = canInitClient(config) ? new LLMClient(config) : null;
             }
         };
 
@@ -867,7 +874,7 @@ export class ConfigPanel {
         const runtime = await this.configManager.load();
         if (window.appBridge) {
             window.appBridge.config.set(runtime);
-            window.appBridge.client = runtime.apiKey ? new LLMClient(runtime) : null;
+            window.appBridge.client = canInitClient(runtime) ? new LLMClient(runtime) : null;
         }
     }
 
@@ -982,11 +989,11 @@ export class ConfigPanel {
             // 重新初始化客户端
             if (window.appBridge) {
                 const runtime = await this.configManager.load();
-                window.appBridge.client = runtime.apiKey ? new LLMClient(runtime) : null;
+                window.appBridge.client = canInitClient(runtime) ? new LLMClient(runtime) : null;
                 window.appBridge.config.set(runtime);
 
                 // 若保存後仍拿不到 key（解密/保存失敗），給出明確提示並不自動關閉
-                if (!runtime.apiKey) {
+                if (!canInitClient(runtime)) {
                     this.showStatus('已保存，但當前 Key 不可用（請用 🔑 重新保存 Key）', 'error');
                     return;
                 }
@@ -1012,13 +1019,25 @@ export class ConfigPanel {
         const originalText = this.testButton.textContent;
 
         try {
-            if (formData.provider === 'vertexai') {
-                this.showStatus('Vertex AI 需後端簽名，目前前端未啟用，請改用 Makersuite 或自行代理。', 'error');
-                return;
-            }
-
             this.testButton.textContent = '测试中...';
             this.testButton.disabled = true;
+
+            if (formData.provider === 'vertexai') {
+                if (!formData.vertexaiServiceAccount || !String(formData.vertexaiServiceAccount).trim()) {
+                    this.showStatus('请填写 Vertex AI Service Account（JSON）后再测试连接', 'error');
+                    return;
+                }
+                const tempClient = new LLMClient({ ...formData, apiKey: '' });
+                const result = await tempClient.healthCheck();
+                if (result.ok) {
+                    this.showStatus('✓ 连接成功！', 'success');
+                    logger.info('API 连接测试成功');
+                } else {
+                    this.showStatus(`连接失败: ${result.error}`, 'error');
+                    logger.warn('API 连接测试失败:', result.error);
+                }
+                return;
+            }
 
             const runtime = await this.configManager.load();
             const existingKey = (runtime?.apiKey || '').trim();
@@ -1069,15 +1088,18 @@ export class ConfigPanel {
                 this.showStatus('請先填寫 Base URL', 'error');
                 return;
             }
-            if (!formData.apiKey && formData.provider !== 'vertexai') {
-                this.showStatus('請先填寫 API Key', 'error');
+            const runtime = await this.configManager.load();
+            const existingKey = (runtime?.apiKey || '').trim();
+            const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
+            if (!keyToUse && formData.provider !== 'vertexai') {
+                this.showStatus('請先用 🔑 保存至少一個 API Key，或在此欄貼上 Key', 'error');
                 return;
             }
             if (formData.provider === 'vertexai') {
-                this.showStatus('Vertex AI 目前需後端簽名，前端未啟用；請改用 Google AI Studio (Makersuite) 或提供後端代理。', 'error');
-                modelHelp.textContent = 'Vertex AI 需要後端代理，前端無法直接列出模型';
-                modelHelp.style.color = '#721c24';
-                return;
+                if (!formData.vertexaiServiceAccount || !String(formData.vertexaiServiceAccount).trim()) {
+                    this.showStatus('请填写 Vertex AI Service Account（JSON）后再刷新列表', 'error');
+                    return;
+                }
             }
 
             // 设置加载状态
@@ -1087,7 +1109,7 @@ export class ConfigPanel {
             modelHelp.style.color = '#1976d2';
 
             // 创建临时客户端
-            const tempClient = new LLMClient(formData);
+            const tempClient = new LLMClient({ ...formData, apiKey: formData.provider === 'vertexai' ? '' : keyToUse });
 
             // 获取模型列表
             logger.info(`正在获取 ${formData.provider} 的模型列表...`);
