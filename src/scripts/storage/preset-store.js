@@ -18,6 +18,51 @@ const STORE_KEY = 'prompt_preset_store_v1';
 
 const genId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
+// 对话模式：从 `手机流式.html` 迁移过来的“私聊协议提示词”（已移除群聊/动态/主动消息部分）
+// 注意：该段提示词用于让模型输出可解析的私聊格式，后续会在 app 内解析分流。
+const DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT = `
+# 行为风格与节奏指南 (Style & Pacing Guide)
+- **🎭 角色扮演核心**:
+  - **性格优先**: 严格遵循 {{char}} 的性格设定，这是最高原则。
+  - **情境感知**: 根据对话氛围（闲聊、深入探讨、紧急、调情等）调整回复风格。
+- **💬 聊天风格与节奏（核心格式规则）**:
+  - **连续短消息**: 当回复较长或包含多个要点时，必须拆分为多条短消息（多行），模拟真实聊天节奏。
+  - **禁止复述**: 严格禁止重复、补充或复述 {{user}} 输入内容；不要对 {{user}} 内容进行解释/改写。
+  - **禁止冒充**: 严格禁止冒充 {{user}}，绝不模拟或代替 {{user}} 发言。
+  - **保持互动**: 回复必须包含提问或引导，不能中断对话。
+
+# 对话模式输出协议（仅私聊 / 单聊天室）
+你可以在 \`<thinking>\` 里思考（可选），但 **程序只会解析 \`<content>\`**。
+
+## 输出硬性要求
+1. 输出必须包含一个 \`<content>\`...\`</content>\` 区块；**所有可见回复必须放在 content 内**。
+2. \`<content>\` 内必须且只能包含一个私聊标签：
+   - \`<{{user}}和{{char}}的私聊>\` ... \`</{{user}}和{{char}}的私聊>\`
+   - **标签名字顺序必须是**：\`{{user}}和{{char}}的私聊\`（不要写反）
+3. 私聊标签内部，每一行代表一条要发送到聊天室的消息，并且 **必须以 \`-\` 开头**：
+   - \`- 你好呀\`
+   - \`- 你现在在做什么？\`
+4. 若消息内容需要换行，请在消息内容中使用 \`<br>\`（而不是直接换行）。
+5. 禁止输出群聊、动态、评论、主动发起等任何其他格式/标签（本阶段仅私聊）。
+
+## 特殊消息类型（仍然作为一条消息，用 - 开头）
+以下类型必须作为独立的一条消息（独立成行）：
+- \`- [bqb-表情包内容]\`
+- \`- [zz-金额元]\`（仅私聊可用）
+- \`- [yy-语音内容]\`
+- \`- [music-歌名$歌手]\`
+- \`- [img-内容描述]\`
+
+## 私聊示例（仅示例，按当前对话生成）
+<thinking>...</thinking>
+<content>
+<{{user}}和{{char}}的私聊>
+- 你好呀，刚刚在忙什么？
+- 想听你说说今天发生了什么。
+</{{user}}和{{char}}的私聊>
+</content>
+`.trim();
+
 const clone = (v) => {
     try {
         return structuredClone(v);
@@ -125,6 +170,17 @@ export class PresetStore {
         const defaults = await this.loadBundledDefaults();
         if (!state || typeof state !== 'object' || !state.presets) {
             state = makeDefaultState(defaults);
+            // 对话模式默认值（保存于 sysprompt 预设）
+            for (const p of Object.values(state.presets.sysprompt || {})) {
+                if (!p || typeof p !== 'object') continue;
+                if (typeof p.dialogue_enabled !== 'boolean') p.dialogue_enabled = true;
+                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 0;
+                if (typeof p.dialogue_depth !== 'number') p.dialogue_depth = 1;
+                if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0;
+                if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim()) {
+                    p.dialogue_rules = DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT;
+                }
+            }
             await this.persist(state);
         } else {
             // ensure structure and merge defaults (do not overwrite user edits)
@@ -143,6 +199,20 @@ export class PresetStore {
                 }
                 if (typeof state.enabled[type] !== 'boolean') {
                     state.enabled[type] = (type === 'sysprompt' || type === 'context' || type === 'openai');
+                }
+            }
+
+            // 对话模式默认值（保存于 sysprompt 预设，不覆盖用户已配置内容）
+            for (const p of Object.values(state.presets.sysprompt || {})) {
+                if (!p || typeof p !== 'object') continue;
+                if (typeof p.dialogue_enabled !== 'boolean') p.dialogue_enabled = true; // 聊天室自动启用
+                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 0; // IN_PROMPT
+                if (typeof p.dialogue_depth !== 'number') p.dialogue_depth = 1;
+                if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0; // SYSTEM
+                const rules = (typeof p.dialogue_rules === 'string') ? p.dialogue_rules : '';
+                const looksLegacy = rules.includes('msg_start') && rules.includes('QQ 私聊格式协议') && !rules.includes('<content>');
+                if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim() || looksLegacy) {
+                    p.dialogue_rules = DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT;
                 }
             }
             await this.persist(state);

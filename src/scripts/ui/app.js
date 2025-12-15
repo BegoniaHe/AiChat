@@ -15,6 +15,7 @@ import { PresetPanel } from './preset-panel.js';
 import { RegexPanel } from './regex-panel.js';
 import { RegexSessionPanel } from './regex-session-panel.js';
 import { ContactSettingsPanel } from './contact-settings-panel.js';
+import { DialogueStreamParser } from './chat/dialogue-stream-parser.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -87,7 +88,11 @@ const initApp = async () => {
             const depth = (j === null) ? undefined : (total - 1 - j);
 
             if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
-                return { ...m, content: window.appBridge.applyOutputDisplayRegex(base, { depth }) };
+                // === 创意写作模式（暂时停用）===
+                // AI 回覆：输出后先经过正则（display），再做富文本/iframe 渲染
+                // return { ...m, content: window.appBridge.applyOutputDisplayRegex(base, { depth }) };
+                // === 对话模式 ===
+                return { ...m, content: base };
             }
             if (m.role === 'user' && (m.type === 'text' || !m.type)) {
                 return { ...m, content: window.appBridge.applyInputDisplayRegex(base, { depth }) };
@@ -547,7 +552,29 @@ const initApp = async () => {
         const sessionId = chatStore.getCurrent();
         const contact = contactsStore.getContact(sessionId);
         const characterName = contact?.name || (sessionId.startsWith('group:') ? sessionId.replace(/^group:/, '') : sessionId) || 'assistant';
-        const userName = 'user';
+        const userName = '我';
+        const normalizeName = (s) => String(s || '').trim();
+        const resolvePrivateChatTargetSessionId = (otherName) => {
+            const other = normalizeName(otherName);
+            if (!other) return sessionId;
+            const currentContact = contactsStore.getContact(sessionId);
+            const currentName = normalizeName(currentContact?.name || sessionId);
+            const currentId = normalizeName(sessionId);
+            if (other === currentName || other === currentId) return sessionId;
+
+            // Prefer an existing contact with the same display name (avoid duplicates like "室友" vs internal id)
+            try {
+                const matches = (contactsStore.listContacts?.() || []).filter((c) => normalizeName(c?.name || c?.id) === other);
+                if (matches.length === 1) return matches[0].id;
+            } catch {}
+
+            // If otherName itself is an existing contact id, reuse it
+            const byId = contactsStore.getContact(other);
+            if (byId?.id) return byId.id;
+
+            // Fallback: treat name as id (legacy behavior)
+            return other;
+        };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
             const history = all
@@ -609,40 +636,121 @@ const initApp = async () => {
         try {
             if (config.stream) {
                 const assistantAvatar = getAssistantAvatarForSession(sessionId);
-                streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
-                const stream = await window.appBridge.generate(text, llmContext(text));
-                let full = '';
-                for await (const chunk of stream) {
-                    full += chunk;
-                    streamCtrl.update(full);
+                const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
+                const dialogueEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
+
+                if (dialogueEnabled) {
+                    // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
+                    ui.showTyping(assistantAvatar);
+                    const parser = new DialogueStreamParser({ userName });
+                    const stream = await window.appBridge.generate(text, llmContext(text));
+                    for await (const chunk of stream) {
+                        const events = parser.push(chunk);
+                        for (const ev of events) {
+                            if (ev.type !== 'private_chat') continue;
+                            ui.hideTyping();
+
+                            // 默认路由到当前 session；若标签指向其他私聊，则创建/写入对应会话（后续群聊/动态会扩展）
+                            const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+                            if (targetSessionId && !contactsStore.getContact(targetSessionId)) {
+                                contactsStore.upsertContact({ id: targetSessionId, name: targetSessionId });
+                            }
+
+                            ev.messages.forEach((msgText) => {
+                                const parsed = {
+                                    role: 'assistant',
+                                    type: 'text',
+                                    ...parseSpecialMessage(String(msgText || '')),
+                                    name: '助手',
+                                    avatar: getAssistantAvatarForSession(targetSessionId),
+                                    time: formatNowTime(),
+                                };
+                                if (targetSessionId === sessionId) {
+                                    ui.addMessage(parsed);
+                                }
+                                chatStore.appendMessage(parsed, targetSessionId);
+                            });
+                            refreshChatAndContacts();
+
+                            // Continue waiting animation until stream ends / next tag arrives
+                            ui.showTyping(assistantAvatar);
+                        }
+                    }
+                    ui.hideTyping();
+                    refreshChatAndContacts();
+                } else {
+                    // 兼容旧逻辑（流式逐字）
+                    streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
+                    const stream = await window.appBridge.generate(text, llmContext(text));
+                    let full = '';
+                    for await (const chunk of stream) {
+                        full += chunk;
+                        streamCtrl.update(full);
+                    }
+                    let stored = full;
+                    let display = full;
+                    // === 创意写作模式（暂时停用）===
+                    // try {
+                    //     stored = window.appBridge.applyOutputStoredRegex(full);
+                    //     display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                    //     streamCtrl.update(display);
+                    // } catch {}
+                    const parsed = {
+                        role: 'assistant',
+                        name: '助手',
+                        avatar: assistantAvatar,
+                        time: formatNowTime(),
+                        id: streamCtrl?.id,
+                        rawOriginal: full,
+                        raw: stored,
+                        ...parseSpecialMessage(display)
+                    };
+                    streamCtrl.finish(parsed);
+                    chatStore.appendMessage(parsed, sessionId);
+                    refreshChatAndContacts();
                 }
-                let stored = full;
-                let display = full;
-                try {
-                    stored = window.appBridge.applyOutputStoredRegex(full);
-                    display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-                    streamCtrl.update(display);
-                } catch {}
-                const parsed = {
-                    role: 'assistant',
-                    name: '助手',
-                    avatar: assistantAvatar,
-                    time: formatNowTime(),
-                    id: streamCtrl?.id,
-                    rawOriginal: full,
-                    raw: stored,
-                    ...parseSpecialMessage(display)
-                };
-                streamCtrl.finish(parsed);
-                chatStore.appendMessage(parsed, sessionId);
-                refreshChatAndContacts();
             } else {
                 const assistantAvatar = getAssistantAvatarForSession(sessionId);
                 ui.showTyping(assistantAvatar);
                 const resultRaw = await window.appBridge.generate(text, llmContext(text));
                 ui.hideTyping();
-                const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
-                const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
+                const dialogueEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
+                if (dialogueEnabled) {
+                    const parser = new DialogueStreamParser({ userName });
+                    const events = parser.push(resultRaw);
+                    const privateEvents = events.filter(e => e?.type === 'private_chat');
+                    if (privateEvents.length) {
+                        privateEvents.forEach((ev) => {
+                            const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+                            if (targetSessionId && !contactsStore.getContact(targetSessionId)) {
+                                contactsStore.upsertContact({ id: targetSessionId, name: targetSessionId });
+                            }
+                            ev.messages.forEach((msgText) => {
+                                const parsed = {
+                                    role: 'assistant',
+                                    ...parseSpecialMessage(String(msgText || '')),
+                                    name: '助手',
+                                    avatar: getAssistantAvatarForSession(targetSessionId),
+                                    time: formatNowTime(),
+                                };
+                                if (targetSessionId === sessionId) {
+                                    ui.addMessage(parsed);
+                                }
+                                chatStore.appendMessage(parsed, targetSessionId);
+                            });
+                        });
+                        refreshChatAndContacts();
+                        return;
+                    }
+                    // 如果对话模式未解析到有效标签，回退显示原文，便于调试
+                    window.toastr?.warning?.('未解析到有效对话标签，已回退显示原文');
+                }
+                // === 创意写作模式（暂时停用）===
+                // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
+                // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                const stored = resultRaw;
+                const display = resultRaw;
                 const parsed = {
                     role: 'assistant',
                     name: '助手',
@@ -682,8 +790,11 @@ const initApp = async () => {
         }
         if (action === 'edit-assistant-raw' && message.role === 'assistant') {
             const next = String(payload?.text ?? '');
-            const stored = window.appBridge.applyOutputStoredRegex(next, { isEdit: true });
-            const display = window.appBridge.applyOutputDisplayRegex(stored, { isEdit: true, depth: 0 });
+            // === 创意写作模式（暂时停用）===
+            // const stored = window.appBridge.applyOutputStoredRegex(next, { isEdit: true });
+            // const display = window.appBridge.applyOutputDisplayRegex(stored, { isEdit: true, depth: 0 });
+            const stored = next;
+            const display = next;
             const updater = {
                 rawOriginal: next,
                 raw: stored,
@@ -734,11 +845,12 @@ const initApp = async () => {
                     }
                     let stored = full;
                     let display = full;
-                    try {
-                        stored = window.appBridge.applyOutputStoredRegex(full);
-                        display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-                        streamCtrl.update(display);
-                    } catch {}
+                    // === 创意写作模式（暂时停用）===
+                    // try {
+                    //     stored = window.appBridge.applyOutputStoredRegex(full);
+                    //     display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                    //     streamCtrl.update(display);
+                    // } catch {}
                     const parsed = {
                         role: 'assistant',
                         name: '助手',
@@ -756,8 +868,11 @@ const initApp = async () => {
                     ui.showTyping(assistantAvatar);
                     const resultRaw = await window.appBridge.generate(text, llmContext(text));
                     ui.hideTyping();
-                    const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
-                    const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                    // === 创意写作模式（暂时停用）===
+                    // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
+                    // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
+                    const stored = resultRaw;
+                    const display = resultRaw;
                     const parsed = {
                         role: 'assistant',
                         name: '助手',

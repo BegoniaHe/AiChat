@@ -367,8 +367,12 @@ export class ChatUI {
                 break;
             case 'text':
             default:
+                // === 创意写作模式（暂时停用）===
                 // Safe rich rendering (code fences + html iframe preview)
-                renderRichText(bubble, message.content, { messageId: message.id });
+                // renderRichText(bubble, message.content, { messageId: message.id });
+                // === 对话模式（纯文本）===
+                bubble.textContent = String(message.content ?? '');
+                bubble.style.whiteSpace = 'pre-wrap';
         }
 
         // 时间戳
@@ -498,7 +502,11 @@ export class ChatUI {
                     try {
                         // Render rich content for the final text
                         const text = String(fm?.content ?? '');
-                        renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
+                        // === 创意写作模式（暂时停用）===
+                        // renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
+                        // === 对话模式（纯文本）===
+                        messageEl.textContent = text;
+                        messageEl.style.whiteSpace = 'pre-wrap';
                     } catch {}
                 }
             },

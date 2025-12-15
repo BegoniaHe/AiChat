@@ -390,9 +390,19 @@ class AppBridge {
         const useSysprompt = Boolean(presetState?.enabled?.sysprompt);
         const useContext = Boolean(presetState?.enabled?.context);
         const useOpenAIPreset = Boolean(presetState?.enabled?.openai);
-        const sysp = useSysprompt ? this.presets.getActive('sysprompt') : null;
+        const syspActive = this.presets.getActive('sysprompt') || null;
+        const sysp = useSysprompt ? syspActive : null;
         const ctxp = useContext ? this.presets.getActive('context') : null;
         const openp = useOpenAIPreset ? this.presets.getActive('openai') : null;
+
+        // 对话模式：额外注入对话协议提示词（保存于 sysprompt 预设）
+        // ST extension prompt types => IN_PROMPT:0, IN_CHAT:1, BEFORE_PROMPT:2, NONE:-1
+        const dialogueEnabled = Boolean(syspActive?.dialogue_enabled);
+        const dialogueRulesRaw = (typeof syspActive?.dialogue_rules === 'string') ? syspActive.dialogue_rules : '';
+        const dialogueRules = applyMacros(dialogueRulesRaw, { user: name1, char: name2 });
+        const dialoguePosition = Number.isFinite(Number(syspActive?.dialogue_position)) ? Number(syspActive.dialogue_position) : 0;
+        const dialogueDepth = Number.isFinite(Number(syspActive?.dialogue_depth)) ? Math.max(0, Math.trunc(Number(syspActive.dialogue_depth))) : 1;
+        const dialogueRole = Number.isFinite(Number(syspActive?.dialogue_role)) ? Math.trunc(Number(syspActive.dialogue_role)) : 0;
 
         // Formatting helpers from OpenAI preset (optional)
         const wiFormat = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
@@ -417,6 +427,18 @@ class AppBridge {
                 });
                 return { role, content: out };
             });
+
+            // 对话提示词：按 ST extension prompt 的位置/深度语义注入
+            if (dialogueEnabled && dialogueRules) {
+                if (dialoguePosition === 1) { // IN_CHAT
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[dialogueRole] || 'system';
+                    const idx = Math.max(0, history.length - dialogueDepth);
+                    history.splice(idx, 0, { role, content: dialogueRules });
+                } else if (dialoguePosition === 2 || dialoguePosition === 0) { // BEFORE_PROMPT or IN_PROMPT
+                    messages.push({ role: 'system', content: dialogueRules });
+                }
+            }
             const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
             const byId = new Map();
             prompts.forEach(p => { if (p?.identifier) byId.set(p.identifier, p); });
@@ -546,6 +568,11 @@ class AppBridge {
             messages.push({ role: 'system', content: combinedStoryString });
         }
 
+        // 对话提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
+        if (dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
+            messages.push({ role: 'system', content: dialogueRules });
+        }
+
         // If context preset disabled, fall back to legacy system prompt building
         if (!useContext) {
             if (context.systemPrompt) {
@@ -574,6 +601,13 @@ class AppBridge {
             const role = roleMap[injectRole] || 'system';
             const idx = Math.max(0, history.length - injectDepth);
             history.splice(idx, 0, { role, content: combinedStoryString });
+        }
+        // IN_CHAT: inject dialogue rules into history (depth + role)
+        if (dialogueEnabled && dialogueRules && dialoguePosition === 1) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[dialogueRole] || 'system';
+            const idx = Math.max(0, history.length - dialogueDepth);
+            history.splice(idx, 0, { role, content: dialogueRules });
         }
 
         if (history.length > 0) {
