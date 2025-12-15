@@ -44,6 +44,14 @@ export class MomentsStore {
                 if (typeof m.authorAvatar === 'string') {
                     m.authorAvatar = this._sanitizeAvatarForStore(m.authorAvatar);
                 }
+                // Ensure comment ids for stable delete operations
+                if (Array.isArray(m.comments)) {
+                    m.comments = m.comments.map((c) => {
+                        if (!c || typeof c !== 'object') return c;
+                        if (!c.id) return { ...c, id: genId('comment') };
+                        return c;
+                    });
+                }
             });
         } catch (err) {
             logger.warn('moments store normalize failed', err);
@@ -192,6 +200,7 @@ export class MomentsStore {
         (Array.isArray(comments) ? comments : []).forEach((c) => {
             if (!c) return;
             existing.push({
+                id: genId('comment'),
                 author: String(c.author || '').trim(),
                 content: String(c.content || ''),
                 time: String(c.time || ''),
@@ -202,6 +211,19 @@ export class MomentsStore {
         const trimmed = existing.slice(-50);
         this.upsert({ ...m, comments: trimmed, timestamp: m.timestamp || Date.now() });
         return this.get(id);
+    }
+
+    removeComment(momentId, commentId) {
+        const id = String(momentId || '').trim();
+        const cid = String(commentId || '').trim();
+        if (!id || !cid) return false;
+        const m = this.get(id);
+        if (!m) return false;
+        const list = Array.isArray(m.comments) ? m.comments : [];
+        const next = list.filter((c) => String(c?.id || '').trim() !== cid);
+        if (next.length === list.length) return false;
+        this.upsert({ id, comments: next });
+        return true;
     }
 
     remove(momentId) {

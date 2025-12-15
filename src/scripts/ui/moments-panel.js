@@ -26,6 +26,7 @@ export class MomentsPanel {
         this.expandedComments = new Set();
         this.openComposer = new Set();
         this.pendingComment = new Set();
+        this.commentMenuEl = null;
     }
 
     mount(listEl) {
@@ -135,6 +136,62 @@ export class MomentsPanel {
         el.style.left = `${left}px`;
     }
 
+    ensureCommentMenu() {
+        if (this.commentMenuEl) return;
+        const el = document.createElement('div');
+        el.className = 'moment-menu-dropdown hidden';
+        el.innerHTML = `
+            <button class="moment-menu-item danger" data-action="delete-comment">🗑️ 删除评论</button>
+            <button class="moment-menu-item" data-action="cancel">❌ 取消</button>
+        `;
+        el.addEventListener('click', (e) => e.stopPropagation());
+        document.addEventListener('click', () => this.hideCommentMenu());
+        el.querySelectorAll('button').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.dataset.action;
+                const momentId = el.dataset.momentId || '';
+                const commentId = el.dataset.commentId || '';
+                this.hideCommentMenu();
+                if (action === 'delete-comment' && momentId && commentId) {
+                    const ok = confirm('删除这条评论？');
+                    if (!ok) return;
+                    const removed = this.store?.removeComment?.(momentId, commentId);
+                    if (!removed) window.toastr?.warning?.('删除失败：未找到该评论');
+                    else window.toastr?.success?.('已删除评论');
+                    this.render({ preserveScroll: true });
+                }
+            });
+        });
+        document.body.appendChild(el);
+        this.commentMenuEl = el;
+    }
+
+    hideCommentMenu() {
+        if (!this.commentMenuEl) return;
+        this.commentMenuEl.classList.add('hidden');
+        this.commentMenuEl.dataset.momentId = '';
+        this.commentMenuEl.dataset.commentId = '';
+    }
+
+    showCommentMenu({ x, y }, momentId, commentId) {
+        this.ensureCommentMenu();
+        const el = this.commentMenuEl;
+        if (!el) return;
+        el.dataset.momentId = String(momentId || '');
+        el.dataset.commentId = String(commentId || '');
+        el.classList.remove('hidden');
+
+        const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+        const mw = el.offsetWidth || 160;
+        const mh = el.offsetHeight || 88;
+        const margin = 8;
+        const left = Math.max(margin, Math.min(vw - mw - margin, Number(x || 0) - mw + 18));
+        const top = Math.max(margin, Math.min(vh - mh - margin, Number(y || 0) + 8));
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
+    }
+
     render({ preserveScroll = false } = {}) {
         if (!this.listEl) return;
         const moments = this.store?.list?.() || [];
@@ -203,7 +260,7 @@ export class MomentsPanel {
                 <div class="moment-comments ${comments.length ? '' : 'empty'}" ${comments.length ? '' : 'style="display:none;"'}>
                     ${(!expanded && hiddenCount > 0) ? `<div class="moment-comments-toggle" data-action="expand">展开查看更多评论 (${hiddenCount}条)</div>` : ''}
                     ${visibleComments.map((c) => `
-                        <div class="moment-comment">
+                        <div class="moment-comment" data-comment-id="${esc(c.id || '')}">
                             <span class="comment-user">${esc(c.author || '')}：</span>
                             <span class="comment-text">${htmlText(c.content || '')}</span>
                         </div>
@@ -244,6 +301,49 @@ export class MomentsPanel {
                     if (act === 'collapse') this.expandedComments.delete(m.id);
                     this.render({ preserveScroll: true });
                 });
+            });
+
+            // Long press on comment -> delete single comment
+            card.querySelectorAll('.moment-comment').forEach((commentEl) => {
+                commentEl.style.userSelect = 'none';
+                commentEl.style.webkitUserSelect = 'none';
+                const cid = String(commentEl.dataset.commentId || '').trim();
+                let timer = null;
+                let startX = 0;
+                let startY = 0;
+                const clear = () => {
+                    if (timer) clearTimeout(timer);
+                    timer = null;
+                };
+                const schedule = (x, y) => {
+                    clear();
+                    startX = x;
+                    startY = y;
+                    timer = setTimeout(() => {
+                        if (!cid) return;
+                        this.showCommentMenu({ x: startX, y: startY }, m.id, cid);
+                    }, 520);
+                };
+                commentEl.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                });
+                commentEl.addEventListener('touchstart', (e) => {
+                    e.stopPropagation();
+                    const t = e.touches?.[0];
+                    if (!t) return;
+                    schedule(t.clientX, t.clientY);
+                }, { passive: true });
+                commentEl.addEventListener('touchmove', clear, { passive: true });
+                commentEl.addEventListener('touchend', clear, { passive: true });
+                commentEl.addEventListener('touchcancel', clear, { passive: true });
+                // Desktop fallback
+                commentEl.addEventListener('mousedown', (e) => {
+                    if (e.button !== 0) return;
+                    schedule(e.clientX, e.clientY);
+                });
+                commentEl.addEventListener('mouseup', clear);
+                commentEl.addEventListener('mouseleave', clear);
             });
 
             const sendBtn = card.querySelector('.moment_comment[data-action="send"]');

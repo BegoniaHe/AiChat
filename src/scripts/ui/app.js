@@ -68,6 +68,60 @@ const initApp = async () => {
         user: './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png',
         assistant: './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp'
     };
+
+    const getContactCountN = () => {
+        try {
+            const list = contactsStore.listContacts?.() || [];
+            const n = list.filter(c => c && !c.isGroup).length;
+            return Math.max(1, n);
+        } catch {
+            return 1;
+        }
+    };
+
+    const randInt = (min, max) => {
+        const a = Number.isFinite(Number(min)) ? Number(min) : 0;
+        const b = Number.isFinite(Number(max)) ? Number(max) : 0;
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+        return Math.floor(lo + Math.random() * (hi - lo + 1));
+    };
+
+    const normalizeInitialMomentStats = ({ views, likes }, n) => {
+        const nEff = Math.max(1, Number(n) || 1);
+        const maxViews = Math.max(0, nEff * 10 - 1);
+        const maxLikes = Math.max(0, nEff * 2 - 1);
+        let v = Number.isFinite(Number(views)) ? Number(views) : 0;
+        let l = Number.isFinite(Number(likes)) ? Number(likes) : 0;
+
+        if (v < 0 || v >= nEff * 10) v = maxViews > 0 ? randInt(Math.max(0, Math.floor(maxViews * 0.25)), maxViews) : 0;
+        if (l < 0 || l >= nEff * 2) l = maxLikes > 0 ? randInt(0, maxLikes) : 0;
+        l = Math.min(l, v, maxLikes);
+        return { views: v, likes: l };
+    };
+
+    const bumpMomentEngagement = (momentId, n) => {
+        const id = String(momentId || '').trim();
+        if (!id) return;
+        const m = momentsStore.get(id);
+        if (!m) return;
+        const nEff = Math.max(1, Number(n) || 1);
+        const baseViews = Math.max(2, Math.floor(nEff * 0.9));
+        const maxViews = Math.max(baseViews + 2, Math.floor(nEff * 3.2));
+        const viewsInc = randInt(baseViews, maxViews);
+
+        // Likes grow slower than views; cap likes increase relative to view increase.
+        const baseLikes = Math.max(0, Math.floor(nEff * 0.15));
+        const maxLikes = Math.max(baseLikes, Math.floor(nEff * 0.8));
+        let likesInc = randInt(baseLikes, maxLikes);
+        likesInc = Math.min(likesInc, Math.max(1, Math.floor(viewsInc / 3)));
+
+        const nextViews = Number.isFinite(Number(m.views)) ? Number(m.views) + viewsInc : viewsInc;
+        const nextLikesRaw = Number.isFinite(Number(m.likes)) ? Number(m.likes) + likesInc : likesInc;
+        const nextLikes = Math.min(nextLikesRaw, nextViews);
+        momentsStore.upsert({ id, views: nextViews, likes: nextLikes });
+    };
+
     const momentsPanel = new MomentsPanel({
         momentsStore,
         contactsStore,
@@ -95,12 +149,9 @@ const initApp = async () => {
                 window.toastr?.warning?.('未找到该动态');
                 return;
             }
-            // Simulate engagement changes (views/likes fluctuate after interactions)
-            try {
-                const viewsInc = 1 + Math.floor(Math.random() * 3);
-                const likesInc = Math.random() < 0.35 ? 1 : 0;
-                momentsStore.upsert({ id, views: Number(m.views || 0) + viewsInc, likes: Number(m.likes || 0) + likesInc });
-            } catch {}
+            // Engagement simulation depends on contacts count N (views grow faster than likes)
+            const n = getContactCountN();
+            try { bumpMomentEngagement(id, n); } catch {}
 
             // Build a constrained comment-reply task (adapted from 手机流式.html momentCommentTask)
             const authorName = String(m.author || '').trim() || '发布者';
@@ -170,7 +221,10 @@ ${listPart || '-（无）'}
                 (Array.isArray(events) ? events : []).forEach((ev) => {
                     if (!ev || typeof ev !== 'object') return;
                     if (ev.type === 'moments') {
-                        const list = (ev.moments || []).map(mm => ({ ...(mm || {}), originSessionId }));
+                        const list = (ev.moments || []).map(mm => {
+                            const stats = normalizeInitialMomentStats({ views: mm?.views, likes: mm?.likes }, n);
+                            return { ...(mm || {}), ...stats, originSessionId };
+                        });
                         momentsStore.addMany(list);
                         touchedMoments = true;
                         return;
@@ -178,6 +232,7 @@ ${listPart || '-（无）'}
                     if (ev.type === 'moment_reply') {
                         const mid = String(ev.momentId || '').trim() || id;
                         momentsStore.addComments(mid, ev.comments || []);
+                        try { bumpMomentEngagement(mid, n); } catch {}
                         touchedMoments = true;
                         return;
                     }
@@ -929,13 +984,15 @@ ${listPart || '-（无）'}
         };
         const ingestMoments = (moments = []) => {
             const list = Array.isArray(moments) ? moments : [];
+            const n = getContactCountN();
             return list.map((m) => {
                 const author = normalizeMomentAuthorDisplay(m?.author);
                 const authorId = resolveMomentAuthorId(author);
                 let authorAvatar = '';
                 if (authorId === 'user') authorAvatar = avatars.user;
                 else if (authorId) authorAvatar = contactsStore.getContact(authorId)?.avatar || '';
-                return { ...(m || {}), author, authorId, authorAvatar, originSessionId: sessionId };
+                const stats = normalizeInitialMomentStats({ views: m?.views, likes: m?.likes }, n);
+                return { ...(m || {}), ...stats, author, authorId, authorAvatar, originSessionId: sessionId };
             });
         };
         const buildHistoryForLLM = (pendingUserText) => {

@@ -806,3 +806,12 @@
     - 修改：`src/scripts/storage/preset-store.js`
     - 修改：`src/scripts/ui/moments-panel.js`
     - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 15:50 - 动态评论长按删除 + 浏览/点赞按联系人数量 N 缩放
+  - **长按删除评论**：动态评论支持长按弹出菜单，删除单条评论（不影响其他评论）。
+  - **初始数值约束**：动态发布时强制保证 `浏览 < N*10`、`点赞 < N*2`（N=联系人数量，忽略群聊），超出则自动归一到范围内。
+  - **评论后增长**：每次评论/回复后按 N 规模随机增加浏览与点赞（浏览增长明显快于点赞），模拟真实社交软件。
+  - 文件修改：
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/ui/moments-panel.js`
+    - 修改：`src/scripts/ui/app.js`
