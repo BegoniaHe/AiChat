@@ -64,6 +64,55 @@ const DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT = `
 </content>
 `.trim();
 
+// 群聊提示词：从 `手机流式.html` 的“QQ聊天格式介绍”提取并适配到 <content> 内输出
+const DEFAULT_GROUP_RULES = `
+<QQ聊天格式介绍>
+
+你可以在 <thinking> 里思考（可选），但 **程序只会解析 <content>**。
+因此所有可见回复必须放在 <content> 内。
+
+格式示例如（群聊）：
+<content>
+<群聊:{{group}}>
+<成员>{{members}}</成员>
+<聊天内容>
+发言人--内容--HH:MM
+发言人--特殊消息类型--HH:MM
+</聊天内容>
+</群聊:{{group}}>
+</content>
+
+特殊消息类型：
+
+【表情包相关】
+- 输出格式为 [bqb-表情包内容]（仅使用列表中存在的表情包，不可自创或篡改）
+- 表情包作为独立的一条消息，一条消息只能包含一个表情包
+- 示例：路人a--[bqb-摸小猫下巴]--12:00
+
+【语音消息相关】
+- 格式：[yy-语音内容]
+- 必须独立成行，示例：路人a--[yy-想你了]--12:00
+- 可用范围：私聊，群聊
+
+【音乐分享消息相关】
+- 格式：[music-歌名$歌手]
+- 必须独立成行，示例：路人a--[music-富士山下$陈奕迅]--12:00
+- 可用范围：私聊，群聊
+
+【图片或视频消息相关】
+- 格式：[img-内容]
+- 示例：路人a--[img-一张自拍]--12:00
+- 可用范围：私聊，群聊，QQ空间
+- 在群聊和私聊时必须独立成行
+
+格式解释：
+群聊：包含多个成员的群组对话，所有群成员可见消息。
+确保群聊标签闭合；发言内容中如果需要换行，使用 <br>。
+若群聊中需要生成一些随机路人，禁止使用“路人A/匿名用户”等敷衍网名。
+
+</QQ聊天格式介绍>
+`.trim();
+
 // 动态（QQ空间）提示词：从 `手机流式.html` 的“QQ空间格式介绍”迁移并适配到 <content> 内输出
 const DEFAULT_MOMENT_RULES = `
 <QQ空间格式介绍>
@@ -249,6 +298,14 @@ export class PresetStore {
                 if (typeof p.moment_rules !== 'string' || !p.moment_rules.trim()) {
                     p.moment_rules = DEFAULT_MOMENT_RULES;
                 }
+
+                if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
+                if (typeof p.group_position !== 'number') p.group_position = 0;
+                if (typeof p.group_depth !== 'number') p.group_depth = 1;
+                if (typeof p.group_role !== 'number') p.group_role = 0;
+                if (typeof p.group_rules !== 'string' || !p.group_rules.trim()) {
+                    p.group_rules = DEFAULT_GROUP_RULES;
+                }
             }
             await this.persist(state);
         } else {
@@ -296,6 +353,14 @@ export class PresetStore {
                 const looksCommentDisabledDefault = mr.includes('评论部分暂时注释') || mr.includes('请不要输出任何评论行') || mr.includes('评论系统暂时注释');
                 if (looksOldMoment || looksCommentDisabledDefault) {
                     p.moment_rules = DEFAULT_MOMENT_RULES;
+                }
+
+                if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
+                if (typeof p.group_position !== 'number') p.group_position = 0; // IN_PROMPT
+                if (typeof p.group_depth !== 'number') p.group_depth = 1;
+                if (typeof p.group_role !== 'number') p.group_role = 0;
+                if (typeof p.group_rules !== 'string' || !p.group_rules.trim()) {
+                    p.group_rules = DEFAULT_GROUP_RULES;
                 }
             }
             await this.persist(state);

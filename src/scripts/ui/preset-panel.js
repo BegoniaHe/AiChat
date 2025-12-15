@@ -899,6 +899,19 @@ export class PresetPanel {
             enabledLabel: '启用',
             placeholder: '动态协议提示词（<content> + moment_start...moment_end）',
         }));
+        list.appendChild(makePromptBlock({
+            idPrefix: 'group',
+            title: '群聊提示词',
+            subtitle: '解析 <content> 内的 <群聊:群名字>（含 <成员>/<聊天内容>），并分发到对应群聊',
+            enabledKey: 'group_enabled',
+            positionKey: 'group_position',
+            depthKey: 'group_depth',
+            roleKey: 'group_role',
+            rulesKey: 'group_rules',
+            defaultDepth: 1,
+            enabledLabel: '启用',
+            placeholder: '群聊协议提示词（<content> + <群聊:群名字> + 发言人--内容--HH:MM）',
+        }));
 
         wrap.appendChild(list);
         return wrap;
@@ -1430,6 +1443,12 @@ export class PresetPanel {
             current.moment_depth = getInt(root.querySelector('#moment-depth')?.value, current.moment_depth ?? 0);
             current.moment_role = getInt(root.querySelector('#moment-role')?.value, current.moment_role ?? EXT_PROMPT_ROLES.SYSTEM);
             current.moment_rules = root.querySelector('#moment-rules')?.value ?? '';
+
+            current.group_enabled = Boolean(root.querySelector('#group-enabled')?.checked);
+            current.group_position = getInt(root.querySelector('#group-position')?.value, current.group_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            current.group_depth = getInt(root.querySelector('#group-depth')?.value, current.group_depth ?? 1);
+            current.group_role = getInt(root.querySelector('#group-role')?.value, current.group_role ?? EXT_PROMPT_ROLES.SYSTEM);
+            current.group_rules = root.querySelector('#group-rules')?.value ?? '';
             return current;
         }
 

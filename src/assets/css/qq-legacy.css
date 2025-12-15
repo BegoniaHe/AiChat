@@ -333,6 +333,38 @@
 }
 
 /* ========================================
+   9.1 系统消息（群聊通知等）
+   ======================================== */
+.QQ_chat_sysmsg {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    margin: 10px 0;
+    padding: 0 12px;
+    box-sizing: border-box;
+}
+
+.QQ_chat_sysbubble {
+    max-width: 92%;
+    background: rgba(148, 163, 184, 0.16);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    color: #475569;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    text-align: center;
+    white-space: pre-wrap;
+}
+
+.QQ_chat_time.sys {
+    margin-top: 0;
+    font-size: 11px;
+    color: rgba(100, 116, 139, 0.85);
+}
+
+/* ========================================
    10. 聊天室输入区域 - 原版样式
    ======================================== */
 .chat-input-container {

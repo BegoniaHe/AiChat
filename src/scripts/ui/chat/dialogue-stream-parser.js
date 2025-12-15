@@ -27,6 +27,7 @@ const hasImplicitContentSignal = (s) => {
     // A private chat tag can appear without <content> when models don't follow the wrapper rule.
     // Example: <我和貝法的私聊> ... </我和貝法的私聊>
     if (/<\s*[^/][^>]*的私聊\s*>/i.test(src)) return true;
+    if (/<\s*群聊\s*:/i.test(src)) return true;
     return false;
 };
 
@@ -80,6 +81,54 @@ const parsePrivateChatMessages = (innerText) => {
         messages.push(line.replace(/<br\s*\/?>/gi, '\n'));
     }
     return messages.filter(Boolean);
+};
+
+const isGroupChatTag = (tagName) => {
+    const tn = String(tagName || '').trim();
+    return /^群聊\s*:/i.test(tn);
+};
+
+const extractGroupNameFromTag = (tagName) => {
+    const tn = String(tagName || '').trim();
+    const m = tn.match(/^群聊\s*:\s*(.+)\s*$/i);
+    return m ? String(m[1] || '').trim() : '';
+};
+
+const parseGroupChatBlock = (innerText) => {
+    const src = String(innerText ?? '');
+    const getBlock = (tag) => {
+        const re = new RegExp(`<\\s*${tag}\\s*>[\\s\\S]*?<\\s*/\\s*${tag}\\s*>`, 'i');
+        const m = src.match(re);
+        if (!m) return '';
+        const open = new RegExp(`<\\s*${tag}\\s*>`, 'i');
+        const close = new RegExp(`<\\s*/\\s*${tag}\\s*>`, 'i');
+        return String(m[0] || '').replace(open, '').replace(close, '').trim();
+    };
+
+    const membersRaw = getBlock('成员');
+    const members = membersRaw
+        ? membersRaw.split(/[,，]/).map(s => String(s || '').trim()).filter(Boolean)
+        : [];
+
+    const chatRaw = getBlock('聊天内容') || src;
+    const text = normalizeNewlines(chatRaw).replace(/<br\s*\/?>/gi, '\n');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    const messages = [];
+    for (const line of lines) {
+        const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
+        if (m) {
+            messages.push({ speaker: String(m[1] || '').trim(), content: String(m[2] || '').trim(), time: String(m[3] || '').trim() });
+            continue;
+        }
+        const parts = line.split('--').map(p => p.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+            messages.push({ speaker: parts[0], content: parts.slice(1).join('--'), time: '' });
+            continue;
+        }
+    }
+
+    return { members, messages };
 };
 
 const extractOtherNameFromPrivateChatTag = (tagName, userName) => {
@@ -290,6 +339,17 @@ export class DialogueStreamParser {
                 const msgs = parsePrivateChatMessages(inner);
                 if (msgs.length) {
                     events.push({ type: 'private_chat', tagName, otherName, messages: msgs });
+                }
+                work = work.slice(afterClose);
+                advanced = true;
+                continue;
+            }
+
+            if (isGroupChatTag(tagName)) {
+                const groupName = extractGroupNameFromTag(tagName);
+                const { members, messages } = parseGroupChatBlock(inner);
+                if (groupName && messages.length) {
+                    events.push({ type: 'group_chat', tagName, groupName, members, messages });
                 }
                 work = work.slice(afterClose);
                 advanced = true;

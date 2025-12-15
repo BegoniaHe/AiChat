@@ -86,12 +86,20 @@ export class ContactsStore {
         const id = normalizeId(contact?.id);
         if (!id) return;
         const prev = this.state.contacts[id] || {};
+        const nextMembers = Array.isArray(contact?.members)
+            ? contact.members.map(normalizeId).filter(Boolean)
+            : Array.isArray(prev?.members)
+                ? prev.members.map(normalizeId).filter(Boolean)
+                : [];
         this.state.contacts[id] = {
             id,
             name: contact.name ?? prev.name ?? displayNameFromId(id),
             avatar: contact.avatar ?? prev.avatar ?? '',
             isGroup: contact.isGroup ?? prev.isGroup ?? id.startsWith('group:'),
             addedAt: contact.addedAt ?? prev.addedAt ?? Date.now(),
+            members: nextMembers,
+            description: contact.description ?? prev.description ?? '',
+            updatedAt: Date.now(),
         };
         this._persist();
     }
@@ -116,10 +124,33 @@ export class ContactsStore {
                     avatar: defaultAvatar,
                     isGroup: id.startsWith('group:'),
                     addedAt: Date.now(),
+                    members: [],
+                    description: '',
+                    updatedAt: Date.now(),
                 };
                 changed = true;
             }
         });
         if (changed) this._persist();
+    }
+
+    listGroups() {
+        return this.listContacts().filter(c => c && c.isGroup);
+    }
+
+    listFriends() {
+        return this.listContacts().filter(c => c && !c.isGroup);
+    }
+
+    /**
+     * Find group session id by display name (exact match, normalized).
+     */
+    findGroupIdByName(name) {
+        const raw = String(name || '').trim();
+        if (!raw) return '';
+        const norm = raw.toLowerCase().replace(/\s+/g, '');
+        const list = this.listGroups();
+        const exact = list.find(g => String(g?.name || '').trim().toLowerCase().replace(/\s+/g, '') === norm);
+        return exact?.id || '';
     }
 }

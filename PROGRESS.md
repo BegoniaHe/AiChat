@@ -932,3 +932,21 @@
   - 文件修改：
     - 修改：`src/scripts/api/providers/vertexai.js`
     - 修改：`src/scripts/ui/config-panel.js`
+
+- 2025-12-16 01:14 - 群组（群聊）基础功能：创建/设置/解析/提示词 + 世界书 A+B
+  - **创建群组**：`＋ → 创建群组` 可选择群名/头像/成员并创建群聊入口，自动写入系统消息。
+  - **群聊管理**：在群聊内点击标题弹出成员列表（可跳转到成员私聊）并进入群聊设置（名称/头像/成员）。
+  - **群聊提示词**：在「预设 → 聊天提示词」新增「群聊提示词」区块（默认折叠），仅在群聊会话注入。
+  - **解析群聊回覆**：支持解析 `<群聊:群名字>`（含 `<成员>`/`<聊天内容>`）并把消息分发到对应群聊；若未匹配到已存在群组则丢弃（不自动新建）。
+  - **群聊世界书**：构建 prompt 时群聊世界书自动合并为群成员各自私聊世界书（A+B+...），与群成员选择同步。
+  - 文件修改：
+    - 新增：`src/scripts/ui/group-chat-panels.js`
+    - 修改：`src/scripts/storage/contacts-store.js`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/bridge.js`
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/storage/preset-store.js`
+    - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+    - 修改：`src/scripts/ui/chat/chat-ui.js`
+    - 修改：`src/assets/css/qq-legacy.css`
+    - 修改：`src/index.html`

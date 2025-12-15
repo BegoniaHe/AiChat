@@ -212,6 +212,44 @@ export class ChatUI {
             message.id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
         }
 
+        if (message.role === 'system') {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'QQ_chat_sysmsg';
+            wrapper.dataset.msgId = message.id;
+            wrapper.dataset.role = 'system';
+            wrapper.__chatappMessage = message;
+
+            const bubble = document.createElement('div');
+            bubble.className = 'QQ_chat_sysbubble';
+            bubble.textContent = String(message.content ?? '');
+
+            const timeEl = document.createElement('span');
+            timeEl.className = 'QQ_chat_time sys';
+            timeEl.textContent = message.time || '';
+
+            wrapper.appendChild(bubble);
+            if (timeEl.textContent) wrapper.appendChild(timeEl);
+
+            wrapper.addEventListener('pointerdown', (e) => this.startLongPress(e, message));
+            wrapper.addEventListener('pointermove', (e) => {
+                if (!this.longPressTimer || !this.longPressStart) return;
+                const p = this.getPoint(e);
+                const dx = p.x - this.longPressStart.x;
+                const dy = p.y - this.longPressStart.y;
+                if ((dx * dx + dy * dy) > (10 * 10)) this.clearLongPress();
+            }, { passive: true });
+            ['pointerup', 'pointerleave', 'pointercancel'].forEach(evt => {
+                wrapper.addEventListener(evt, () => this.clearLongPress());
+            });
+            wrapper.addEventListener('contextmenu', (e) => {
+                try { e.preventDefault(); } catch {}
+                this.clearLongPress();
+                this.showContextMenu(e, message);
+            }, { passive: false });
+
+            return wrapper;
+        }
+
         // 确定消息方向：user 用 QQ_chat_mymsg，其他用 QQ_chat_charmsg
         const isUser = message.role === 'user';
         const wrapper = document.createElement('div');
@@ -387,10 +425,20 @@ export class ChatUI {
             wrapper.appendChild(avatarImg);
             wrapper.appendChild(timeEl);
         } else {
-            // 别人的消息：头像 + 气泡 + 时间
+            // 别人的消息：头像 +（可选名字）+ 气泡 + 时间
+            const contentWrap = document.createElement('div');
+            contentWrap.style.cssText = 'grid-column: 2; display:flex; flex-direction:column; align-items:flex-start; gap:2px;';
+            if (message?.meta?.showName && message.name) {
+                const nameEl = document.createElement('div');
+                nameEl.className = 'QQ_chat_name';
+                nameEl.textContent = String(message.name || '');
+                contentWrap.appendChild(nameEl);
+            }
+            contentWrap.appendChild(bubble);
+            contentWrap.appendChild(timeEl);
+
             wrapper.appendChild(avatarImg);
-            wrapper.appendChild(bubble);
-            wrapper.appendChild(timeEl);
+            wrapper.appendChild(contentWrap);
         }
 
         // 长按呼出菜单

@@ -422,7 +422,34 @@ class AppBridge {
 
         const name1 = context?.user?.name || 'user';
         const name2 = context?.character?.name || 'assistant';
-        const worldPrompt = this.getActiveWorldPrompt();
+        const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
+        const groupName = String(context?.group?.name || '').trim();
+        const groupMemberIds = Array.isArray(context?.group?.members) ? context.group.members.map(String) : [];
+        const groupMemberNames = Array.isArray(context?.group?.memberNames) ? context.group.memberNames.map(String) : [];
+        const worldPrompt = (() => {
+            const globalPart = this.formatWorldPrompt(this.globalWorldId, '全局世界书提示');
+            if (!isGroupChat) {
+                const sessionPart = this.formatWorldPrompt(this.currentWorldId, '世界书提示');
+                if (globalPart && sessionPart) return `${globalPart}\n\n${sessionPart}`;
+                return globalPart || sessionPart || '';
+            }
+            const nameMap = new Map();
+            groupMemberIds.forEach((id, idx) => {
+                const nm = String(groupMemberNames[idx] || '').trim();
+                if (id) nameMap.set(id, nm);
+            });
+            const parts = [];
+            for (const memberSessionId of groupMemberIds) {
+                const wid = this.worldSessionMap[String(memberSessionId) || ''] || null;
+                if (!wid) continue;
+                const labelName = nameMap.get(memberSessionId) || String(memberSessionId);
+                const p = this.formatWorldPrompt(wid, `成员世界书提示（${labelName}）`);
+                if (p) parts.push(p);
+            }
+            const mergedMembers = parts.join('\n\n');
+            if (globalPart && mergedMembers) return `${globalPart}\n\n${mergedMembers}`;
+            return globalPart || mergedMembers || '';
+        })();
 
         const presetState = this.presets?.getState?.() || null;
         const useSysprompt = Boolean(presetState?.enabled?.sysprompt);
@@ -450,6 +477,15 @@ class AppBridge {
         const momentDepth = Number.isFinite(Number(syspActive?.moment_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_depth))) : 0;
         const momentRole = Number.isFinite(Number(syspActive?.moment_role)) ? Math.trunc(Number(syspActive.moment_role)) : 0;
 
+        // 群聊模式：群聊协议提示词（保存于 sysprompt 预设）
+        const groupEnabled = Boolean(syspActive?.group_enabled);
+        const groupRulesRaw = (typeof syspActive?.group_rules === 'string') ? syspActive.group_rules : '';
+        const membersText = groupMemberNames.filter(Boolean).join(',');
+        const groupRules = applyMacros(groupRulesRaw, { user: name1, char: name2, group: groupName || name2, members: membersText });
+        const groupPosition = Number.isFinite(Number(syspActive?.group_position)) ? Number(syspActive.group_position) : 0;
+        const groupDepth = Number.isFinite(Number(syspActive?.group_depth)) ? Math.max(0, Math.trunc(Number(syspActive.group_depth))) : 1;
+        const groupRole = Number.isFinite(Number(syspActive?.group_role)) ? Math.trunc(Number(syspActive.group_role)) : 0;
+
         // Formatting helpers from OpenAI preset (optional)
         const wiFormat = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
         const scenarioFormat = typeof openp?.scenario_format === 'string' ? openp.scenario_format : '{{scenario}}';
@@ -474,8 +510,8 @@ class AppBridge {
                 return { role, content: out };
             });
 
-            // 对话提示词：按 ST extension prompt 的位置/深度语义注入
-            if (dialogueEnabled && dialogueRules) {
+            // 私聊提示词：仅在非群聊会话注入
+            if (!isGroupChat && dialogueEnabled && dialogueRules) {
                 if (dialoguePosition === 1) { // IN_CHAT
                     const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
                     const role = roleMap[dialogueRole] || 'system';
@@ -485,6 +521,20 @@ class AppBridge {
                     const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
                     const role = roleMap[dialogueRole] || 'system';
                     messages.push({ role, content: dialogueRules });
+                }
+            }
+
+            // 群聊提示词：仅在群聊会话注入
+            if (isGroupChat && groupEnabled && groupRules) {
+                if (groupPosition === 1) { // IN_CHAT
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[groupRole] || 'system';
+                    const idx = Math.max(0, history.length - groupDepth);
+                    history.splice(idx, 0, { role, content: groupRules });
+                } else if (groupPosition === 2 || groupPosition === 0) { // BEFORE_PROMPT or IN_PROMPT
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[groupRole] || 'system';
+                    messages.push({ role, content: groupRules });
                 }
             }
             // 动态提示词：按 ST extension prompt 的位置/深度语义注入
@@ -629,11 +679,17 @@ class AppBridge {
             messages.push({ role: 'system', content: combinedStoryString });
         }
 
-        // 对话提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
-        if (dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
+        // 私聊提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入（仅非群聊）
+        if (!isGroupChat && dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
             const role = roleMap[dialogueRole] || 'system';
             messages.push({ role, content: dialogueRules });
+        }
+        // 群聊提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入（仅群聊）
+        if (isGroupChat && groupEnabled && groupRules && (groupPosition === 2 || groupPosition === 0)) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[groupRole] || 'system';
+            messages.push({ role, content: groupRules });
         }
         // 动态提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
         if (momentEnabled && momentRules && (momentPosition === 2 || momentPosition === 0)) {
@@ -671,12 +727,19 @@ class AppBridge {
             const idx = Math.max(0, history.length - injectDepth);
             history.splice(idx, 0, { role, content: combinedStoryString });
         }
-        // IN_CHAT: inject dialogue rules into history (depth + role)
-        if (dialogueEnabled && dialogueRules && dialoguePosition === 1) {
+        // IN_CHAT: inject private-chat rules into history (depth + role)
+        if (!isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition === 1) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
             const role = roleMap[dialogueRole] || 'system';
             const idx = Math.max(0, history.length - dialogueDepth);
             history.splice(idx, 0, { role, content: dialogueRules });
+        }
+        // IN_CHAT: inject group-chat rules into history (depth + role)
+        if (isGroupChat && groupEnabled && groupRules && groupPosition === 1) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[groupRole] || 'system';
+            const idx = Math.max(0, history.length - groupDepth);
+            history.splice(idx, 0, { role, content: groupRules });
         }
         // IN_CHAT: inject moment rules into history (depth + role)
         if (momentEnabled && momentRules && momentPosition === 1) {

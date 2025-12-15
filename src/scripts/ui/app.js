@@ -18,6 +18,7 @@ import { ContactSettingsPanel } from './contact-settings-panel.js';
 import { DialogueStreamParser } from './chat/dialogue-stream-parser.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { MomentsPanel } from './moments-panel.js';
+import { GroupCreatePanel, GroupSettingsPanel } from './group-chat-panels.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -63,6 +64,25 @@ const initApp = async () => {
         }
     });
     const worldIndicator = new WorldInfoIndicator();
+    const groupCreatePanel = new GroupCreatePanel({
+        contactsStore,
+        chatStore,
+        onCreated: ({ id, name }) => {
+            try { refreshChatAndContacts(); } catch {}
+            switchPage('chat');
+            enterChatRoom(id, name, 'chat');
+        }
+    });
+    const groupSettingsPanel = new GroupSettingsPanel({
+        contactsStore,
+        chatStore,
+        onSaved: ({ id }) => {
+            try { refreshChatAndContacts(); } catch {}
+            const c = contactsStore.getContact(id);
+            const cur = chatStore.getCurrent();
+            if (cur === id && currentChatTitle) currentChatTitle.textContent = c?.name || id;
+        }
+    });
 
     const avatars = {
         user: './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png',
@@ -301,7 +321,7 @@ ${listPart || '-（无）'}
 
     const formatNowTime = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-    const isConversationMessage = (m) => m && (m.role === 'user' || m.role === 'assistant');
+    const isConversationMessage = (m) => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'system');
 
     const decorateMessagesForDisplay = (messages = []) => {
         const list = Array.isArray(messages) ? messages : [];
@@ -701,6 +721,8 @@ ${listPart || '-（无）'}
         quickMenu?.classList.add('hidden');
         chatroomMenu?.classList.add('hidden');
         document.getElementById('chat-title-menu')?.classList.add('hidden');
+        const gd = document.getElementById('group-management-dropdown');
+        if (gd) gd.style.display = 'none';
     };
 
     const positionSheet = (menuEl, anchorEl, offsetX = 0, offsetY = 0, alignRight = false) => {
@@ -834,8 +856,89 @@ ${listPart || '-（无）'}
     // Chat title menu (click current title)
     const chatTitleMenu = document.getElementById('chat-title-menu');
     const currentChatTitle = document.getElementById('current-chat-title');
+
+    const ensureGroupDropdown = () => {
+        let el = document.getElementById('group-management-dropdown');
+        if (el) return el;
+        el = document.createElement('div');
+        el.id = 'group-management-dropdown';
+        el.style.cssText = `
+            display:none;
+            position: fixed;
+            background: white;
+            border: 1px solid rgba(0,0,0,0.10);
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+            z-index: 15000;
+            max-height: min(320px, calc(100vh - 140px));
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
+            min-width: 240px;
+        `;
+        el.addEventListener('click', (e) => e.stopPropagation());
+        document.body.appendChild(el);
+        return el;
+    };
+
+    const renderGroupDropdown = (groupId, anchorEl) => {
+        const el = ensureGroupDropdown();
+        const g = contactsStore.getContact(groupId);
+        const members = Array.isArray(g?.members) ? g.members : [];
+        const title = `${g?.name || '群聊'} · ${members.length}人`;
+        el.innerHTML = `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border-bottom:1px solid rgba(0,0,0,0.06); background:rgba(248,250,252,0.92); border-radius:12px 12px 0 0;">
+                <div style="font-weight:900; color:#0f172a; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${title}</div>
+                <button id="group-dd-settings" style="border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:6px 10px; cursor:pointer;">⚙</button>
+            </div>
+            <div style="padding:8px 0;">
+                ${members.map((mid) => {
+                    const c = contactsStore.getContact(mid);
+                    const name = c?.name || mid;
+                    const avatar = c?.avatar || avatars.assistant;
+                    return `
+                        <button class="group-dd-member" data-mid="${mid}" style="width:100%; display:flex; align-items:center; gap:10px; padding:10px 12px; border:none; background:transparent; cursor:pointer; text-align:left;">
+                            <img src="${avatar}" alt="" style="width:32px; height:32px; border-radius:50%; object-fit:cover;">
+                            <div style="flex:1; min-width:0;">
+                                <div style="font-weight:700; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${name}</div>
+                                <div style="color:#64748b; font-size:12px;">点击进入私聊</div>
+                            </div>
+                        </button>
+                    `;
+                }).join('') || `<div style="color:#94a3b8; font-size:13px; padding:10px 12px;">暂无成员</div>`}
+            </div>
+        `;
+
+        positionSheet(el, anchorEl, 0, 6, false);
+        el.style.display = 'block';
+
+        el.querySelector('#group-dd-settings')?.addEventListener('click', () => {
+            el.style.display = 'none';
+            groupSettingsPanel.show(groupId);
+        });
+        el.querySelectorAll('.group-dd-member').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const mid = btn.dataset.mid;
+                if (!mid) return;
+                const c = contactsStore.getContact(mid);
+                el.style.display = 'none';
+                switchPage('chat');
+                enterChatRoom(mid, c?.name || mid, 'chat');
+            });
+        });
+    };
+
     currentChatTitle?.addEventListener('click', (e) => {
         e.stopPropagation();
+        const sid = chatStore.getCurrent();
+        const c = contactsStore.getContact(sid);
+        const isGroup = Boolean(c?.isGroup) || String(sid || '').startsWith('group:');
+        if (isGroup) {
+            const el = document.getElementById('group-management-dropdown');
+            const showing = el && el.style.display !== 'none';
+            hideMenus();
+            if (!showing) renderGroupDropdown(sid, currentChatTitle);
+            return;
+        }
         toggleSheetAt(chatTitleMenu, currentChatTitle, { kind: 'title' });
     });
     chatTitleMenu?.querySelectorAll('button').forEach(btn => {
@@ -897,7 +1000,7 @@ ${listPart || '-（无）'}
         btn.addEventListener('click', () => {
             const action = btn.dataset.action;
             if (action === 'add-friend') sessionPanel.show({ focusAdd: true });
-            if (action === 'create-group') window.toastr?.info('创建群组占位');
+            if (action === 'create-group') groupCreatePanel.show();
             if (action === 'new-group') window.toastr?.info('新建分组占位');
             hideMenus();
         });
@@ -1034,6 +1137,8 @@ ${listPart || '-（无）'}
         const contact = contactsStore.getContact(sessionId);
         const characterName = contact?.name || (sessionId.startsWith('group:') ? sessionId.replace(/^group:/, '') : sessionId) || 'assistant';
         const userName = '我';
+        const isGroupChat = Boolean(contact?.isGroup) || sessionId.startsWith('group:');
+        const groupMembers = isGroupChat ? (Array.isArray(contact?.members) ? contact.members : []) : [];
         const normalizeName = (s) => String(s || '').trim();
         const normalizeKey = (s) => normalizeName(s).toLowerCase().replace(/\s+/g, '');
         // keep only letters/numbers/CJK to avoid emoji/punctuation differences
@@ -1061,6 +1166,30 @@ ${listPart || '-（无）'}
             // 为避免“明明在当前聊天室生成却全部丢弃”，此处回退到当前 session。
             logger.debug('private_chat target name mismatch, fallback to current session', { other, currentName, sessionId });
             return sessionId;
+        };
+
+        const resolveGroupChatTargetSessionId = (groupName) => {
+            const gname = normalizeName(groupName);
+            if (!gname) return '';
+            const currentContact = contactsStore.getContact(sessionId);
+            const currentIsGroup = Boolean(currentContact?.isGroup) || String(sessionId || '').startsWith('group:');
+            if (currentIsGroup) {
+                const curName = normalizeName(currentContact?.name || sessionId);
+                if (gname === curName || normalizeLoose(gname) === normalizeLoose(curName)) return sessionId;
+            }
+            const hit = contactsStore.findGroupIdByName?.(gname) || '';
+            return hit;
+        };
+
+        const resolveContactByDisplayName = (displayName) => {
+            const raw = normalizeName(displayName);
+            if (!raw) return null;
+            const key = normalizeLoose(raw);
+            const list = contactsStore.listContacts?.() || [];
+            const exact = list.find(c => normalizeName(c?.name || c?.id) === raw);
+            if (exact) return exact;
+            const fuzzy = list.find(c => normalizeLoose(c?.name || c?.id) === key);
+            return fuzzy || null;
         };
         const resolveMomentAuthorId = (authorName) => {
             const raw = normalizeName(authorName);
@@ -1140,6 +1269,13 @@ ${listPart || '-（无）'}
         const llmContext = (pendingUserText) => ({
             user: { name: userName },
             character: { name: characterName },
+            session: { id: sessionId, isGroup: isGroupChat },
+            group: isGroupChat ? {
+                id: sessionId,
+                name: characterName,
+                members: groupMembers.slice(),
+                memberNames: groupMembers.map(mid => contactsStore.getContact(mid)?.name || mid),
+            } : null,
             history: buildHistoryForLLM(pendingUserText),
         });
 
@@ -1188,9 +1324,12 @@ ${listPart || '-（无）'}
             if (config.stream) {
                 const assistantAvatar = getAssistantAvatarForSession(sessionId);
                 const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
-                const dialogueEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
+                const privateEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
+                const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
+                const momentEnabled = Boolean(sysp?.moment_enabled) && String(sysp?.moment_rules || '').trim().length > 0;
+                const protocolEnabled = momentEnabled || (isGroupChat ? groupEnabled : privateEnabled);
 
-                if (dialogueEnabled) {
+                if (protocolEnabled) {
                     // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
                     ui.showTyping(assistantAvatar);
                     const parser = new DialogueStreamParser({ userName });
@@ -1218,6 +1357,36 @@ ${listPart || '-（无）'}
                                     didAnything = true;
                                     if (activePage === 'moments') momentsPanel.render();
                                 } catch {}
+                                continue;
+                            }
+                            if (ev.type === 'group_chat') {
+                                ui.hideTyping();
+                                const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+                                if (!targetGroupId) {
+                                    window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
+                                    continue;
+                                }
+                                (ev.messages || []).forEach((m) => {
+                                    const speaker = normalizeName(m?.speaker);
+                                    const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                                    const isMe = speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+                                    const role = isMe ? 'user' : 'assistant';
+                                    const c = isMe ? null : resolveContactByDisplayName(speaker);
+                                    const parsed = {
+                                        role,
+                                        type: 'text',
+                                        ...parseSpecialMessage(content),
+                                        name: role === 'user' ? userName : (speaker || '成员'),
+                                        avatar: role === 'user' ? avatars.user : (c?.avatar || avatars.assistant),
+                                        time: m?.time || formatNowTime(),
+                                        meta: role === 'assistant' ? { showName: true } : undefined,
+                                    };
+                                    if (targetGroupId === sessionId) ui.addMessage(parsed);
+                                    chatStore.appendMessage(parsed, targetGroupId);
+                                });
+                                didAnything = true;
+                                refreshChatAndContacts();
+                                ui.showTyping(assistantAvatar);
                                 continue;
                             }
                             if (ev.type !== 'private_chat') continue;
@@ -1299,8 +1468,11 @@ ${listPart || '-（无）'}
                 ui.hideTyping();
                 chatStore.setLastRawResponse(resultRaw, sessionId);
                 const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
-                const dialogueEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
-                if (dialogueEnabled) {
+                const privateEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
+                const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
+                const momentEnabled = Boolean(sysp?.moment_enabled) && String(sysp?.moment_rules || '').trim().length > 0;
+                const protocolEnabled = momentEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+                if (protocolEnabled) {
                     const parser = new DialogueStreamParser({ userName });
                     const events = parser.push(resultRaw);
                     let didAnything = false;
@@ -1316,6 +1488,32 @@ ${listPart || '-（无）'}
                             momentsStore.addComments(ev.momentId, ev.comments || []);
                             didAnything = true;
                             mutatedMoments = true;
+                            return;
+                        }
+                        if (ev?.type === 'group_chat') {
+                            const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+                            if (!targetGroupId) {
+                                window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
+                                return;
+                            }
+                            (ev.messages || []).forEach((m) => {
+                                const speaker = normalizeName(m?.speaker);
+                                const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                                const isMe = speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+                                const role = isMe ? 'user' : 'assistant';
+                                const c = isMe ? null : resolveContactByDisplayName(speaker);
+                                const parsed = {
+                                    role,
+                                    ...parseSpecialMessage(content),
+                                    name: role === 'user' ? userName : (speaker || '成员'),
+                                    avatar: role === 'user' ? avatars.user : (c?.avatar || avatars.assistant),
+                                    time: m?.time || formatNowTime(),
+                                    meta: role === 'assistant' ? { showName: true } : undefined,
+                                };
+                                if (targetGroupId === sessionId) ui.addMessage(parsed);
+                                chatStore.appendMessage(parsed, targetGroupId);
+                                didAnything = true;
+                            });
                             return;
                         }
                         if (ev?.type === 'private_chat') {
