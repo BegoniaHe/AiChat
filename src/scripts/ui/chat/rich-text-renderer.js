@@ -58,8 +58,8 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
     // Base style: avoid overflowing the phone width; keep layout modern and readable
     const baseStyle = `
 <style id="__chatapp_base">
-  html, body { margin:0; padding:0; max-width:100% !important; overflow-x:hidden !important; box-sizing:border-box; }
-  body { padding: 8px; background: transparent; transform-origin: top left; overflow-x:hidden !important; }
+  html, body { margin:0; padding:0; max-width:100% !important; overflow-x:hidden !important; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  body { padding: 8px; background: transparent; transform-origin: top left; overflow-x:hidden !important; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
   *, *::before, *::after { box-sizing: border-box; max-width: 100% !important; }
   img, video, canvas, svg { max-width: 100%; height: auto; }
   table { max-width: 100%; display:block; overflow:auto; border-collapse: collapse; }
@@ -134,13 +134,14 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
       if (pressActive) { sendPress('cancel', { clientX: 0, clientY: 0 }); pressActive = false; }
     };
     document.addEventListener('pointerdown', (ev) => {
+      try { ev.preventDefault(); } catch {}
       clear();
       pressActive = true;
       sendPress('down', ev);
       pressTimer = setTimeout(() => {
         sendPress('longpress', ev);
       }, 520);
-    }, { passive: true });
+    }, { passive: false });
     ['pointerup','pointercancel','pointerleave','pointerout'].forEach((t) => {
       document.addEventListener(t, (ev) => {
         if (!pressActive) return;
@@ -149,6 +150,14 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
         pressActive = false;
       }, { passive: true });
     });
+    // Some WebViews trigger text selection / native menu via contextmenu on long-press
+    document.addEventListener('contextmenu', (ev) => {
+      try { ev.preventDefault(); } catch {}
+      sendPress('longpress', ev);
+    }, { passive: false });
+    document.addEventListener('selectstart', (ev) => {
+      try { ev.preventDefault(); } catch {}
+    }, { passive: false });
 
     try {
       const ro = new ResizeObserver(() => { fitToWidth(); });

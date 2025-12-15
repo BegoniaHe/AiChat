@@ -50,9 +50,20 @@ export class ChatUI {
             const message = wrapper?.__chatappMessage;
             if (!message) return;
 
+            // Tapping inside iframe won't trigger outer document click; mirror "click outside to close"
+            if (phase === 'down' && this.contextMenu && this.contextMenu.style.display !== 'none') {
+                this.contextMenu.style.display = 'none';
+            }
+
             if (phase === 'down') {
                 const iframe = iframeId ? document.querySelector(`iframe[data-iframe-id="${esc(iframeId)}"]`) : null;
                 this.startLongPress({ clientX, clientY, target: iframe || wrapper }, message);
+                return;
+            }
+            if (phase === 'longpress') {
+                const iframe = iframeId ? document.querySelector(`iframe[data-iframe-id="${esc(iframeId)}"]`) : null;
+                this.clearLongPress();
+                this.showContextMenu({ clientX, clientY, target: iframe || wrapper }, message);
                 return;
             }
             if (phase === 'up' || phase === 'cancel') {
@@ -380,9 +391,21 @@ export class ChatUI {
 
         // 长按呼出菜单
         wrapper.addEventListener('pointerdown', (e) => this.startLongPress(e, message));
+        wrapper.addEventListener('pointermove', (e) => {
+            if (!this.longPressTimer || !this.longPressStart) return;
+            const p = this.getPoint(e);
+            const dx = p.x - this.longPressStart.x;
+            const dy = p.y - this.longPressStart.y;
+            if ((dx * dx + dy * dy) > (10 * 10)) this.clearLongPress();
+        }, { passive: true });
         ['pointerup', 'pointerleave', 'pointercancel'].forEach(evt => {
             wrapper.addEventListener(evt, () => this.clearLongPress());
         });
+        wrapper.addEventListener('contextmenu', (e) => {
+            try { e.preventDefault(); } catch {}
+            this.clearLongPress();
+            this.showContextMenu(e, message);
+        }, { passive: false });
 
         return wrapper;
     }
@@ -427,14 +450,17 @@ export class ChatUI {
      * Start a streaming assistant bubble
      */
     startAssistantStream(meta = {}) {
-        const messageEl = this.addMessage({
+        const placeholder = {
             role: 'assistant',
             type: 'text',
             content: ' ',
             avatar: meta.avatar,
             name: meta.name,
             time: meta.time
-        });
+        };
+        const messageEl = this.addMessage(placeholder);
+        const wrapperEl = messageEl?.closest?.('.QQ_chat_charmsg, .QQ_chat_mymsg') || messageEl?.parentElement || null;
+        const msgId = wrapperEl?.dataset?.msgId || placeholder.id || meta?.id || '';
         // Default: show typing animation inside the streaming bubble (avoid an extra placeholder bubble)
         if (meta?.typing !== false && messageEl) {
             messageEl.innerHTML = `
@@ -447,8 +473,8 @@ export class ChatUI {
         }
         const bufferIndex = this.messageBuffer.push({ role: 'assistant', type: 'text', content: '' }) - 1;
         this.isStreaming = true;
-        const wrapperEl = messageEl?.closest?.('.QQ_chat_charmsg, .QQ_chat_mymsg') || messageEl?.parentElement || null;
         return {
+            id: msgId,
             update: (text) => {
                 // Keep streaming lightweight (avoid re-parsing markdown/code each token)
                 messageEl.textContent = text;
@@ -465,11 +491,14 @@ export class ChatUI {
                     this.messageBuffer[bufferIndex] = finalMessage;
                 } else {
                     const fm = finalMessage || this.messageBuffer[bufferIndex];
+                    if (wrapperEl) {
+                        wrapperEl.__chatappMessage = { ...(wrapperEl.__chatappMessage || placeholder), ...(fm || {}), id: msgId || fm?.id || placeholder.id };
+                    }
                     this.messageBuffer[bufferIndex] = fm;
                     try {
                         // Render rich content for the final text
                         const text = String(fm?.content ?? '');
-                        renderRichText(messageEl, text, { messageId: fm?.id || meta?.id });
+                        renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
                     } catch {}
                 }
             },
@@ -516,6 +545,8 @@ export class ChatUI {
 
     startLongPress(event, message) {
         this.clearLongPress();
+        const p = this.getPoint(event);
+        this.longPressStart = p;
         this.longPressTimer = setTimeout(() => {
             this.showContextMenu(event, message);
         }, 500);
@@ -526,6 +557,7 @@ export class ChatUI {
             clearTimeout(this.longPressTimer);
             this.longPressTimer = null;
         }
+        this.longPressStart = null;
     }
 
     createContextMenu() {
@@ -543,8 +575,18 @@ export class ChatUI {
             min-width: 140px;
         `;
         document.body.appendChild(menu);
-        document.addEventListener('click', () => menu.style.display = 'none');
+        document.addEventListener('pointerdown', (e) => {
+            if (menu.style.display === 'none') return;
+            if (menu.contains(e.target)) return;
+            menu.style.display = 'none';
+        }, { passive: true });
         return menu;
+    }
+
+    getPoint(e) {
+        if (e?.touches?.[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        if (e?.changedTouches?.[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+        return { x: e?.clientX ?? 0, y: e?.clientY ?? 0 };
     }
 
     async copyToClipboard(text) {
@@ -572,9 +614,10 @@ export class ChatUI {
         }
     }
 
-    openCodeViewer({ lang = '', code = '' } = {}) {
-        const language = String(lang || '').trim();
-        const content = String(code ?? '');
+    openCodeViewer({ message = null, text = '' } = {}) {
+        const msg = message && typeof message === 'object' ? message : null;
+        const content = String(text ?? '');
+        const canSave = msg?.role === 'assistant' && typeof this.actionHandler === 'function';
 
         if (!this.__chatappCodeViewer) {
             const overlay = document.createElement('div');
@@ -613,19 +656,33 @@ export class ChatUI {
             `;
             const title = document.createElement('div');
             title.style.cssText = 'font-size:14px; font-weight:700; color:#111827;';
-            title.textContent = '代码';
+            title.textContent = '原回覆';
 
-            const meta = document.createElement('div');
-            meta.style.cssText = 'font-size:12px; color:#6b7280; margin-left:auto; max-width: 55vw; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;';
-            meta.dataset.role = 'lang';
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:12px; color:#6b7280; margin-left:auto; max-width: 55vw; overflow:hidden; text-overflow: ellipsis; white-space: nowrap;';
+            hint.dataset.role = 'hint';
+            hint.textContent = '未套用正则';
 
             const closeBtn = document.createElement('button');
             closeBtn.type = 'button';
-            closeBtn.textContent = '关闭';
+            closeBtn.textContent = '取消';
             closeBtn.style.cssText = `
                 border: 1px solid #e5e7eb;
                 background: #fff;
                 color: #111827;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 13px;
+            `;
+
+            const saveBtn = document.createElement('button');
+            saveBtn.type = 'button';
+            saveBtn.textContent = '保存';
+            saveBtn.dataset.role = 'save';
+            saveBtn.style.cssText = `
+                border: 1px solid #3b82f6;
+                background: #3b82f6;
+                color: #fff;
                 border-radius: 10px;
                 padding: 6px 10px;
                 font-size: 13px;
@@ -639,33 +696,54 @@ export class ChatUI {
                 background: #0b1220;
                 padding: 12px;
             `;
-            const pre = document.createElement('pre');
-            pre.dataset.role = 'code';
-            pre.style.cssText = `
-                margin: 0;
+            const ta = document.createElement('textarea');
+            ta.dataset.role = 'code';
+            ta.spellcheck = false;
+            ta.autocapitalize = 'off';
+            ta.autocomplete = 'off';
+            ta.autocorrect = 'off';
+            ta.style.cssText = `
+                width: 100%;
+                height: 100%;
+                min-height: 100%;
+                resize: none;
+                border: none;
+                outline: none;
+                background: transparent;
                 color: #e2e8f0;
                 font-size: 12px;
                 line-height: 1.45;
                 font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace;
                 white-space: pre-wrap;
-                overflow-x: hidden;
                 overflow-wrap: anywhere;
                 word-break: break-word;
             `;
-            body.appendChild(pre);
+            body.appendChild(ta);
 
             header.appendChild(title);
-            header.appendChild(meta);
+            header.appendChild(hint);
             header.appendChild(closeBtn);
+            header.appendChild(saveBtn);
             panel.appendChild(header);
             panel.appendChild(body);
             overlay.appendChild(panel);
 
-            const hide = () => { overlay.style.display = 'none'; };
+            const hide = () => {
+                overlay.style.display = 'none';
+                overlay.__chatappMessage = null;
+            };
             overlay.addEventListener('click', hide);
             closeBtn.addEventListener('click', hide);
             window.addEventListener('keydown', (e) => {
                 if (overlay.style.display !== 'none' && e.key === 'Escape') hide();
+            });
+            saveBtn.addEventListener('click', () => {
+                const m = overlay.__chatappMessage;
+                if (!m || m.role !== 'assistant') return;
+                const codeEl = overlay.querySelector('[data-role="code"]');
+                const nextText = String(codeEl?.value ?? '');
+                this.actionHandler?.('edit-assistant-raw', m, { text: nextText });
+                hide();
             });
 
             document.body.appendChild(overlay);
@@ -673,11 +751,15 @@ export class ChatUI {
         }
 
         const overlay = this.__chatappCodeViewer;
-        const langEl = overlay.querySelector('[data-role="lang"]');
+        overlay.__chatappMessage = msg;
+        const saveBtn = overlay.querySelector('[data-role="save"]');
         const codeEl = overlay.querySelector('[data-role="code"]');
-        if (langEl) langEl.textContent = language ? language.toUpperCase() : '';
-        if (codeEl) codeEl.textContent = content;
+        if (codeEl) codeEl.value = content;
+        if (saveBtn) saveBtn.style.display = canSave ? 'inline-block' : 'none';
         overlay.style.display = 'block';
+        setTimeout(() => {
+            try { codeEl?.focus?.(); } catch {}
+        }, 0);
     }
 
     showContextMenu(evt, message) {
@@ -723,19 +805,15 @@ export class ChatUI {
                     return;
                 }
                 if (act.key === 'view-code' && hasCode) {
-                    this.openCodeViewer({ lang: codeBlock.__chatappLang, code: codeBlock.__chatappCode });
+                    const raw = message?.rawOriginal ?? message?.raw_source ?? message?.rawSource ?? message?.source ?? message?.raw ?? message?.content ?? '';
+                    this.openCodeViewer({ message, text: raw });
                     return;
                 }
                 this.actionHandler?.(act.key, message);
             };
             this.contextMenu.appendChild(btn);
         });
-        const getPoint = (e) => {
-            if (e?.touches?.[0]) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-            if (e?.changedTouches?.[0]) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
-            return { x: e.clientX, y: e.clientY };
-        };
-        const { x, y } = getPoint(evt);
+        const { x, y } = this.getPoint(evt);
 
         // 先显示但隐藏，用于测量尺寸
         this.contextMenu.style.visibility = 'hidden';

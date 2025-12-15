@@ -648,3 +648,13 @@
   - 文件修改：
     - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
     - 修改：`src/scripts/ui/chat/chat-ui.js`
+
+- 2025-12-15 08:41 - 长按更稳定 + 代码编辑保存后即时套用正则并重渲染
+  - **长按稳定性**：聊天气泡与 iframe 渲染区域禁用系统文字选取/长按菜单，并增加 contextmenu 转发与滑动取消阈值，减少“长按只选中文字”的情况。
+  - **菜单消失**：点击 iframe 内区域也会像点击外部一样关闭菜单（通过 iframe down 事件转发实现）。
+  - **原回复编辑**：长按代码块点「代码」会打开“原回复”编辑器（未套用正则），保存后会对内容重新套用正则并立即更新气泡/iframe 渲染。
+  - 文件修改：
+    - 修改：`src/assets/css/qq-legacy.css`
+    - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+    - 修改：`src/scripts/ui/chat/chat-ui.js`
+    - 修改：`src/scripts/ui/app.js`

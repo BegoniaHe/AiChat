@@ -628,6 +628,8 @@ const initApp = async () => {
                     name: '助手',
                     avatar: assistantAvatar,
                     time: formatNowTime(),
+                    id: streamCtrl?.id,
+                    rawOriginal: full,
                     raw: stored,
                     ...parseSpecialMessage(display)
                 };
@@ -646,6 +648,7 @@ const initApp = async () => {
                     name: '助手',
                     avatar: assistantAvatar,
                     time: formatNowTime(),
+                    rawOriginal: resultRaw,
                     raw: stored,
                     ...parseSpecialMessage(display)
                 };
@@ -669,12 +672,28 @@ const initApp = async () => {
 
     ui.onSend(handleSend);
     ui.onInputChange((text) => chatStore.setDraft(text, chatStore.getCurrent()));
-    ui.onMessageAction(async (action, message) => {
+    ui.onMessageAction(async (action, message, payload) => {
         const sessionId = chatStore.getCurrent();
         if (action === 'delete') {
             chatStore.deleteMessage(message.id, sessionId);
             ui.removeMessage(message.id);
             refreshChatAndContacts();
+            return;
+        }
+        if (action === 'edit-assistant-raw' && message.role === 'assistant') {
+            const next = String(payload?.text ?? '');
+            const stored = window.appBridge.applyOutputStoredRegex(next, { isEdit: true });
+            const display = window.appBridge.applyOutputDisplayRegex(stored, { isEdit: true, depth: 0 });
+            const updater = {
+                rawOriginal: next,
+                raw: stored,
+                ...parseSpecialMessage(display),
+            };
+            const updated = chatStore.updateMessage(message.id, updater, sessionId);
+            if (updated) {
+                ui.updateMessage(message.id, updated);
+                refreshChatAndContacts();
+            }
             return;
         }
         if (action === 'edit' && message.role === 'user') {
@@ -725,6 +744,8 @@ const initApp = async () => {
                         name: '助手',
                         avatar: assistantAvatar,
                         time: formatNowTime(),
+                        id: streamCtrl?.id,
+                        rawOriginal: full,
                         raw: stored,
                         ...parseSpecialMessage(display)
                     };
@@ -742,6 +763,7 @@ const initApp = async () => {
                         name: '助手',
                         avatar: assistantAvatar,
                         time: formatNowTime(),
+                        rawOriginal: resultRaw,
                         raw: stored,
                         ...parseSpecialMessage(display)
                     };
