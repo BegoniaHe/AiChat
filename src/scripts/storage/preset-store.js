@@ -74,26 +74,33 @@ const DEFAULT_MOMENT_RULES = `
 输出格式（可包含多个动态，按行解析）：
 moment_start
 发言人--发言内容--发言时间--已浏览人数--已点赞人数
-// （评论部分暂时注释：请勿输出评论行，后续会优化评论系统）
-// 发言人--评论内容
-// 发言人--评论内容
+发言人--评论内容
+发言人--评论内容
 发言人--发言内容--发言时间--已浏览人数--已点赞人数
-// 发言人--评论内容
+发言人--评论内容
 moment_end
 
 动态规则：
-1. （评论系统暂时注释）本阶段请不要输出任何评论行。
+1. 每条动态 0-4 条评论；当出现用户评论时，动态发布者必须优先回复。
 2. 发言内容中如果需要换行，使用 <br>。
 4. 动态若有配图，使用 [img-内容] 这个格式嵌入到发言内容中，例如：
    角色名--我好看吗[img-一张自拍]--12:00--67--32
 5. 仅输出 moment_start/moment_end（不要输出群聊/私聊格式块；本阶段只做动态页面）。
 
-动态回复格式（当用户在某条动态下评论时）：
-// （评论回复暂时注释：后续会优化）
-// moment_reply_start
-// moment_id::动态ID
-// 评论人--评论内容
-// moment_reply_end
+动态评论回复格式（当用户在某条动态下评论时）：
+moment_reply_start
+moment_id::动态ID
+评论人--评论内容
+评论人--评论内容
+moment_reply_end
+
+评论回复规则：
+1. 必须至少 2 名角色参与评论，其中 **动态发布者必须回复用户**。
+2. 评论人必须是具体名字（优先从联系人中挑选）；不要使用“匿名网友”等敷衍名字。
+3. 可选：若评论内容需要更私密沟通，可在 moment_reply_end 之后追加一个私聊标签块（仍需放在 <content> 内），例如：
+   <{{user}}和角色名的私聊>
+   - 私聊内容...
+   </{{user}}和角色名的私聊>
 
 ## 任务：动态发布决策（从 手机流式.html 搬运）
 在回应聊天之后，请评估当前对话情景，并决定是否要发布一条新的动态。
@@ -283,10 +290,10 @@ export class PresetStore {
                 if (typeof p.moment_rules !== 'string' || !p.moment_rules.trim()) {
                     p.moment_rules = DEFAULT_MOMENT_RULES;
                 }
-                // 若仍是旧版“含评论输出”的默认规则，自动迁移为“评论注释版”（不覆盖用户自定义）
                 const mr = (typeof p.moment_rules === 'string') ? p.moment_rules : '';
                 const looksOldMoment = mr.includes('<QQ空间格式介绍>') && mr.includes('moment_start') && !mr.includes('任务：动态发布决策');
-                if (looksOldMoment) {
+                const looksCommentDisabledDefault = mr.includes('评论部分暂时注释') || mr.includes('请不要输出任何评论行') || mr.includes('评论系统暂时注释');
+                if (looksOldMoment || looksCommentDisabledDefault) {
                     p.moment_rules = DEFAULT_MOMENT_RULES;
                 }
             }

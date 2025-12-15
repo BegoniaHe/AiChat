@@ -796,3 +796,13 @@
   - **修复**：`upsert` 改为 patch-safe：仅当字段被显式提供时才覆盖，否则保留现有值；并在加载/写入前统一剔除 `data:` 头像以降低存储体积。
   - 文件修改：
     - 修改：`src/scripts/storage/moments-store.js`
+
+- 2025-12-15 15:29 - 动态评论功能启用：提示词取消注释 + <br> 正确换行 + 用户评论触发 AI 回复
+  - **提示词**：动态提示词恢复“评论行/评论回复”规则，支持 `moment_reply_start/moment_reply_end`。
+  - **渲染**：动态正文与评论内容把 `<br>` 渲染为换行（仅允许 `<br>`，其余仍转义防注入）。
+  - **用户评论 -> AI 回复**：在动态点「评论」发送后，会调用模型生成 `moment_reply_*`（发布者必须回复+至少1名其他联系人参与），并可选追加私聊块；解析后写入动态/聊天室存储并落盘。
+  - **互动数模拟**：评论触发时会对浏览/点赞做小幅随机增量，模拟社交软件变化。
+  - 文件修改：
+    - 修改：`src/scripts/storage/preset-store.js`
+    - 修改：`src/scripts/ui/moments-panel.js`
+    - 修改：`src/scripts/ui/app.js`

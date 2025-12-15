@@ -5,19 +5,27 @@
 import { logger } from '../utils/logger.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const htmlText = (s) => {
+    // Escape first, then allow only <br> to render as line breaks.
+    return esc(s)
+        .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+        .replace(/\n/g, '<br>');
+};
 
 export class MomentsPanel {
-    constructor({ momentsStore, contactsStore, defaultAvatar = '', userAvatar = '' } = {}) {
+    constructor({ momentsStore, contactsStore, defaultAvatar = '', userAvatar = '', onUserComment } = {}) {
         this.store = momentsStore;
         this.contactsStore = contactsStore;
         this.defaultAvatar = defaultAvatar;
         this.userAvatar = userAvatar;
+        this.onUserComment = typeof onUserComment === 'function' ? onUserComment : null;
         this.listEl = null;
         this.modal = null;
         this.activeMomentId = null;
         this.menuEl = null;
         this.expandedComments = new Set();
         this.openComposer = new Set();
+        this.pendingComment = new Set();
     }
 
     mount(listEl) {
@@ -171,6 +179,7 @@ export class MomentsPanel {
             const showComposer = this.openComposer.has(m.id);
             const hiddenCount = comments.length > VISIBLE_COMMENTS ? (comments.length - VISIBLE_COMMENTS) : 0;
             const visibleComments = expanded ? comments : (hiddenCount > 0 ? comments.slice(-VISIBLE_COMMENTS) : comments);
+            const pending = this.pendingComment.has(m.id);
             card.innerHTML = `
                 <div class="moment-header">
                     <img src="${esc(avatar)}" alt="" class="moment-avatar">
@@ -181,7 +190,7 @@ export class MomentsPanel {
                     <button class="moment-more" aria-label="更多" title="更多">⋯</button>
                 </div>
                 <div class="moment-content">
-                    <div class="moment-text">${esc(m.content || '')}</div>
+                    <div class="moment-text">${htmlText(m.content || '')}</div>
                 </div>
                 <div class="moment-stats">
                     <span>👁 浏览${Number(m.views || 0)}次</span>
@@ -196,14 +205,14 @@ export class MomentsPanel {
                     ${visibleComments.map((c) => `
                         <div class="moment-comment">
                             <span class="comment-user">${esc(c.author || '')}：</span>
-                            <span class="comment-text">${esc(c.content || '')}</span>
+                            <span class="comment-text">${htmlText(c.content || '')}</span>
                         </div>
                     `).join('')}
                     ${(expanded && hiddenCount > 0) ? `<div class="moment-comments-toggle" data-action="collapse">收起评论</div>` : ''}
                 </div>
                 <div class="moment-comment-composer" style="${showComposer ? '' : 'display:none;'}">
-                    <input class="moment-comment-input" type="text" placeholder="写评论..." />
-                    <button class="moment_comment" data-action="send">发送</button>
+                    <input class="moment-comment-input" type="text" placeholder="写评论..." ${pending ? 'disabled' : ''} />
+                    <button class="moment_comment" data-action="send" ${pending ? 'disabled' : ''}>${pending ? '发送中…' : '发送'}</button>
                 </div>
             `;
             const dotsBtn = card.querySelector('.moment-more');
@@ -239,13 +248,25 @@ export class MomentsPanel {
 
             const sendBtn = card.querySelector('.moment_comment[data-action="send"]');
             const inputEl = card.querySelector('.moment-comment-input');
-            const send = () => {
+            const send = async () => {
+                if (pending) return;
                 const text = String(inputEl?.value || '').trim();
                 if (!text) return;
                 this.store.addComments(m.id, [{ author: '我', content: text }]);
                 this.openComposer.delete(m.id);
                 this.expandedComments.add(m.id); // show newest comment
+                if (inputEl) inputEl.value = '';
+                this.pendingComment.add(m.id);
                 this.render({ preserveScroll: true });
+
+                try {
+                    await this.onUserComment?.(m.id, text);
+                } catch (err) {
+                    logger.warn('onUserComment failed', err);
+                } finally {
+                    this.pendingComment.delete(m.id);
+                    this.render({ preserveScroll: true });
+                }
             };
             sendBtn?.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -324,7 +345,7 @@ export class MomentsPanel {
                     <div style="flex:1;">
                         <div style="font-weight:800;">${esc(m.author || '角色')}</div>
                         <div style="color:#64748b; font-size:12px; margin-top:2px;">${esc(m.time || '')} · 👁 ${Number(m.views || 0)} · 👍 ${Number(m.likes || 0)}</div>
-                        <div style="margin-top:10px; white-space:pre-wrap; overflow-wrap:anywhere;">${esc(m.content || '')}</div>
+                        <div style="margin-top:10px; overflow-wrap:anywhere;">${htmlText(m.content || '')}</div>
                     </div>
                 </div>
                 <div style="margin-top:14px; font-weight:800;">评论</div>
@@ -332,7 +353,7 @@ export class MomentsPanel {
                     ${comments.length ? comments.map(c => `
                         <div style="border:1px solid #e5e7eb; border-radius:12px; padding:10px;">
                             <div style="font-weight:800; font-size:13px;">${esc(c.author || '')}</div>
-                            <div style="margin-top:6px; white-space:pre-wrap; overflow-wrap:anywhere;">${esc(c.content || '')}</div>
+                            <div style="margin-top:6px; overflow-wrap:anywhere;">${htmlText(c.content || '')}</div>
                         </div>
                     `).join('') : `<div style="color:#64748b;">（暂无评论）</div>`}
                 </div>

@@ -68,7 +68,175 @@ const initApp = async () => {
         user: './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png',
         assistant: './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp'
     };
-    const momentsPanel = new MomentsPanel({ momentsStore, contactsStore, defaultAvatar: avatars.assistant, userAvatar: avatars.user });
+    const momentsPanel = new MomentsPanel({
+        momentsStore,
+        contactsStore,
+        defaultAvatar: avatars.assistant,
+        userAvatar: avatars.user,
+        onUserComment: async (momentId, commentText) => {
+            const id = String(momentId || '').trim();
+            const userComment = String(commentText || '').trim();
+            if (!id || !userComment) return;
+
+            if (!window.appBridge.isConfigured()) {
+                ui.showErrorBanner('未配置 API，請先填寫 Base URL / Key / 模型');
+                window.toastr?.warning('请先配置 API 信息', '未配置');
+                configPanel.show();
+                return;
+            }
+            if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                ui.showErrorBanner('當前離線，請連接網絡後再試');
+                window.toastr?.warning('離線狀態，無法發送');
+                return;
+            }
+
+            const m = momentsStore.get(id);
+            if (!m) {
+                window.toastr?.warning?.('未找到该动态');
+                return;
+            }
+            // Simulate engagement changes (views/likes fluctuate after interactions)
+            try {
+                const viewsInc = 1 + Math.floor(Math.random() * 3);
+                const likesInc = Math.random() < 0.35 ? 1 : 0;
+                momentsStore.upsert({ id, views: Number(m.views || 0) + viewsInc, likes: Number(m.likes || 0) + likesInc });
+            } catch {}
+
+            // Build a constrained comment-reply task (adapted from 手机流式.html momentCommentTask)
+            const authorName = String(m.author || '').trim() || '发布者';
+            const originSessionId = String(m.originSessionId || m.authorId || chatStore.getCurrent() || '').trim();
+            const candidates = (contactsStore.listContacts?.() || [])
+                .filter(c => c && !c.isGroup)
+                .map(c => String(c.name || c.id || '').trim())
+                .filter(Boolean)
+                .filter(n => n !== '我' && n !== '用户' && n.toLowerCase() !== 'user');
+
+            const uniq = [];
+            [authorName, ...candidates].forEach((n) => { if (n && !uniq.includes(n)) uniq.push(n); });
+            const listPart = uniq.slice(0, 16).map(n => `- ${n}`).join('\n');
+
+            const prompt = `
+你正在处理 QQ空间「动态评论回复」任务。
+
+用户【我】对角色【${authorName}】发布的动态发表了评论。
+
+【目标动态】
+moment_id: ${id}
+发布者: ${authorName}
+动态内容: ${String(m.content || '').trim()}
+动态时间: ${String(m.time || '').trim() || '（未知）'}
+
+【用户评论】
+我：${userComment}
+
+【可用联系人名单】（参与评论只能从这里挑选；至少2名角色参与；发布者必须回复）
+${listPart || '-（无）'}
+
+【输出硬性要求】
+1) 只输出一个 <content>...</content> 区块，除此之外不要输出任何文字。
+2) <content> 内必须输出一段 moment_reply_start/moment_reply_end：
+   moment_reply_start
+   moment_id::${id}
+   评论人--评论内容
+   评论人--评论内容
+   moment_reply_end
+3) 发布者「${authorName}」必须回复用户评论；并且至少还要有 1 名其他角色参与评论。
+4) 评论内容若需要换行，使用 <br>。
+5) 可选：若需要更私密沟通，可在 moment_reply_end 之后（仍在 <content> 内）追加一个或多个私聊标签块：
+   <我和角色名的私聊>
+   - 私聊内容...
+   </我和角色名的私聊>
+`.trim();
+
+            const normalizeName = (s) => String(s || '').trim();
+            const resolvePrivateChatTargetSessionId = (otherName) => {
+                const other = normalizeName(otherName);
+                if (!other) return null;
+
+                const byId = contactsStore.getContact(other);
+                if (byId?.id) return byId.id;
+
+                try {
+                    const matches = (contactsStore.listContacts?.() || []).filter((c) => normalizeName(c?.name || c?.id) === other);
+                    if (matches.length === 1) return matches[0].id;
+                } catch {}
+
+                return null;
+            };
+
+            const applyEvents = (events = []) => {
+                let touchedMoments = false;
+                let touchedChats = false;
+                (Array.isArray(events) ? events : []).forEach((ev) => {
+                    if (!ev || typeof ev !== 'object') return;
+                    if (ev.type === 'moments') {
+                        const list = (ev.moments || []).map(mm => ({ ...(mm || {}), originSessionId }));
+                        momentsStore.addMany(list);
+                        touchedMoments = true;
+                        return;
+                    }
+                    if (ev.type === 'moment_reply') {
+                        const mid = String(ev.momentId || '').trim() || id;
+                        momentsStore.addComments(mid, ev.comments || []);
+                        touchedMoments = true;
+                        return;
+                    }
+                    if (ev.type === 'private_chat') {
+                        const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName);
+                        if (!targetSessionId) return;
+                        (ev.messages || []).forEach((msgText) => {
+                            const parsed = {
+                                role: 'assistant',
+                                type: 'text',
+                                ...parseSpecialMessage(String(msgText || '')),
+                                name: '助手',
+                                avatar: contactsStore.getContact(targetSessionId)?.avatar || avatars.assistant,
+                                time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                            };
+                            chatStore.appendMessage(parsed, targetSessionId);
+                            touchedChats = true;
+                        });
+                    }
+                });
+                if (touchedChats) {
+                    try { refreshChatAndContacts(); } catch {}
+                }
+                if (touchedMoments) {
+                    try { momentsPanel.render({ preserveScroll: true }); } catch {}
+                }
+                return { touchedMoments, touchedChats };
+            };
+
+            try {
+                const config = window.appBridge.config.get();
+                const parser = new DialogueStreamParser({ userName: '我' });
+                let sawMomentReply = false;
+
+                if (config.stream) {
+                    const stream = await window.appBridge.generate(prompt, { user: { name: '我' }, character: { name: authorName }, history: [] });
+                    for await (const chunk of stream) {
+                        const events = parser.push(chunk);
+                        const res = applyEvents(events);
+                        if (res?.touchedMoments) sawMomentReply = true;
+                    }
+                } else {
+                    const raw = await window.appBridge.generate(prompt, { user: { name: '我' }, character: { name: authorName }, history: [] });
+                    const events = parser.push(raw);
+                    const res = applyEvents(events);
+                    if (res?.touchedMoments) sawMomentReply = true;
+                }
+
+                if (sawMomentReply) {
+                    try { await momentsStore.flush(); } catch {}
+                } else {
+                    window.toastr?.warning?.('未解析到动态评论回复（可能格式不正确）');
+                }
+            } catch (err) {
+                logger.error('动态评论生成失败', err);
+                window.toastr?.error?.(err?.message || '动态评论生成失败');
+            }
+        }
+    });
 
     const formatTime = (ts) => {
         if (!ts) return '';
