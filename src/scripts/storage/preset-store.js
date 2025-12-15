@@ -63,6 +63,60 @@ const DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT = `
 </content>
 `.trim();
 
+// 动态（QQ空间）提示词：从 `手机流式.html` 的“QQ空间格式介绍”迁移并适配到 <content> 内输出
+const DEFAULT_MOMENT_RULES = `
+<QQ空间格式介绍>
+
+{{user}} 和角色们都会使用聊天软件 QQ。QQ空间是 QQ 的公开个人空间，可以在里面发布动态，所有人都能看到。
+
+重要：你可以在 <thinking> 里思考（可选），但 **程序只会解析 <content>**。因此动态内容必须在 <content> 内输出。
+
+输出格式（可包含多个动态，按行解析）：
+moment_start
+发言人--发言内容--发言时间--已浏览人数--已点赞人数
+// （评论部分暂时注释：请勿输出评论行，后续会优化评论系统）
+// 发言人--评论内容
+// 发言人--评论内容
+发言人--发言内容--发言时间--已浏览人数--已点赞人数
+// 发言人--评论内容
+moment_end
+
+动态规则：
+1. （评论系统暂时注释）本阶段请不要输出任何评论行。
+2. 发言内容中如果需要换行，使用 <br>。
+4. 动态若有配图，使用 [img-内容] 这个格式嵌入到发言内容中，例如：
+   角色名--我好看吗[img-一张自拍]--12:00--67--32
+5. 仅输出 moment_start/moment_end（不要输出群聊/私聊格式块；本阶段只做动态页面）。
+
+动态回复格式（当用户在某条动态下评论时）：
+// （评论回复暂时注释：后续会优化）
+// moment_reply_start
+// moment_id::动态ID
+// 评论人--评论内容
+// moment_reply_end
+
+## 任务：动态发布决策（从 手机流式.html 搬运）
+在回应聊天之后，请评估当前对话情景，并决定是否要发布一条新的动态。
+
+**【决策流程】**
+1. **评估时机**：回顾刚刚的对话内容，判断是否属于以下【发布动态的参考时机】。
+2. **概率冲动**：你可以在心中投一个10面骰(D10)。如果结果**大于等于7**，或者发生了**非常值得纪念/分享**的事情，你就应该发布一条新动态。
+3. **角色性格**：最终决定必须严格符合角色性格。一个热爱分享、外向的角色会更倾向于发布动态。
+
+**【发布动态的参考时机】**
+- **里程碑事件**：完成了重要的任务、取得了成就、关系获得了突破（如成为恋人）。
+- **美好瞬间**：看到了美丽的风景（夕阳、雪景）、品尝了美味的食物、收到了心仪的礼物。
+- **强烈情绪**：感到非常开心、激动、自豪，或是有些许的失落、感慨，希望获得关注或安慰。
+- **有趣日常**：遇到了搞笑的事情、想分享一个冷笑话、想展示自己新买的东西。
+- **寻求互动**：想要发起一个话题（如“大家最喜欢的电影是什么？”）或者询问大家的意见。
+
+**【输出格式】**
+- 如果决定发布动态，请在 <content> 内输出完整的 \`moment_start\` ... \`moment_end\` 区块。
+- 如果决定不发布，则**不要输出任何与动态相关的内容**。
+
+</QQ空间格式介绍>
+`.trim();
+
 const clone = (v) => {
     try {
         return structuredClone(v);
@@ -180,6 +234,13 @@ export class PresetStore {
                 if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim()) {
                     p.dialogue_rules = DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT;
                 }
+                if (typeof p.moment_enabled !== 'boolean') p.moment_enabled = false;
+                if (typeof p.moment_position !== 'number') p.moment_position = 0;
+                if (typeof p.moment_depth !== 'number') p.moment_depth = 0;
+                if (typeof p.moment_role !== 'number') p.moment_role = 0;
+                if (typeof p.moment_rules !== 'string' || !p.moment_rules.trim()) {
+                    p.moment_rules = DEFAULT_MOMENT_RULES;
+                }
             }
             await this.persist(state);
         } else {
@@ -213,6 +274,20 @@ export class PresetStore {
                 const looksLegacy = rules.includes('msg_start') && rules.includes('QQ 私聊格式协议') && !rules.includes('<content>');
                 if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim() || looksLegacy) {
                     p.dialogue_rules = DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT;
+                }
+
+                if (typeof p.moment_enabled !== 'boolean') p.moment_enabled = false;
+                if (typeof p.moment_position !== 'number') p.moment_position = 0; // IN_PROMPT
+                if (typeof p.moment_depth !== 'number') p.moment_depth = 0; // 与原文件“深度=0”一致
+                if (typeof p.moment_role !== 'number') p.moment_role = 0;
+                if (typeof p.moment_rules !== 'string' || !p.moment_rules.trim()) {
+                    p.moment_rules = DEFAULT_MOMENT_RULES;
+                }
+                // 若仍是旧版“含评论输出”的默认规则，自动迁移为“评论注释版”（不覆盖用户自定义）
+                const mr = (typeof p.moment_rules === 'string') ? p.moment_rules : '';
+                const looksOldMoment = mr.includes('<QQ空间格式介绍>') && mr.includes('moment_start') && !mr.includes('任务：动态发布决策');
+                if (looksOldMoment) {
+                    p.moment_rules = DEFAULT_MOMENT_RULES;
                 }
             }
             await this.persist(state);

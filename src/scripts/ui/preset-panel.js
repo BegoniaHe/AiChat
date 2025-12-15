@@ -14,7 +14,7 @@ import { logger } from '../utils/logger.js';
 
 const PRESET_TYPES = [
     { id: 'sysprompt', label: '系统提示词' },
-    { id: 'dialogue', label: '对话提示词' },
+    { id: 'chatprompts', label: '聊天提示词' },
     { id: 'context', label: '上下文模板' },
     { id: 'instruct', label: 'Instruct 模板' },
     { id: 'openai', label: '生成参数' },
@@ -617,8 +617,8 @@ export class PresetPanel {
             root.appendChild(this.renderSyspromptEditor(p));
             return;
         }
-        if (this.activeType === 'dialogue') {
-            root.appendChild(this.renderDialogueEditor(p));
+        if (this.activeType === 'chatprompts') {
+            root.appendChild(this.renderChatPromptsEditor(p));
             return;
         }
         if (this.activeType === 'context') {
@@ -642,7 +642,7 @@ export class PresetPanel {
     getStoreType() {
         // “自定义”tab 是 OpenAI preset 的区块视图
         if (this.activeType === 'custom') return 'openai';
-        if (this.activeType === 'dialogue') return 'sysprompt';
+        if (this.activeType === 'chatprompts') return 'sysprompt';
         return this.activeType;
     }
 
@@ -703,60 +703,162 @@ export class PresetPanel {
         return wrap;
     }
 
-    renderDialogueEditor(p) {
+    renderChatPromptsEditor(p) {
         const wrap = this.renderSection(
-            '对话提示词（MyPhone / 线上格式协议）',
-            '用于“对话模式”：要求模型把可解析内容放到 <content> 或 msg_start/msg_end 等协议块中，便于程序分流到私聊/群聊/动态。'
+            '聊天提示词（对话模式）',
+            '私聊/动态提示词都放在这里，区块默认折叠；注入位置/深度语义与 ST 相同。'
         );
 
-        const enabled = document.createElement('label');
-        enabled.style.cssText = 'margin-top:10px; display:flex; gap:10px; align-items:center; font-size:13px; color:#334155; cursor:pointer;';
-        enabled.innerHTML = `<input id="dialogue-enabled" type="checkbox" style="width:16px; height:16px;">启用对话提示词`;
-        enabled.querySelector('input').checked = Boolean(p.dialogue_enabled);
-        wrap.appendChild(enabled);
+        const list = document.createElement('div');
+        list.style.cssText = 'margin-top:12px; display:flex; flex-direction:column; gap:10px;';
 
-        const pos = document.createElement('select');
-        pos.id = 'dialogue-position';
-        pos.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        pos.innerHTML = `
-            <option value="${EXT_PROMPT_TYPES.IN_PROMPT}">IN_PROMPT（系统开头）</option>
-            <option value="${EXT_PROMPT_TYPES.IN_CHAT}">IN_CHAT（按深度插入历史）</option>
-            <option value="${EXT_PROMPT_TYPES.BEFORE_PROMPT}">BEFORE_PROMPT（最前）</option>
-            <option value="${EXT_PROMPT_TYPES.NONE}">NONE（不注入）</option>
-        `;
-        pos.value = String(p.dialogue_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+        const makePromptBlock = ({
+            idPrefix,
+            title,
+            subtitle,
+            enabledKey,
+            positionKey,
+            depthKey,
+            roleKey,
+            rulesKey,
+            defaultDepth,
+            enabledLabel,
+            placeholder,
+        }) => {
+            const card = document.createElement('div');
+            card.style.cssText = `
+                border: 1px solid rgba(0,0,0,0.08);
+                border-radius: 12px;
+                background: #fff;
+                overflow: hidden;
+            `;
+            card.dataset.collapsed = 'true';
 
-        const depth = document.createElement('input');
-        depth.id = 'dialogue-depth';
-        depth.type = 'number';
-        depth.inputMode = 'numeric';
-        depth.min = '0';
-        depth.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        depth.value = String(p.dialogue_depth ?? 1);
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; background:rgba(248,250,252,0.85);';
 
-        const role = document.createElement('select');
-        role.id = 'dialogue-role';
-        role.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        role.innerHTML = `
-            <option value="${EXT_PROMPT_ROLES.SYSTEM}">SYSTEM</option>
-            <option value="${EXT_PROMPT_ROLES.USER}">USER</option>
-            <option value="${EXT_PROMPT_ROLES.ASSISTANT}">ASSISTANT</option>
-        `;
-        role.value = String(p.dialogue_role ?? EXT_PROMPT_ROLES.SYSTEM);
+            const left = document.createElement('div');
+            left.style.cssText = 'display:flex; align-items:center; gap:10px; min-width:0;';
+            left.innerHTML = `
+                <div class="collapse-toggle" style="font-size:16px; color:#64748b; user-select:none; width:18px;">▸</div>
+                <div style="min-width:0;">
+                    <div style="font-weight:800; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${title}</div>
+                    <div style="color:#64748b; font-size:12px;">${subtitle}</div>
+                </div>
+            `;
+            header.appendChild(left);
 
-        wrap.appendChild(this.renderInputRow([
-            { label: '注入位置', el: pos },
-            { label: '深度（IN_CHAT）', el: depth },
-            { label: '角色（IN_CHAT）', el: role },
-        ]));
+            const right = document.createElement('div');
+            right.style.cssText = 'display:flex; align-items:center; gap:10px;';
+            const enabledWrap = document.createElement('label');
+            enabledWrap.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:12px; color:#334155; cursor:pointer;';
+            enabledWrap.innerHTML = `<input id="${idPrefix}-enabled" type="checkbox" style="width:16px; height:16px;">${enabledLabel}`;
+            const enabledInput = enabledWrap.querySelector('input');
+            enabledInput.checked = Boolean(p[enabledKey]);
+            enabledInput.addEventListener('click', (e) => e.stopPropagation());
+            right.appendChild(enabledWrap);
+            header.appendChild(right);
+            card.appendChild(header);
 
-        wrap.appendChild(this.renderTextarea(
-            '规则内容（纯文本）',
-            'dialogue-rules',
-            p.dialogue_rules || '',
-            '粘贴 手机流式.html 中的 MyPhone/QQ 格式规则（例如 outputFormat + QQ聊天格式介绍 + content 规则等）'
-        ));
+            const body = document.createElement('div');
+            body.className = 'block-body';
+            body.style.cssText = 'padding:10px 12px; display:none;';
 
+            const pos = document.createElement('select');
+            pos.id = `${idPrefix}-position`;
+            pos.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+            pos.innerHTML = `
+                <option value="${EXT_PROMPT_TYPES.IN_PROMPT}">IN_PROMPT（系统开头）</option>
+                <option value="${EXT_PROMPT_TYPES.IN_CHAT}">IN_CHAT（按深度插入历史）</option>
+                <option value="${EXT_PROMPT_TYPES.BEFORE_PROMPT}">BEFORE_PROMPT（最前）</option>
+                <option value="${EXT_PROMPT_TYPES.NONE}">NONE（不注入）</option>
+            `;
+            pos.value = String(p[positionKey] ?? EXT_PROMPT_TYPES.IN_PROMPT);
+
+            const depth = document.createElement('input');
+            depth.id = `${idPrefix}-depth`;
+            depth.type = 'number';
+            depth.inputMode = 'numeric';
+            depth.min = '0';
+            depth.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+            depth.value = String(p[depthKey] ?? defaultDepth);
+
+            const role = document.createElement('select');
+            role.id = `${idPrefix}-role`;
+            role.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+            role.innerHTML = `
+                <option value="${EXT_PROMPT_ROLES.SYSTEM}">SYSTEM</option>
+                <option value="${EXT_PROMPT_ROLES.USER}">USER</option>
+                <option value="${EXT_PROMPT_ROLES.ASSISTANT}">ASSISTANT</option>
+            `;
+            role.value = String(p[roleKey] ?? EXT_PROMPT_ROLES.SYSTEM);
+
+            body.appendChild(this.renderInputRow([
+                { label: '注入位置', el: pos },
+                { label: '深度（IN_CHAT）', el: depth },
+                { label: '角色（IN_CHAT）', el: role },
+            ]));
+
+            const ta = this.renderTextarea('规则内容（纯文本）', `${idPrefix}-rules`, p[rulesKey] || '', placeholder);
+            body.appendChild(ta);
+            card.appendChild(body);
+
+            const applyEnabledStyle = (isEnabled) => {
+                if (isEnabled) {
+                    card.style.opacity = '';
+                    card.style.filter = '';
+                    card.style.background = '#fff';
+                    header.style.background = 'rgba(248,250,252,0.85)';
+                } else {
+                    card.style.opacity = '0.62';
+                    card.style.filter = 'grayscale(1)';
+                    card.style.background = '#f1f5f9';
+                    header.style.background = '#e2e8f0';
+                }
+            };
+            enabledInput.addEventListener('change', () => applyEnabledStyle(enabledInput.checked));
+            applyEnabledStyle(enabledInput.checked);
+
+            const setCollapsed = (collapsed) => {
+                card.dataset.collapsed = collapsed ? 'true' : 'false';
+                const toggle = header.querySelector('.collapse-toggle');
+                if (toggle) toggle.textContent = collapsed ? '▸' : '▾';
+                body.style.display = collapsed ? 'none' : 'block';
+            };
+            header.addEventListener('click', () => setCollapsed(card.dataset.collapsed !== 'true'));
+            setCollapsed(true); // default collapsed
+
+            return card;
+        };
+
+        list.appendChild(makePromptBlock({
+            idPrefix: 'dialogue',
+            title: '私聊提示词',
+            subtitle: '解析 <content> 内的 <{{user}}和{{char}}的私聊>，每行 - 开头为一条消息',
+            enabledKey: 'dialogue_enabled',
+            positionKey: 'dialogue_position',
+            depthKey: 'dialogue_depth',
+            roleKey: 'dialogue_role',
+            rulesKey: 'dialogue_rules',
+            defaultDepth: 1,
+            enabledLabel: '启用',
+            placeholder: '私聊协议提示词（<content> + 私聊标签 + - 行）',
+        }));
+        list.appendChild(makePromptBlock({
+            idPrefix: 'moment',
+            title: '动态提示词',
+            subtitle: '解析 moment_start/moment_reply_* 到动态页（评论部分暂时注释）',
+            enabledKey: 'moment_enabled',
+            positionKey: 'moment_position',
+            depthKey: 'moment_depth',
+            roleKey: 'moment_role',
+            rulesKey: 'moment_rules',
+            defaultDepth: 0,
+            enabledLabel: '启用',
+            placeholder: '动态协议提示词（<content> + moment_start...moment_end）',
+        }));
+
+        wrap.appendChild(list);
         return wrap;
     }
 
@@ -1274,12 +1376,18 @@ export class PresetPanel {
             return current;
         }
 
-        if (this.activeType === 'dialogue') {
+        if (this.activeType === 'chatprompts') {
             current.dialogue_enabled = Boolean(root.querySelector('#dialogue-enabled')?.checked);
             current.dialogue_position = getInt(root.querySelector('#dialogue-position')?.value, current.dialogue_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
             current.dialogue_depth = getInt(root.querySelector('#dialogue-depth')?.value, current.dialogue_depth ?? 1);
             current.dialogue_role = getInt(root.querySelector('#dialogue-role')?.value, current.dialogue_role ?? EXT_PROMPT_ROLES.SYSTEM);
             current.dialogue_rules = root.querySelector('#dialogue-rules')?.value ?? '';
+
+            current.moment_enabled = Boolean(root.querySelector('#moment-enabled')?.checked);
+            current.moment_position = getInt(root.querySelector('#moment-position')?.value, current.moment_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            current.moment_depth = getInt(root.querySelector('#moment-depth')?.value, current.moment_depth ?? 0);
+            current.moment_role = getInt(root.querySelector('#moment-role')?.value, current.moment_role ?? EXT_PROMPT_ROLES.SYSTEM);
+            current.moment_rules = root.querySelector('#moment-rules')?.value ?? '';
             return current;
         }
 

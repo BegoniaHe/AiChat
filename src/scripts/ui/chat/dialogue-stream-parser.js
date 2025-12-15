@@ -67,6 +67,83 @@ const extractOtherNameFromPrivateChatTag = (tagName, userName) => {
     return null;
 };
 
+const parseMomentBlock = (innerText) => {
+    const text = normalizeNewlines(innerText);
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const moments = [];
+    let current = null;
+
+    const commit = () => {
+        if (!current) return;
+        // Default counts
+        current.views = Number.isFinite(Number(current.views)) ? Number(current.views) : 0;
+        current.likes = Number.isFinite(Number(current.likes)) ? Number(current.likes) : 0;
+        current.timestamp = Date.now();
+        current.signature = `${current.author || ''}\u0000${current.content || ''}\u0000${current.time || ''}`;
+        if (!Array.isArray(current.comments)) current.comments = [];
+        moments.push(current);
+        current = null;
+    };
+
+    for (const line of lines) {
+        const parts = line.split('--').map(p => p.trim());
+        if (parts.length >= 5) {
+            // New moment header
+            commit();
+            current = {
+                author: parts[0] || '',
+                content: parts[1] || '',
+                time: parts[2] || '',
+                views: Number(parts[3] || 0),
+                likes: Number(parts[4] || 0),
+                comments: [],
+            };
+            continue;
+        }
+        if (parts.length === 2 && current) {
+            current.comments.push({ author: parts[0] || '', content: parts[1] || '' });
+            continue;
+        }
+    }
+    commit();
+    return moments;
+};
+
+const parseMomentReplyBlock = (innerText) => {
+    const text = normalizeNewlines(innerText);
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    let momentId = '';
+    const comments = [];
+    for (const line of lines) {
+        const m = line.match(/^moment_id::\s*(.+)\s*$/i);
+        if (m) {
+            momentId = String(m[1] || '').trim();
+            continue;
+        }
+        const parts = line.split('--').map(p => p.trim());
+        if (parts.length >= 2) {
+            comments.push({ author: parts[0] || '', content: parts.slice(1).join('--') || '' });
+        }
+    }
+    return { momentId, comments };
+};
+
+const findNextToken = (s) => {
+    const src = String(s ?? '');
+    const lower = src.toLowerCase();
+    const idxTag = src.indexOf('<');
+    const idxMoment = lower.indexOf('moment_start');
+    const idxReply = lower.indexOf('moment_reply_start');
+    const candidates = [
+        { kind: 'tag', idx: idxTag },
+        { kind: 'moment', idx: idxMoment },
+        { kind: 'moment_reply', idx: idxReply },
+    ].filter(x => x.idx !== -1);
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => a.idx - b.idx);
+    return candidates[0];
+};
+
 export class DialogueStreamParser {
     constructor({ userName = '我' } = {}) {
         this.userName = userName;
@@ -114,9 +191,38 @@ export class DialogueStreamParser {
         let advanced = true;
         while (advanced) {
             advanced = false;
-            const lt = findFirstTagOpen(work);
-            if (lt === -1) break;
+            const next = findNextToken(work);
+            if (!next) break;
 
+            if (next.kind === 'moment') {
+                const startIdx = next.idx;
+                const endMark = 'moment_end';
+                const endAt = work.toLowerCase().indexOf(endMark, startIdx);
+                if (endAt === -1) break; // wait for more data
+                const inner = work.slice(startIdx + 'moment_start'.length, endAt);
+                const after = endAt + endMark.length;
+                const moments = parseMomentBlock(inner);
+                if (moments.length) events.push({ type: 'moments', moments });
+                work = work.slice(after);
+                advanced = true;
+                continue;
+            }
+
+            if (next.kind === 'moment_reply') {
+                const startIdx = next.idx;
+                const endMark = 'moment_reply_end';
+                const endAt = work.toLowerCase().indexOf(endMark, startIdx);
+                if (endAt === -1) break; // wait for more data
+                const inner = work.slice(startIdx + 'moment_reply_start'.length, endAt);
+                const after = endAt + endMark.length;
+                const { momentId, comments } = parseMomentReplyBlock(inner);
+                if (momentId && comments.length) events.push({ type: 'moment_reply', momentId, comments });
+                work = work.slice(after);
+                advanced = true;
+                continue;
+            }
+
+            const lt = next.idx;
             const open = parseOpenTag(work, lt);
             if (!open) break; // need more data
             const { tagName, isClosing, endIdx } = open;
@@ -170,4 +276,3 @@ export class DialogueStreamParser {
         return [];
     }
 }
-

@@ -404,6 +404,14 @@ class AppBridge {
         const dialogueDepth = Number.isFinite(Number(syspActive?.dialogue_depth)) ? Math.max(0, Math.trunc(Number(syspActive.dialogue_depth))) : 1;
         const dialogueRole = Number.isFinite(Number(syspActive?.dialogue_role)) ? Math.trunc(Number(syspActive.dialogue_role)) : 0;
 
+        // 动态模式：QQ空间格式（保存于 sysprompt 预设）
+        const momentEnabled = Boolean(syspActive?.moment_enabled);
+        const momentRulesRaw = (typeof syspActive?.moment_rules === 'string') ? syspActive.moment_rules : '';
+        const momentRules = applyMacros(momentRulesRaw, { user: name1, char: name2 });
+        const momentPosition = Number.isFinite(Number(syspActive?.moment_position)) ? Number(syspActive.moment_position) : 0;
+        const momentDepth = Number.isFinite(Number(syspActive?.moment_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_depth))) : 0;
+        const momentRole = Number.isFinite(Number(syspActive?.moment_role)) ? Math.trunc(Number(syspActive.moment_role)) : 0;
+
         // Formatting helpers from OpenAI preset (optional)
         const wiFormat = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
         const scenarioFormat = typeof openp?.scenario_format === 'string' ? openp.scenario_format : '{{scenario}}';
@@ -437,6 +445,17 @@ class AppBridge {
                     history.splice(idx, 0, { role, content: dialogueRules });
                 } else if (dialoguePosition === 2 || dialoguePosition === 0) { // BEFORE_PROMPT or IN_PROMPT
                     messages.push({ role: 'system', content: dialogueRules });
+                }
+            }
+            // 动态提示词：按 ST extension prompt 的位置/深度语义注入
+            if (momentEnabled && momentRules) {
+                if (momentPosition === 1) { // IN_CHAT
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[momentRole] || 'system';
+                    const idx = Math.max(0, history.length - momentDepth);
+                    history.splice(idx, 0, { role, content: momentRules });
+                } else if (momentPosition === 2 || momentPosition === 0) { // BEFORE_PROMPT or IN_PROMPT
+                    messages.push({ role: 'system', content: momentRules });
                 }
             }
             const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
@@ -572,6 +591,10 @@ class AppBridge {
         if (dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
             messages.push({ role: 'system', content: dialogueRules });
         }
+        // 动态提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
+        if (momentEnabled && momentRules && (momentPosition === 2 || momentPosition === 0)) {
+            messages.push({ role: 'system', content: momentRules });
+        }
 
         // If context preset disabled, fall back to legacy system prompt building
         if (!useContext) {
@@ -608,6 +631,13 @@ class AppBridge {
             const role = roleMap[dialogueRole] || 'system';
             const idx = Math.max(0, history.length - dialogueDepth);
             history.splice(idx, 0, { role, content: dialogueRules });
+        }
+        // IN_CHAT: inject moment rules into history (depth + role)
+        if (momentEnabled && momentRules && momentPosition === 1) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[momentRole] || 'system';
+            const idx = Math.max(0, history.length - momentDepth);
+            history.splice(idx, 0, { role, content: momentRules });
         }
 
         if (history.length > 0) {

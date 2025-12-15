@@ -156,6 +156,38 @@ export class WorldPanel {
         }
     }
 
+    async onNewWorld() {
+        try {
+            const raw = prompt('新建世界書名稱', '新世界書');
+            const name = String(raw || '').trim();
+            if (!name) return;
+            const existing = await window.appBridge.listWorlds?.();
+            if (Array.isArray(existing) && existing.includes(name)) {
+                window.toastr?.warning('名稱已存在，請換一個');
+                return;
+            }
+
+            const blank = { name, entries: [] };
+            await window.appBridge.saveWorldInfo(name, blank);
+
+            if (this.scope === 'global') {
+                await window.appBridge.setGlobalWorld(name);
+            } else {
+                await window.appBridge.setCurrentWorld(name);
+            }
+
+            window.toastr?.success(`已新建並啟用：${name}`);
+            window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: name } }));
+            await this.refreshList();
+
+            // Open editor immediately for convenience
+            await this.openEditor(name);
+        } catch (err) {
+            logger.error('新建世界書失敗', err);
+            window.toastr?.error('新建世界書失敗');
+        }
+    }
+
     createUI() {
         this.overlay = document.createElement('div');
         this.overlay.id = 'world-overlay';
@@ -194,7 +226,10 @@ export class WorldPanel {
                 <div style="flex:1 1 45%; min-width: 200px;">
                     <div style="font-weight:700; margin-bottom:6px;">已保存</div>
                     <ul id="world-list" style="list-style:none; padding:8px; border:1px solid #eee; border-radius:8px; max-height:220px; overflow:auto; margin:0;"></ul>
-                    <button id="world-export-current" style="margin-top:8px; padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5; width:100%;">導出當前</button>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button id="world-new" style="flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#019aff; color:#fff; font-weight:700;">新增</button>
+                        <button id="world-export-current" style="flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">導出當前</button>
+                    </div>
                 </div>
                 <div style="flex:1 1 45%; min-width: 200px;">
                     <div style="font-weight:700; margin-bottom:6px;">導入 ST JSON</div>
@@ -215,6 +250,7 @@ export class WorldPanel {
 
         this.panel.querySelector('#world-close').onclick = () => this.hide();
         this.panel.querySelector('#world-import').onclick = () => this.onImport();
+        this.panel.querySelector('#world-new').onclick = () => this.onNewWorld();
         this.panel.querySelector('#world-export-current').onclick = () => this.onExportCurrent();
 
         document.body.appendChild(this.overlay);

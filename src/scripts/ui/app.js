@@ -16,6 +16,8 @@ import { RegexPanel } from './regex-panel.js';
 import { RegexSessionPanel } from './regex-session-panel.js';
 import { ContactSettingsPanel } from './contact-settings-panel.js';
 import { DialogueStreamParser } from './chat/dialogue-stream-parser.js';
+import { MomentsStore } from '../storage/moments-store.js';
+import { MomentsPanel } from './moments-panel.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -25,8 +27,10 @@ const initApp = async () => {
     const worldPanel = new WorldPanel();
     const chatStore = new ChatStore();
     const contactsStore = new ContactsStore();
+    const momentsStore = new MomentsStore();
     await chatStore.ready;
     await contactsStore.ready;
+    await momentsStore.ready;
     await window.appBridge?.regex?.ready;
     await window.appBridge?.presets?.ready;
     window.appBridge.setActiveSession(chatStore.getCurrent());
@@ -61,6 +65,7 @@ const initApp = async () => {
         user: './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png',
         assistant: './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp'
     };
+    const momentsPanel = new MomentsPanel({ momentsStore, contactsStore, defaultAvatar: avatars.assistant });
 
     const formatTime = (ts) => {
         if (!ts) return '';
@@ -231,6 +236,9 @@ const initApp = async () => {
             chatRoom?.classList.add('hidden');
             chatList?.classList.remove('hidden');
         }
+        if (name === 'moments') {
+            try { momentsPanel.render(); } catch {}
+        }
     };
     navBtns.forEach(btn => btn.addEventListener('click', () => switchPage(btn.dataset.page)));
     switchPage('chat');
@@ -320,6 +328,12 @@ const initApp = async () => {
             toggleSheetAt(quickMenu, btn, { alignRight: true, kind: 'quick' });
         });
     });
+
+    // Mount moments list renderer
+    try {
+        const momentsListEl = document.getElementById('moments-list');
+        if (momentsListEl) momentsPanel.mount(momentsListEl);
+    } catch {}
     chatMenuBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         positionSheet(chatroomMenu, chatMenuBtn, 0, 4, true);
@@ -572,8 +586,8 @@ const initApp = async () => {
             const byId = contactsStore.getContact(other);
             if (byId?.id) return byId.id;
 
-            // Fallback: treat name as id (legacy behavior)
-            return other;
+            // Do NOT create a new chat on mismatch (treat as format error)
+            return null;
         };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
@@ -647,13 +661,28 @@ const initApp = async () => {
                     for await (const chunk of stream) {
                         const events = parser.push(chunk);
                         for (const ev of events) {
+                            if (ev.type === 'moments') {
+                                try {
+                                    momentsStore.addMany(ev.moments || []);
+                                    if (activePage === 'moments') momentsPanel.render();
+                                } catch {}
+                                continue;
+                            }
+                            if (ev.type === 'moment_reply') {
+                                try {
+                                    momentsStore.addComments(ev.momentId, ev.comments || []);
+                                    if (activePage === 'moments') momentsPanel.render();
+                                } catch {}
+                                continue;
+                            }
                             if (ev.type !== 'private_chat') continue;
                             ui.hideTyping();
 
                             // 默认路由到当前 session；若标签指向其他私聊，则创建/写入对应会话（后续群聊/动态会扩展）
                             const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
-                            if (targetSessionId && !contactsStore.getContact(targetSessionId)) {
-                                contactsStore.upsertContact({ id: targetSessionId, name: targetSessionId });
+                            if (!targetSessionId) {
+                                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
+                                continue;
                             }
 
                             ev.messages.forEach((msgText) => {
@@ -719,14 +748,25 @@ const initApp = async () => {
                 if (dialogueEnabled) {
                     const parser = new DialogueStreamParser({ userName });
                     const events = parser.push(resultRaw);
-                    const privateEvents = events.filter(e => e?.type === 'private_chat');
-                    if (privateEvents.length) {
-                        privateEvents.forEach((ev) => {
+                    let didAnything = false;
+                    events.forEach((ev) => {
+                        if (ev?.type === 'moments') {
+                            momentsStore.addMany(ev.moments || []);
+                            didAnything = true;
+                            return;
+                        }
+                        if (ev?.type === 'moment_reply') {
+                            momentsStore.addComments(ev.momentId, ev.comments || []);
+                            didAnything = true;
+                            return;
+                        }
+                        if (ev?.type === 'private_chat') {
                             const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
-                            if (targetSessionId && !contactsStore.getContact(targetSessionId)) {
-                                contactsStore.upsertContact({ id: targetSessionId, name: targetSessionId });
+                            if (!targetSessionId) {
+                                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
+                                return;
                             }
-                            ev.messages.forEach((msgText) => {
+                            (ev.messages || []).forEach((msgText) => {
                                 const parsed = {
                                     role: 'assistant',
                                     ...parseSpecialMessage(String(msgText || '')),
@@ -734,13 +774,15 @@ const initApp = async () => {
                                     avatar: getAssistantAvatarForSession(targetSessionId),
                                     time: formatNowTime(),
                                 };
-                                if (targetSessionId === sessionId) {
-                                    ui.addMessage(parsed);
-                                }
+                                if (targetSessionId === sessionId) ui.addMessage(parsed);
                                 chatStore.appendMessage(parsed, targetSessionId);
+                                didAnything = true;
                             });
-                        });
+                        }
+                    });
+                    if (didAnything) {
                         refreshChatAndContacts();
+                        if (activePage === 'moments') momentsPanel.render();
                         return;
                     }
                     // 如果对话模式未解析到有效标签，回退显示原文，便于调试

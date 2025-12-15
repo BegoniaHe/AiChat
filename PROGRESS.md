@@ -692,3 +692,42 @@
   - **修复**：对私聊标签的目标会话进行解析：若标签指向当前聊天对象（按当前会话的联系人名/id 比对）则写回当前会话；否则优先匹配已存在联系人（按 name 精确匹配）并复用其 id，避免重复创建。
   - 文件修改：
     - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 10:38 - 对话模式更严格 + 动态（Moments）基础实现
+  - **更严格分流**：若私聊标签无法匹配“当前会话/已存在联系人”，不再自动新建同名会话，视为回覆格式错误并丢弃。
+  - **动态存储/渲染**：新增动态存储 `MomentsStore` 并把 `moments-page` 的列表改为真实渲染（支持查看详情与本地添加评论）。
+  - **动态解析**：对话流式解析器新增对 `moment_start...moment_end` 与 `moment_reply_start...moment_reply_end` 的识别（在 `<content>` 内），解析后写入动态列表；流式/非流式均可处理。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+    - 新增：`src/scripts/storage/moments-store.js`
+    - 新增：`src/scripts/ui/moments-panel.js`
+    - 修改：`src/index.html`
+
+- 2025-12-15 10:44 - 搬运动态提示词并拆分提示词页签：私聊提示词 + 动态提示词（注入位置/深度可配）
+  - **页签拆分**：将原“对话提示词”页签更名为「私聊提示词」，新增「动态提示词」页签。
+  - **动态提示词搬运**：把 `手机流式.html` 的 QQ空间/动态格式介绍迁移为默认动态提示词，并适配到 `<content>` 内输出（moment_start/moment_reply_*）。
+  - **注入语义对齐**：动态提示词与私聊提示词一样，支持 ST 风格注入位置（BEFORE_PROMPT/IN_PROMPT/IN_CHAT/NONE）与 IN_CHAT 深度/角色；默认深度为 0（与原文件“深度=0”一致），默认不启用，避免影响纯私聊聊天。
+  - 文件修改：
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/storage/preset-store.js`
+    - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-15 10:50 - 聊天提示词改为同一页签区块：私聊/动态共用 tab（默认折叠）+ 动态评论规则注释
+  - **UI 调整**：将「私聊提示词」「动态提示词」合并为一个 tab「聊天提示词」，内部以两个区块呈现（样式对齐“自定义”区块，默认折叠，点击展开；禁用时整体灰化）。
+  - **动态提示词调整**：将动态的“评论/评论回复”相关规则注释（后续再做评论系统），并对旧默认规则做自动迁移（不覆盖用户自定义）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/storage/preset-store.js`
+
+- 2025-12-15 11:08 - 动态提示词补齐动态发布决策（momentCreationTask）
+  - **搬运 momentCreationTask**：将 `手机流式.html` 的 `momentCreationTask`（动态发布决策：时机/概率/性格/输出规则）加入默认动态提示词中，用于让模型决定何时输出 `moment_start...moment_end`。
+  - **默认规则迁移**：若用户仍使用旧版默认动态提示词（不含动态发布决策段落），自动迁移为新版（不覆盖用户自定义内容）。
+  - 文件修改：
+    - 修改：`src/scripts/storage/preset-store.js`
+
+- 2025-12-15 11:24 - 世界书管理支持“新增”世界书并按作用域自动绑定启用
+  - **新增按钮**：世界书管理面板添加「新增」，可输入名称后创建空白世界书并立刻打开编辑器。
+  - **会话/全局区分**：从聊天室右上角「三」打开的世界书管理，新增后自动绑定并启用到当前会话；从头像菜单打开的世界书管理（全局），新增后自动全局启用。
+  - 文件修改：
+    - 修改：`src/scripts/ui/world-panel.js`
