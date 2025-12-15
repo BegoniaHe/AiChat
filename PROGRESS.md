@@ -731,3 +731,68 @@
   - **会话/全局区分**：从聊天室右上角「三」打开的世界书管理，新增后自动绑定并启用到当前会话；从头像菜单打开的世界书管理（全局），新增后自动全局启用。
   - 文件修改：
     - 修改：`src/scripts/ui/world-panel.js`
+
+- 2025-12-15 11:39 - 动态头像/评论交互对齐手机流式：按联系人头像渲染 + 评论折叠 + 三点菜单
+  - **头像来源修复**：动态作者头像优先从联系人资料匹配（按 name/id 精确与去空格小写匹配），并支持「我/用户」回退到用户头像。
+  - **评论折叠**：评论超过 8 条时默认折叠，仅显示最新 8 条；支持「展开查看更多评论 / 收起评论」。
+  - **三点菜单**：动态右上角「⋯」弹出下拉菜单（删除/取消），交互与旧版 `手机流式.html` 接近。
+  - 文件修改：
+    - 修改：`src/scripts/ui/moments-panel.js`
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/assets/css/main.css`
+
+- 2025-12-15 11:45 - 动态头像再修复：落盘 authorId 并渲染优先使用绑定联系人头像
+  - **authorId 绑定**：动态写入 store 时根据作者名解析匹配联系人 id（支持模糊/子串），并落盘为 `authorId`，避免名称变更导致匹配失败。
+  - **渲染优先级**：动态渲染时优先用 `authorId -> 联系人.avatar`，回退到按作者名匹配与默认头像。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/ui/moments-panel.js`
+
+- 2025-12-15 11:59 - 动态头像三修：落盘 authorAvatar 快照 + 更强名称归一 + 自动回填旧动态
+  - **authorAvatar 快照**：动态入库时会把匹配到的头像写入 `authorAvatar`，渲染优先使用该快照，避免任何名称匹配偏差。
+  - **归一规则增强**：作者名归一仅保留字母/数字/CJK，过滤 emoji/符号，提升与联系人名称匹配成功率。
+  - **旧动态回填**：渲染时若检测到旧动态缺少 `authorAvatar`，会按当前联系人信息回填一次并持久化。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/ui/moments-panel.js`
+
+- 2025-12-15 12:10 - 对齐手机流式“发言人”头像绑定：动态作者占位符自动归一为当前聊天对象
+  - **作者名归一**：当动态作者为“发言人/角色/角色名/作者”等占位符时，写入动态时自动替换为当前聊天对象名，避免后续头像匹配失败。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 12:53 - 聊天室加入“原始回复”查看：显示最新一轮完整模型输出
+  - **入口**：聊天室右上角「三」菜单新增「🧾 原始回复」。
+  - **存储**：每次生成后按会话保存最新一轮原始输出（流式/非流式均覆盖），并做长度上限截断以降低配额风险。
+  - **面板**：新弹窗显示完整原始文本（可滚动），支持一键复制。
+  - **稳定性**：ChatStore 写入 localStorage 增加 try/catch，避免配额异常导致前端崩溃/按钮失灵。
+  - 文件修改：
+    - 修改：`src/index.html`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/storage/chat-store.js`
+
+- 2025-12-15 13:02 - 动态头像兜底对齐“当前会话人格”：记录 originSessionId 并用于头像回退
+  - **原因**：动态作者名可能与联系人记录不一致（别名/翻译/符号差异），导致仅靠作者名匹配失败而回退默认头像。
+  - **修复**：动态写入时记录 `originSessionId`（本轮生成所在聊天室），渲染时若作者未匹配到联系人头像则回退使用 originSessionId 的联系人头像。
+  - **旧数据回填**：渲染时若旧动态缺少 `originSessionId` 且已有 `authorId`，自动回填为 `authorId`。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/ui/moments-panel.js`
+
+- 2025-12-15 13:29 - 修复动态重启丢失：加强磁盘持久化并避免写入巨大头像数据
+  - **磁盘写入队列**：`save_kv` 改为串行队列写入并提供 `flush()`，避免短时间多次写入丢失/覆盖。
+  - **生成后强制落盘**：在对话模式解析到动态后，生成结束会 `await momentsStore.flush()`，确保关闭 App 前已写入磁盘。
+  - **减少体积**：动态条目不再持久化 `data:` 头像（base64/gif），避免 moments JSON 过大导致保存失败；渲染时继续从联系人头像获取。
+  - 文件修改：
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 13:36 - 修复动态“评论”导致内容消失：MomentsStore.upsert 支持局部更新不覆盖原字段
+  - **问题**：动态列表渲染时会做回填（originSessionId/authorAvatar 等），使用 `upsert({id,...})` 传入局部字段；旧实现会把未传字段默认写成空字符串，导致动态内容/作者等被覆盖为空。
+  - **修复**：`upsert` 改为 patch-safe：仅当字段被显式提供时才覆盖，否则保留现有值；并在加载/写入前统一剔除 `data:` 头像以降低存储体积。
+  - 文件修改：
+    - 修改：`src/scripts/storage/moments-store.js`

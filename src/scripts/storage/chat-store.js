@@ -48,7 +48,11 @@ export class ChatStore {
             if (kv && kv.sessions) {
                 this.state = kv;
                 this.currentId = kv.currentId || 'default';
-                localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                try {
+                    localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                } catch (err) {
+                    logger.warn('chat store hydrate -> localStorage failed (quota?)', err);
+                }
                 logger.info('chat store hydrated from disk');
             }
         } catch (err) {
@@ -57,9 +61,15 @@ export class ChatStore {
     }
 
     _persist() {
-        localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+        try {
+            localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+        } catch (err) {
+            logger.warn('chat store persist -> localStorage failed (quota?)', err);
+        }
         // 持久化到磁碟（忽略錯誤，以免阻塞 UI）
-        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch(() => {});
+        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+            logger.debug('chat store save_kv failed (可能非 Tauri)', err);
+        });
     }
 
     listSessions() {
@@ -116,6 +126,8 @@ export class ChatStore {
         if (this.state.sessions[id]) {
             this.state.sessions[id].messages = [];
             this.state.sessions[id].draft = '';
+            this.state.sessions[id].lastRawResponse = '';
+            this.state.sessions[id].lastRawAt = 0;
             this._persist();
         }
     }
@@ -191,5 +203,26 @@ export class ChatStore {
             this.state.sessions[id] = { messages: [], draft: '', settings: {} };
             this._persist();
         }
+    }
+
+    setLastRawResponse(text, id = this.currentId) {
+        if (!this.state.sessions[id]) {
+            this.state.sessions[id] = { messages: [], draft: '', settings: {} };
+        }
+        const raw = String(text ?? '');
+        // keep bounded to reduce quota risks
+        const maxLen = 220_000;
+        const trimmed = raw.length > maxLen ? raw.slice(-maxLen) : raw;
+        this.state.sessions[id].lastRawResponse = trimmed;
+        this.state.sessions[id].lastRawAt = Date.now();
+        this._persist();
+    }
+
+    getLastRawResponse(id = this.currentId) {
+        return String(this.state.sessions[id]?.lastRawResponse || '');
+    }
+
+    getLastRawAt(id = this.currentId) {
+        return Number(this.state.sessions[id]?.lastRawAt || 0) || 0;
     }
 }

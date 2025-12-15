@@ -45,6 +45,9 @@ const initApp = async () => {
             const c = contactsStore.getContact(id);
             const titleEl = document.getElementById('current-chat-title');
             if (titleEl) titleEl.textContent = c?.name || id;
+            try {
+                if (activePage === 'moments') momentsPanel.render({ preserveScroll: true });
+            } catch {}
         }
     });
     const stickerPicker = new StickerPicker((tag) => handleSticker(tag));
@@ -65,7 +68,7 @@ const initApp = async () => {
         user: './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png',
         assistant: './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp'
     };
-    const momentsPanel = new MomentsPanel({ momentsStore, contactsStore, defaultAvatar: avatars.assistant });
+    const momentsPanel = new MomentsPanel({ momentsStore, contactsStore, defaultAvatar: avatars.assistant, userAvatar: avatars.user });
 
     const formatTime = (ts) => {
         if (!ts) return '';
@@ -243,6 +246,106 @@ const initApp = async () => {
     navBtns.forEach(btn => btn.addEventListener('click', () => switchPage(btn.dataset.page)));
     switchPage('chat');
 
+    /* ---------------- 原始回复面板（调试） ---------------- */
+    const rawReplyModal = (() => {
+        let overlay = null;
+        let panel = null;
+        let textarea = null;
+        let metaEl = null;
+
+        const ensure = () => {
+            if (panel) return;
+            overlay = document.createElement('div');
+            overlay.id = 'raw-reply-overlay';
+            overlay.style.cssText = `
+                display:none; position:fixed; inset:0;
+                background: rgba(0,0,0,0.38);
+                z-index: 22000;
+                padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px)) 10px;
+                box-sizing: border-box;
+            `;
+
+            panel = document.createElement('div');
+            panel.id = 'raw-reply-panel';
+            panel.style.cssText = `
+                width: 100%;
+                height: 100%;
+                background: #fff;
+                border-radius: 14px;
+                overflow: hidden;
+                display:flex;
+                flex-direction:column;
+            `;
+            panel.addEventListener('click', (e) => e.stopPropagation());
+
+            panel.innerHTML = `
+                <div style="display:flex; align-items:center; gap:10px; padding:12px; background:#f3f4f6; border-bottom:1px solid #e5e7eb;">
+                    <div style="font-weight:900;">原始回复</div>
+                    <div id="raw-reply-meta" style="margin-left:auto; font-size:12px; color:#64748b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+                    <button id="raw-reply-copy" style="border:1px solid #e5e7eb; background:#fff; border-radius:10px; padding:6px 10px;">复制</button>
+                    <button id="raw-reply-close" style="border:1px solid #e5e7eb; background:#fff; border-radius:10px; padding:6px 10px;">关闭</button>
+                </div>
+                <div style="flex:1; min-height:0; overflow:auto; -webkit-overflow-scrolling:touch; padding:10px;">
+                    <textarea id="raw-reply-text" readonly style="
+                        width:100%;
+                        height:100%;
+                        min-height: 100%;
+                        resize:none;
+                        border:1px solid rgba(0,0,0,0.10);
+                        border-radius:12px;
+                        padding:12px;
+                        font-size:13px;
+                        line-height:1.4;
+                        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+                        white-space: pre;
+                        box-sizing:border-box;
+                        outline:none;
+                    "></textarea>
+                </div>
+            `;
+
+            overlay.appendChild(panel);
+            overlay.addEventListener('click', () => hide());
+            document.body.appendChild(overlay);
+
+            textarea = panel.querySelector('#raw-reply-text');
+            metaEl = panel.querySelector('#raw-reply-meta');
+            panel.querySelector('#raw-reply-close')?.addEventListener('click', hide);
+            panel.querySelector('#raw-reply-copy')?.addEventListener('click', async () => {
+                const text = String(textarea?.value || '');
+                if (!text) {
+                    window.toastr?.warning?.('暂无可复制内容');
+                    return;
+                }
+                try {
+                    await navigator.clipboard?.writeText?.(text);
+                    window.toastr?.success?.('已复制到剪贴簿');
+                } catch {
+                    // fallback: select
+                    textarea?.focus?.();
+                    textarea?.select?.();
+                    window.toastr?.info?.('已选中，请手动复制');
+                }
+            });
+        };
+
+        const show = (text, meta) => {
+            ensure();
+            if (metaEl) metaEl.textContent = meta || '';
+            if (textarea) {
+                textarea.value = String(text || '');
+                textarea.scrollTop = 0;
+            }
+            overlay.style.display = 'block';
+        };
+
+        const hide = () => {
+            if (overlay) overlay.style.display = 'none';
+        };
+
+        return { show, hide };
+    })();
+
     /* ---------------- 頭像設置菜單 ---------------- */
     const settingsMenu = document.getElementById('settings-menu');
     const quickMenu = document.getElementById('quick-menu');
@@ -360,6 +463,19 @@ const initApp = async () => {
             if (action === 'world') worldPanel.show();
             if (action === 'regex') regexSessionPanel.show();
             if (action === 'chat-settings') openChatSettings();
+            if (action === 'raw-reply') {
+                const sid = chatStore.getCurrent();
+                const contact = contactsStore.getContact(sid);
+                const name = contact?.name || sid;
+                const raw = chatStore.getLastRawResponse(sid);
+                const at = chatStore.getLastRawAt(sid);
+                if (!raw) {
+                    window.toastr?.warning?.('暂无原始回复记录（请先让 AI 回覆一次）');
+                } else {
+                    const meta = `${name}${at ? ` · ${new Date(at).toLocaleString()}` : ''}`;
+                    rawReplyModal.show(raw, meta);
+                }
+            }
             hideMenus();
         });
     });
@@ -568,6 +684,9 @@ const initApp = async () => {
         const characterName = contact?.name || (sessionId.startsWith('group:') ? sessionId.replace(/^group:/, '') : sessionId) || 'assistant';
         const userName = '我';
         const normalizeName = (s) => String(s || '').trim();
+        const normalizeKey = (s) => normalizeName(s).toLowerCase().replace(/\s+/g, '');
+        // keep only letters/numbers/CJK to avoid emoji/punctuation differences
+        const normalizeLoose = (s) => normalizeKey(s).replace(/[^a-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
         const resolvePrivateChatTargetSessionId = (otherName) => {
             const other = normalizeName(otherName);
             if (!other) return sessionId;
@@ -588,6 +707,68 @@ const initApp = async () => {
 
             // Do NOT create a new chat on mismatch (treat as format error)
             return null;
+        };
+        const resolveMomentAuthorId = (authorName) => {
+            const raw = normalizeName(authorName);
+            if (!raw) return '';
+            if (raw === userName || raw.toLowerCase() === 'user' || raw === '用户') return 'user';
+            // Common placeholders: treat as current chat character
+            if (raw === '发言人' || raw === '角色' || raw === '角色名' || raw === '作者') return sessionId;
+
+            // If authorName matches current chat character display name, bind to current session
+            const charLoose = normalizeLoose(characterName);
+            const rawLoose = normalizeLoose(raw);
+            if (rawLoose && charLoose && (rawLoose === charLoose || rawLoose.includes(charLoose) || charLoose.includes(rawLoose))) {
+                return sessionId;
+            }
+
+            // Author might be an existing contact id
+            const byId = contactsStore.getContact(raw);
+            if (byId?.id) return byId.id;
+
+            const list = contactsStore.listContacts?.() || [];
+            // Exact match
+            const exact = list.find(c => normalizeName(c?.name) === raw);
+            if (exact?.id) return exact.id;
+
+            const key = normalizeLoose(raw);
+            // Fuzzy (normalized)
+            const fuzzy = list.find(c => normalizeLoose(c?.name) === key || normalizeLoose(c?.id) === key);
+            if (fuzzy?.id) return fuzzy.id;
+
+            // Substring heuristic (pick longest match)
+            let best = null;
+            let bestLen = 0;
+            for (const c of list) {
+                const cn = normalizeLoose(c?.name);
+                if (!cn) continue;
+                if (key.includes(cn) || cn.includes(key)) {
+                    const len = Math.min(cn.length, key.length);
+                    if (len > bestLen) {
+                        bestLen = len;
+                        best = c;
+                    }
+                }
+            }
+            return best?.id || '';
+        };
+        const normalizeMomentAuthorDisplay = (authorName) => {
+            const raw = normalizeName(authorName);
+            if (!raw) return normalizeName(characterName) || '角色';
+            if (raw === userName || raw.toLowerCase() === 'user' || raw === '用户') return userName;
+            if (raw === '发言人' || raw === '角色' || raw === '角色名' || raw === '作者') return normalizeName(characterName) || raw;
+            return raw;
+        };
+        const ingestMoments = (moments = []) => {
+            const list = Array.isArray(moments) ? moments : [];
+            return list.map((m) => {
+                const author = normalizeMomentAuthorDisplay(m?.author);
+                const authorId = resolveMomentAuthorId(author);
+                let authorAvatar = '';
+                if (authorId === 'user') authorAvatar = avatars.user;
+                else if (authorId) authorAvatar = contactsStore.getContact(authorId)?.avatar || '';
+                return { ...(m || {}), author, authorId, authorAvatar, originSessionId: sessionId };
+            });
         };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
@@ -658,12 +839,16 @@ const initApp = async () => {
                     ui.showTyping(assistantAvatar);
                     const parser = new DialogueStreamParser({ userName });
                     const stream = await window.appBridge.generate(text, llmContext(text));
+                    let fullRaw = '';
+                    let mutatedMoments = false;
                     for await (const chunk of stream) {
+                        fullRaw += chunk;
                         const events = parser.push(chunk);
                         for (const ev of events) {
                             if (ev.type === 'moments') {
                                 try {
-                                    momentsStore.addMany(ev.moments || []);
+                                    momentsStore.addMany(ingestMoments(ev.moments || []));
+                                    mutatedMoments = true;
                                     if (activePage === 'moments') momentsPanel.render();
                                 } catch {}
                                 continue;
@@ -671,6 +856,7 @@ const initApp = async () => {
                             if (ev.type === 'moment_reply') {
                                 try {
                                     momentsStore.addComments(ev.momentId, ev.comments || []);
+                                    mutatedMoments = true;
                                     if (activePage === 'moments') momentsPanel.render();
                                 } catch {}
                                 continue;
@@ -706,6 +892,10 @@ const initApp = async () => {
                         }
                     }
                     ui.hideTyping();
+                    chatStore.setLastRawResponse(fullRaw, sessionId);
+                    if (mutatedMoments) {
+                        try { await momentsStore.flush(); } catch {}
+                    }
                     refreshChatAndContacts();
                 } else {
                     // 兼容旧逻辑（流式逐字）
@@ -716,6 +906,7 @@ const initApp = async () => {
                         full += chunk;
                         streamCtrl.update(full);
                     }
+                    chatStore.setLastRawResponse(full, sessionId);
                     let stored = full;
                     let display = full;
                     // === 创意写作模式（暂时停用）===
@@ -743,21 +934,25 @@ const initApp = async () => {
                 ui.showTyping(assistantAvatar);
                 const resultRaw = await window.appBridge.generate(text, llmContext(text));
                 ui.hideTyping();
+                chatStore.setLastRawResponse(resultRaw, sessionId);
                 const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
                 const dialogueEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
                 if (dialogueEnabled) {
                     const parser = new DialogueStreamParser({ userName });
                     const events = parser.push(resultRaw);
                     let didAnything = false;
+                    let mutatedMoments = false;
                     events.forEach((ev) => {
                         if (ev?.type === 'moments') {
-                            momentsStore.addMany(ev.moments || []);
+                            momentsStore.addMany(ingestMoments(ev.moments || []));
                             didAnything = true;
+                            mutatedMoments = true;
                             return;
                         }
                         if (ev?.type === 'moment_reply') {
                             momentsStore.addComments(ev.momentId, ev.comments || []);
                             didAnything = true;
+                            mutatedMoments = true;
                             return;
                         }
                         if (ev?.type === 'private_chat') {
@@ -783,6 +978,9 @@ const initApp = async () => {
                     if (didAnything) {
                         refreshChatAndContacts();
                         if (activePage === 'moments') momentsPanel.render();
+                        if (mutatedMoments) {
+                            try { await momentsStore.flush(); } catch {}
+                        }
                         return;
                     }
                     // 如果对话模式未解析到有效标签，回退显示原文，便于调试

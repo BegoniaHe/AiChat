@@ -7,13 +7,17 @@ import { logger } from '../utils/logger.js';
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 export class MomentsPanel {
-    constructor({ momentsStore, contactsStore, defaultAvatar = '' } = {}) {
+    constructor({ momentsStore, contactsStore, defaultAvatar = '', userAvatar = '' } = {}) {
         this.store = momentsStore;
         this.contactsStore = contactsStore;
         this.defaultAvatar = defaultAvatar;
+        this.userAvatar = userAvatar;
         this.listEl = null;
         this.modal = null;
         this.activeMomentId = null;
+        this.menuEl = null;
+        this.expandedComments = new Set();
+        this.openComposer = new Set();
     }
 
     mount(listEl) {
@@ -22,19 +26,111 @@ export class MomentsPanel {
     }
 
     getAvatarByName(name) {
-        const n = String(name || '').trim();
-        if (!n) return this.defaultAvatar;
+        const raw = String(name || '').trim();
+        if (!raw) return this.defaultAvatar;
+        if (raw === '我' || raw.toLowerCase() === 'user' || raw === '用户') {
+            return this.userAvatar || this.defaultAvatar;
+        }
         try {
-            const c = this.contactsStore?.listContacts?.()?.find(x => String(x?.name || x?.id).trim() === n);
-            return c?.avatar || this.defaultAvatar;
+            const byId = this.contactsStore?.getContact?.(raw);
+            if (byId?.avatar) return byId.avatar;
+        } catch {}
+        const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+        const loose = (s) => norm(s).replace(/[^a-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
+        const key = norm(raw);
+        const looseKey = loose(raw);
+        try {
+            const list = this.contactsStore?.listContacts?.() || [];
+            const exact = list.find(x => String(x?.name || '').trim() === raw || String(x?.id || '').trim() === raw);
+            if (exact?.avatar) return exact.avatar;
+            const fuzzy = list.find(x => norm(x?.name) === key || norm(x?.id) === key);
+            if (fuzzy?.avatar) return fuzzy.avatar;
+            const f2 = list.find(x => loose(x?.name) === looseKey || loose(x?.id) === looseKey);
+            return f2?.avatar || this.defaultAvatar;
         } catch {
             return this.defaultAvatar;
         }
     }
 
-    render() {
+    getAvatarForMoment(m) {
+        const snap = String(m?.authorAvatar || '').trim();
+        if (snap) return snap;
+        const authorId = String(m?.authorId || '').trim();
+        if (authorId) {
+            try {
+                const c = this.contactsStore?.getContact?.(authorId);
+                if (c?.avatar) return c.avatar;
+            } catch {}
+        }
+        const origin = String(m?.originSessionId || '').trim();
+        if (origin) {
+            try {
+                const c = this.contactsStore?.getContact?.(origin);
+                if (c?.avatar) return c.avatar;
+            } catch {}
+        }
+        return this.getAvatarByName(m?.author);
+    }
+
+    ensureMenu() {
+        if (this.menuEl) return;
+        const el = document.createElement('div');
+        el.className = 'moment-menu-dropdown hidden';
+        el.innerHTML = `
+            <button class="moment-menu-item danger" data-action="delete">🗑️ 删除动态</button>
+            <button class="moment-menu-item" data-action="cancel">❌ 取消</button>
+        `;
+        el.addEventListener('click', (e) => e.stopPropagation());
+        document.addEventListener('click', () => this.hideMenu());
+        el.querySelectorAll('button').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.dataset.action;
+                const momentId = el.dataset.momentId || '';
+                this.hideMenu();
+                if (action === 'delete' && momentId) {
+                    const ok = confirm('删除后无法恢复，确定要删除这条动态吗？');
+                    if (!ok) return;
+                    const removed = this.store?.remove?.(momentId);
+                    if (!removed) window.toastr?.warning('删除失败：未找到该动态');
+                    else window.toastr?.success('已删除动态');
+                    this.render({ preserveScroll: true });
+                }
+            });
+        });
+        document.body.appendChild(el);
+        this.menuEl = el;
+    }
+
+    hideMenu() {
+        if (!this.menuEl) return;
+        this.menuEl.classList.add('hidden');
+        this.menuEl.dataset.momentId = '';
+    }
+
+    showMenu(anchorEl, momentId) {
+        this.ensureMenu();
+        if (!this.menuEl || !anchorEl) return;
+        const rect = anchorEl.getBoundingClientRect();
+        const el = this.menuEl;
+        el.dataset.momentId = String(momentId || '');
+        el.classList.remove('hidden');
+
+        // position after visible so we can measure width
+        const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+        const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+        const mw = el.offsetWidth || 140;
+        const mh = el.offsetHeight || 80;
+        const margin = 8;
+        const top = Math.min(vh - mh - margin, rect.bottom + 6);
+        const left = Math.max(margin, Math.min(vw - mw - margin, rect.right - mw));
+        el.style.top = `${Math.max(margin, top)}px`;
+        el.style.left = `${left}px`;
+    }
+
+    render({ preserveScroll = false } = {}) {
         if (!this.listEl) return;
         const moments = this.store?.list?.() || [];
+        const prevScroll = preserveScroll ? (this.listEl.scrollTop || 0) : 0;
         this.listEl.innerHTML = '';
         if (!moments.length) {
             const empty = document.createElement('div');
@@ -47,9 +143,34 @@ export class MomentsPanel {
             const card = document.createElement('div');
             card.className = 'moment-card';
             card.dataset.momentId = m.id;
-            const avatar = this.getAvatarByName(m.author);
+            const avatar = this.getAvatarForMoment(m);
+            // Backfill originSessionId for older data (helps avatar fallback to current chat persona)
+            try {
+                const hasOrigin = String(m?.originSessionId || '').trim().length > 0;
+                if (!hasOrigin && String(m?.authorId || '').trim()) {
+                    this.store?.upsert?.({ id: m.id, originSessionId: String(m.authorId).trim() });
+                    m.originSessionId = String(m.authorId).trim();
+                }
+            } catch {}
+            // Backfill snapshot avatar so legacy moments keep correct avatar even if names change later
+            try {
+                const hasSnap = String(m?.authorAvatar || '').trim().length > 0;
+                if (!hasSnap && avatar && avatar !== this.defaultAvatar) {
+                    this.store?.upsert?.({
+                        id: m.id,
+                        authorAvatar: avatar,
+                        authorId: m.authorId || '',
+                        author: m.author || '',
+                        originSessionId: m.originSessionId || '',
+                    });
+                }
+            } catch {}
             const comments = Array.isArray(m.comments) ? m.comments : [];
-            const lastComment = comments.length ? comments[comments.length - 1] : null;
+            const VISIBLE_COMMENTS = 8;
+            const expanded = this.expandedComments.has(m.id);
+            const showComposer = this.openComposer.has(m.id);
+            const hiddenCount = comments.length > VISIBLE_COMMENTS ? (comments.length - VISIBLE_COMMENTS) : 0;
+            const visibleComments = expanded ? comments : (hiddenCount > 0 ? comments.slice(-VISIBLE_COMMENTS) : comments);
             card.innerHTML = `
                 <div class="moment-header">
                     <img src="${esc(avatar)}" alt="" class="moment-avatar">
@@ -57,7 +178,7 @@ export class MomentsPanel {
                         <div class="moment-username">${esc(m.author || '角色')}</div>
                         <div class="moment-time">${esc(m.time || '')}</div>
                     </div>
-                    <button class="moment-more">⋯</button>
+                    <button class="moment-more" aria-label="更多" title="更多">⋯</button>
                 </div>
                 <div class="moment-content">
                     <div class="moment-text">${esc(m.content || '')}</div>
@@ -70,18 +191,77 @@ export class MomentsPanel {
                     <span class="moment-likes">👍 ${Number(m.likes || 0)}人已赞</span>
                     <button class="moment-action" data-action="comment" style="margin-left:auto; border:none; background:transparent; color:#2563eb; font-weight:700;">评论</button>
                 </div>
-                ${lastComment ? `<div class="moment-comment">
-                    <span class="comment-user">${esc(lastComment.author || '')}：</span>
-                    <span class="comment-text">${esc(lastComment.content || '')}</span>
-                </div>` : ''}
+                <div class="moment-comments ${comments.length ? '' : 'empty'}" ${comments.length ? '' : 'style="display:none;"'}>
+                    ${(!expanded && hiddenCount > 0) ? `<div class="moment-comments-toggle" data-action="expand">展开查看更多评论 (${hiddenCount}条)</div>` : ''}
+                    ${visibleComments.map((c) => `
+                        <div class="moment-comment">
+                            <span class="comment-user">${esc(c.author || '')}：</span>
+                            <span class="comment-text">${esc(c.content || '')}</span>
+                        </div>
+                    `).join('')}
+                    ${(expanded && hiddenCount > 0) ? `<div class="moment-comments-toggle" data-action="collapse">收起评论</div>` : ''}
+                </div>
+                <div class="moment-comment-composer" style="${showComposer ? '' : 'display:none;'}">
+                    <input class="moment-comment-input" type="text" placeholder="写评论..." />
+                    <button class="moment_comment" data-action="send">发送</button>
+                </div>
             `;
+            const dotsBtn = card.querySelector('.moment-more');
+            dotsBtn?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showMenu(dotsBtn, m.id);
+            });
+
             card.querySelector('[data-action="comment"]')?.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.openDetail(m.id);
+                if (this.openComposer.has(m.id)) this.openComposer.delete(m.id);
+                else this.openComposer.add(m.id);
+                this.render({ preserveScroll: true });
+                // focus input after rerender
+                setTimeout(() => {
+                    const escId = (window.CSS && typeof window.CSS.escape === 'function')
+                        ? window.CSS.escape(String(m.id))
+                        : String(m.id).replace(/["\\]/g, '\\$&');
+                    const next = this.listEl?.querySelector(`.moment-card[data-moment-id="${escId}"] .moment-comment-input`);
+                    next?.focus?.();
+                }, 0);
             });
-            card.addEventListener('click', () => this.openDetail(m.id));
+
+            card.querySelectorAll('.moment-comments-toggle').forEach((toggle) => {
+                toggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const act = toggle.dataset.action;
+                    if (act === 'expand') this.expandedComments.add(m.id);
+                    if (act === 'collapse') this.expandedComments.delete(m.id);
+                    this.render({ preserveScroll: true });
+                });
+            });
+
+            const sendBtn = card.querySelector('.moment_comment[data-action="send"]');
+            const inputEl = card.querySelector('.moment-comment-input');
+            const send = () => {
+                const text = String(inputEl?.value || '').trim();
+                if (!text) return;
+                this.store.addComments(m.id, [{ author: '我', content: text }]);
+                this.openComposer.delete(m.id);
+                this.expandedComments.add(m.id); // show newest comment
+                this.render({ preserveScroll: true });
+            };
+            sendBtn?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                send();
+            });
+            inputEl?.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    send();
+                }
+            });
+
             this.listEl.appendChild(card);
         });
+        if (preserveScroll) this.listEl.scrollTop = prevScroll;
     }
 
     ensureModal() {
@@ -136,7 +316,7 @@ export class MomentsPanel {
         if (meta) meta.textContent = `id: ${m.id}`;
         const body = this.modal.querySelector('#moment-detail-body');
         if (body) {
-            const avatar = this.getAvatarByName(m.author);
+            const avatar = this.getAvatarForMoment(m);
             const comments = Array.isArray(m.comments) ? m.comments : [];
             body.innerHTML = `
                 <div style="display:flex; gap:10px; align-items:flex-start;">
@@ -177,4 +357,3 @@ export class MomentsPanel {
         }
     }
 }
-
