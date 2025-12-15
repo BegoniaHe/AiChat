@@ -20,13 +20,46 @@ const stripThinkingBlocks = (s) => {
 
 const findFirstTagOpen = (s) => s.indexOf('<');
 
+const hasImplicitContentSignal = (s) => {
+    const src = String(s ?? '');
+    const lower = src.toLowerCase();
+    if (lower.includes('moment_start') || lower.includes('moment_reply_start')) return true;
+    // A private chat tag can appear without <content> when models don't follow the wrapper rule.
+    // Example: <我和貝法的私聊> ... </我和貝法的私聊>
+    if (/<\s*[^/][^>]*的私聊\s*>/i.test(src)) return true;
+    return false;
+};
+
 const parseOpenTag = (s, startIdx) => {
     const gt = s.indexOf('>', startIdx + 1);
     if (gt === -1) return null;
-    const raw = s.slice(startIdx + 1, gt);
-    const tagName = raw.trim().replace(/^\/+/, '').split(/\s+/)[0];
-    const isClosing = raw.trim().startsWith('/');
-    return { tagName, isClosing, endIdx: gt + 1 };
+    const raw = s.slice(startIdx + 1, gt).trim();
+    const isClosing = raw.startsWith('/');
+    let core = isClosing ? raw.slice(1).trim() : raw;
+    const selfClosing = core.endsWith('/') || raw.endsWith('/'); // <br/> or <tag .../>
+    if (core.endsWith('/')) core = core.slice(0, -1).trim();
+    // NOTE: Our protocol tag names may contain spaces (e.g. "我和Lara croft的私聊"),
+    // so we intentionally do NOT split by whitespace (attributes are not expected in these tags).
+    const tagName = core;
+    return { tagName, isClosing, selfClosing, endIdx: gt + 1 };
+};
+
+const findMatchingCloseTag = (s, tagName, fromIdx) => {
+    const src = String(s ?? '');
+    const target = String(tagName ?? '').trim();
+    if (!target) return null;
+    let idx = Math.max(0, fromIdx | 0);
+    while (true) {
+        const closeStart = src.indexOf('</', idx);
+        if (closeStart === -1) return null;
+        const close = parseOpenTag(src, closeStart);
+        if (!close) return null; // need more data
+        if (close.isClosing && String(close.tagName || '').trim() === target) {
+            return { closeIdx: closeStart, afterClose: close.endIdx };
+        }
+        idx = close.endIdx;
+        if (idx >= src.length) return null;
+    }
 };
 
 const parsePrivateChatMessages = (innerText) => {
@@ -35,16 +68,16 @@ const parsePrivateChatMessages = (innerText) => {
     const messages = [];
     for (const line of lines) {
         if (/^[-•*]\s+/.test(line)) {
-            messages.push(line.replace(/^[-•*]\s+/, '').trim());
+            messages.push(line.replace(/^[-•*]\s+/, '').trim().replace(/<br\s*\/?>/gi, '\n'));
             continue;
         }
         const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
         if (m) {
-            messages.push(String(m[2] || '').trim());
+            messages.push(String(m[2] || '').trim().replace(/<br\s*\/?>/gi, '\n'));
             continue;
         }
         // Fallback: treat as a single message line
-        messages.push(line);
+        messages.push(line.replace(/<br\s*\/?>/gi, '\n'));
     }
     return messages.filter(Boolean);
 };
@@ -170,6 +203,11 @@ export class DialogueStreamParser {
                 this.inContent = true;
                 this.contentBuffer += this.preBuffer.slice(after);
                 this.preBuffer = '';
+            } else if (hasImplicitContentSignal(this.preBuffer)) {
+                // Fallback: some models may omit <content> wrapper but still output tags we can parse.
+                this.inContent = true;
+                this.contentBuffer += this.preBuffer;
+                this.preBuffer = '';
             } else {
                 // keep bounded to avoid memory growth before content
                 if (this.preBuffer.length > 80_000) this.preBuffer = this.preBuffer.slice(-40_000);
@@ -232,14 +270,20 @@ export class DialogueStreamParser {
                 advanced = true;
                 continue;
             }
+            if (open.selfClosing) {
+                // Consume self-closing tags (e.g. <br/>) without affecting parsing
+                work = work.slice(endIdx);
+                advanced = true;
+                continue;
+            }
 
             // Only care about completed tags with a matching close
-            const closeTag = `</${tagName}>`;
-            const closeIdx = work.indexOf(closeTag, endIdx);
-            if (closeIdx === -1) break; // wait for more data
+            const close = findMatchingCloseTag(work, tagName, endIdx);
+            if (!close) break; // wait for more data
+            const closeIdx = close.closeIdx;
 
             const inner = work.slice(endIdx, closeIdx);
-            const afterClose = closeIdx + closeTag.length;
+            const afterClose = close.afterClose;
 
             if (tagName.endsWith('的私聊')) {
                 const otherName = extractOtherNameFromPrivateChatTag(tagName, this.userName);

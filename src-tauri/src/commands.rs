@@ -1,6 +1,7 @@
 use crate::storage::{simple_decrypt, simple_encrypt, ChatMessage};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -259,4 +260,59 @@ pub async fn load_kv(app: AppHandle, name: String) -> Result<Value, String> {
     let json = fs::read_to_string(file).map_err(|e| e.to_string())?;
     let data: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     Ok(data)
+}
+
+#[derive(serde::Serialize)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub ok: bool,
+    pub headers: HashMap<String, String>,
+    pub body: String,
+}
+
+/// Native HTTP request to bypass WebView CORS (used by OpenAI-compatible providers like DeepSeek).
+#[tauri::command]
+pub async fn http_request(
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<HttpResponse, String> {
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+
+    let mut header_map = reqwest::header::HeaderMap::new();
+    for (k, v) in headers {
+        let name = reqwest::header::HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
+        let value = reqwest::header::HeaderValue::from_str(&v).map_err(|e| e.to_string())?;
+        header_map.insert(name, value);
+    }
+
+    let mut builder = reqwest::Client::builder();
+    if let Some(ms) = timeout_ms {
+        builder = builder.timeout(std::time::Duration::from_millis(ms));
+    }
+    let client = builder.build().map_err(|e| e.to_string())?;
+
+    let mut req = client.request(method, url).headers(header_map);
+    if let Some(body) = body {
+        req = req.body(body);
+    }
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let mut out_headers: HashMap<String, String> = HashMap::new();
+    for (k, v) in resp.headers().iter() {
+        if let Ok(vs) = v.to_str() {
+            out_headers.insert(k.as_str().to_string(), vs.to_string());
+        }
+    }
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+
+    Ok(HttpResponse {
+        status: status.as_u16(),
+        ok: status.is_success(),
+        headers: out_headers,
+        body,
+    })
 }

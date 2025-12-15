@@ -815,3 +815,89 @@
     - 修改：`src/scripts/storage/moments-store.js`
     - 修改：`src/scripts/ui/moments-panel.js`
     - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 20:03 - 修复私聊标签含空格导致不显示 + DeepSeek Failed to fetch
+  - **私聊解析**：对话解析器不再按空格截断 tagName，支持如 `<我和Lara croft的私聊>` 这类包含空格的标签；并把消息中的 `<br>` 转为换行。
+  - **DeepSeek / 自定义 URL**：放宽 CSP `connect-src` 支持任意 `https:`/`http:` 域名请求，解决 WebView fetch 被 CSP 拦截导致的 `Failed to fetch`。
+  - 文件修改：
+    - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+    - 修改：`src-tauri/tauri.conf.json`
+
+- 2025-12-15 20:21 - 修复 DeepSeek 仍 Failed to fetch：改用原生 HTTP 绕过 WebView CORS
+  - **根因**：DeepSeek / OpenAI-compatible 多数端点不提供浏览器 CORS 头，WebView `fetch` 会直接失败；仅放宽 CSP 不足以解决。
+  - **原生请求**：新增 Tauri 命令 `http_request`（Rust `reqwest`），前端在 Tauri 环境下优先通过 `invoke` 走原生网络栈。
+  - **适配范围**：`OpenAIProvider`（含 DeepSeek / custom）发送与拉取模型列表都走原生 HTTP；非 Tauri 环境保持使用 `fetch`。
+  - 文件修改：
+    - 修改：`src-tauri/Cargo.toml`
+    - 修改：`src-tauri/src/commands.rs`
+    - 修改：`src-tauri/src/lib.rs`
+    - 修改：`src/scripts/api/providers/openai.js`
+    - 修改：`src/scripts/api/providers/deepseek.js`
+
+- 2025-12-15 22:03 - 进一步修复仍走 fetch 导致 CORS：原生请求优先级提升 + custom provider 同步
+  - **问题**：部分环境下 `__TAURI_INVOKE__` 探测不稳定，导致 OpenAI/DeepSeek 仍走 `fetch` 触发 CORS。
+  - **修复**：统一用 `globalThis` 探测，并在 `request()` 内“先尝试 invoke，再回退 fetch”，避免误判。
+  - **覆盖 custom**：`CustomProvider`（OpenAI-compatible 自建地址）也切换到同一套原生 HTTP 逻辑。
+  - 文件修改：
+    - 修改：`src/scripts/api/providers/openai.js`
+    - 修改：`src/scripts/api/providers/custom.js`
+
+- 2025-12-15 22:05 - Tauri 环境禁用 CORS 回退：invoke 失败直接报原生错误
+  - **问题**：在 Tauri WebView 中，`fetch` 必然触发 CORS（DeepSeek 等），回退会掩盖真实原因。
+  - **修复**：检测到 `tauri.localhost` / `__TAURI__` 时，`http_request` 调用失败将直接抛出错误（不再回退到 `fetch`），便于定位是“命令未注册/后端异常/权限问题”。
+  - 文件修改：
+    - 修改：`src/scripts/api/providers/openai.js`
+    - 修改：`src/scripts/api/providers/custom.js`
+
+- 2025-12-15 22:22 - 修复 DeepSeek 400 / Gemini 不显示：请求头与对话解析更健壮
+  - **DeepSeek 400**：流式请求添加 `Accept: text/event-stream`；并对 OpenAI-compatible 参数做清洗（DeepSeek 不发送 `seed/n` 等易触发 400 的字段）；错误信息附带服务端返回细节。
+  - **Gemini 不显示**：对话解析器匹配闭合标签改为容错（允许闭合标签 `</tag >` 等空白差异）；流式结束未解析到有效标签会提示“已丢弃，可在原始回复查看”。
+  - **日志增强**：发送失败会额外打印 `{status, response}` 方便定位。
+  - 文件修改：
+    - 修改：`src/scripts/api/providers/openai.js`
+    - 修改：`src/scripts/api/providers/custom.js`
+    - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 22:46 - 预设保存与 Prompt 验证：跨 tab 保存 + 本次 Prompt 预览
+  - **跨 tab 保存**：预设面板切换 tab/预设时自动缓存草稿，点击「保存」会把所有 tab 的改动一并落盘，避免“只保存当前 tab 导致其他 tab 改动丢失”。
+  - **Prompt 预览**：聊天室右上角「三」新增 `🧩 本次 Prompt`，可查看本次实际发送给模型的 messages（纯文本，含 role 分段），用于确认“格式要求/聊天协议提示词是否正确注入”。
+  - **注入语义一致**：对话/动态提示词在 `IN_PROMPT/BEFORE_PROMPT` 也遵循可配置的 role（system/user/assistant），更贴近 ST 的扩展提示词语义。
+  - 文件修改：
+    - 修改：`src/index.html`
+    - 修改：`src/scripts/ui/preset-panel.js`
+    - 修改：`src/scripts/ui/bridge.js`
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 22:53 - 对话解析容错：允许缺失 <content> 包装仍可解析私聊/动态标签
+  - **问题**：DeepSeek 偶尔不按提示词输出 `<content>` 包装，导致解析器一直等待 `<content>` 而不解析任何有效标签。
+  - **修复**：检测到私聊标签或 `moment_start` 时自动进入解析模式（即使没有 `<content>`），仍按原规则提取私聊与动态内容。
+  - 文件修改：
+    - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+
+- 2025-12-15 23:00 - 私聊路由容错：标签名无法匹配联系人时回退当前聊天室（不新建）
+  - **问题**：模型可能输出别名/繁简体（如「貝法」vs 联系人「贝法」）导致精确匹配失败，私聊消息被当作格式错误丢弃。
+  - **修复**：在“从聊天室发起生成”的私聊解析路由中，匹配失败不再丢弃，而是回退写入当前 session（仍不创建新聊天室）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-15 23:08 - 修复 Tauri invoke 不可用导致存储警告 + 流式超时错误信息
+  - **invoke 探测**：统一改用 `globalThis` + `__TAURI_INTERNALS__` 兼容检测，避免在 Android 端出现 `Tauri invoke not available` 导致 `save_kv`/`load_kv` 误判失败（动态/联系人/预设等存储都受影响）。
+  - **超时报错**：将 Android WebView 的 `DOMException(AbortError)` 统一转为可读的“请求超时（60秒）”错误，避免日志出现 `[object DOMException]`。
+  - 文件修改：
+    - 修改：`src/scripts/storage/moments-store.js`
+    - 修改：`src/scripts/storage/chat-store.js`
+    - 修改：`src/scripts/storage/contacts-store.js`
+    - 修改：`src/scripts/storage/config.js`
+    - 修改：`src/scripts/storage/regex-store.js`
+    - 修改：`src/scripts/storage/preset-store.js`
+    - 修改：`src/scripts/storage/worldinfo.js`
+    - 修改：`src/scripts/storage/chat.js`
+    - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-15 23:12 - 支持调整请求超时（上限 5 分钟）
+  - **配置面板**：新增「请求超时（秒）」字段（10–300 秒），保存到连接设定档并在发送请求时生效。
+  - **错误提示**：超时中止时提示会显示当前配置的秒数（不再固定 60 秒）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/config-panel.js`
+    - 修改：`src/scripts/ui/bridge.js`

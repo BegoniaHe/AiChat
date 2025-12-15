@@ -12,7 +12,8 @@ import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
 const safeInvoke = async (cmd, args) => {
-    const invoker = window.__TAURI__?.core?.invoke || window.__TAURI__?.invoke || window.__TAURI_INVOKE__;
+    const g = typeof globalThis !== 'undefined' ? globalThis : window;
+    const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
     if (typeof invoker !== 'function') {
         throw new Error('Tauri invoke not available');
     }
@@ -332,6 +333,16 @@ class AppBridge {
             const genOptions = this.getGenerationOptions();
 
             logger.debug('发送消息到 LLM:', { messageCount: messages.length, stream: config.stream });
+            // Debug: keep the exact request payload used for the latest generation
+            this.lastRequest = {
+                at: Date.now(),
+                provider: config?.provider,
+                baseUrl: config?.baseUrl,
+                model: config?.model,
+                stream: Boolean(config?.stream),
+                options: genOptions,
+                messages,
+            };
 
             if (config.stream) {
                 return this.generateStream(messages, genOptions, originalInput);
@@ -371,8 +382,28 @@ class AppBridge {
             // 流式完成后保存到历史记录
             await this.saveToHistory(originalUserMessage || '', fullResponse);
         } catch (error) {
-            logger.error('流式生成失败:', error);
-            throw error;
+            const normalized = (() => {
+                try {
+                    // Android WebView may throw DOMException on abort/timeout
+                    const name = String(error?.name || '');
+                    const msg = String(error?.message || '');
+                    if (name === 'AbortError' || (error instanceof DOMException && name === 'AbortError')) {
+                        const ms = Number(this.config?.get?.()?.timeout);
+                        const sec = Number.isFinite(ms) ? Math.round(ms / 1000) : 60;
+                        const e = new Error(`请求超时（${sec}秒），请稍后重试或在 API 设定中调低输出/切换网络`);
+                        e.cause = error;
+                        return e;
+                    }
+                    if (error instanceof DOMException) {
+                        const e = new Error(`${name || 'DOMException'}${msg ? `: ${msg}` : ''}`);
+                        e.cause = error;
+                        return e;
+                    }
+                } catch {}
+                return error;
+            })();
+            logger.error('流式生成失败:', normalized?.name, normalized?.message, normalized);
+            throw normalized;
         }
     }
 
@@ -444,7 +475,9 @@ class AppBridge {
                     const idx = Math.max(0, history.length - dialogueDepth);
                     history.splice(idx, 0, { role, content: dialogueRules });
                 } else if (dialoguePosition === 2 || dialoguePosition === 0) { // BEFORE_PROMPT or IN_PROMPT
-                    messages.push({ role: 'system', content: dialogueRules });
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[dialogueRole] || 'system';
+                    messages.push({ role, content: dialogueRules });
                 }
             }
             // 动态提示词：按 ST extension prompt 的位置/深度语义注入
@@ -455,7 +488,9 @@ class AppBridge {
                     const idx = Math.max(0, history.length - momentDepth);
                     history.splice(idx, 0, { role, content: momentRules });
                 } else if (momentPosition === 2 || momentPosition === 0) { // BEFORE_PROMPT or IN_PROMPT
-                    messages.push({ role: 'system', content: momentRules });
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[momentRole] || 'system';
+                    messages.push({ role, content: momentRules });
                 }
             }
             const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
@@ -589,11 +624,15 @@ class AppBridge {
 
         // 对话提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
         if (dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
-            messages.push({ role: 'system', content: dialogueRules });
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[dialogueRole] || 'system';
+            messages.push({ role, content: dialogueRules });
         }
         // 动态提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
         if (momentEnabled && momentRules && (momentPosition === 2 || momentPosition === 0)) {
-            messages.push({ role: 'system', content: momentRules });
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[momentRole] || 'system';
+            messages.push({ role, content: momentRules });
         }
 
         // If context preset disabled, fall back to legacy system prompt building

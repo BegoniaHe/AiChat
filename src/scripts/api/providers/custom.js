@@ -5,8 +5,42 @@
 
 import { handleSSE } from '../stream.js';
 
+const getTauriInvoker = () => {
+    const g = typeof globalThis !== 'undefined' ? globalThis : undefined;
+    return (
+        g?.__TAURI__?.core?.invoke ||
+        g?.__TAURI__?.invoke ||
+        g?.__TAURI_INVOKE__ ||
+        g?.__TAURI_INTERNALS__?.invoke
+    );
+};
+
+const isTauriWebview = () => {
+    try {
+        const g = typeof globalThis !== 'undefined' ? globalThis : undefined;
+        const origin = String(g?.location?.origin || '');
+        return Boolean(g?.__TAURI__ || g?.__TAURI_INTERNALS__ || origin.includes('tauri.localhost'));
+    } catch (_e) {
+        return false;
+    }
+};
+
+const parseSSEText = function* (text) {
+    const raw = String(text ?? '');
+    const lines = raw.split('\n');
+    for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (!data || data === '[DONE]') continue;
+        try {
+            yield JSON.parse(data);
+        } catch (_e) {}
+    }
+};
+
 export class CustomProvider {
     constructor(config) {
+        this.provider = config.provider || 'custom';
         this.apiKey = config.apiKey || '';
         this.baseUrl = config.baseUrl;
         this.model = config.model || 'default';
@@ -25,78 +59,158 @@ export class CustomProvider {
         return headers;
     }
 
+    async request({ url, method = 'GET', headers = {}, body = undefined }) {
+        const mergedHeaders = { ...headers };
+        const invoker = getTauriInvoker();
+        if (typeof invoker === 'function') {
+            try {
+                return await invoker('http_request', {
+                    url,
+                    method,
+                    headers: mergedHeaders,
+                    body: typeof body === 'string' ? body : body == null ? null : String(body),
+                    timeout_ms: this.timeout,
+                });
+            } catch (err) {
+                if (isTauriWebview()) {
+                    const e = new Error(`native http_request failed: ${err?.message || err}`);
+                    e.cause = err;
+                    throw e;
+                }
+                // Non-Tauri fallback
+            }
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        try {
+            const response = await fetch(url, {
+                method,
+                headers: mergedHeaders,
+                signal: controller.signal,
+                body,
+            });
+            const text = await response.text();
+            const outHeaders = {};
+            response.headers.forEach((v, k) => {
+                outHeaders[k] = v;
+            });
+            return { status: response.status, ok: response.ok, headers: outHeaders, body: text };
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    async requestJson({ url, method = 'GET', headers = {}, body = undefined }) {
+        const res = await this.request({ url, method, headers, body });
+        if (!res.ok) {
+            const raw = String(res.body || '').trim();
+            let detail = '';
+            try {
+                const j = JSON.parse(raw);
+                detail = String(j?.error?.message || j?.message || j?.detail || j?.error || '').trim();
+            } catch (_e) {}
+            const error = new Error(`Custom API Error: ${res.status}${detail ? ` - ${detail}` : ''}`);
+            error.status = res.status;
+            error.response = res.body;
+            throw error;
+        }
+        return JSON.parse(res.body || '{}');
+    }
+
     /**
      * 发送聊天消息（非流式）
      */
     async chat(messages, options = {}) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const data = await this.requestJson({
+            url: `${this.baseUrl}/chat/completions`,
+            method: 'POST',
+            headers: this.getHeaders(),
+            body: JSON.stringify({
+                model: this.model,
+                messages: messages,
+                stream: false,
+                ...options
+            })
+        });
 
-        try {
-            const response = await fetch(`${this.baseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: this.getHeaders(),
-                signal: controller.signal,
-                body: JSON.stringify({
-                    model: this.model,
-                    messages: messages,
-                    stream: false,
-                    ...options
-                })
-            });
-
-            if (!response.ok) {
-                const error = new Error(`Custom API Error: ${response.status}`);
-                error.status = response.status;
-                error.response = await response.text();
-                throw error;
-            }
-
-            const data = await response.json();
-
-            // 支持多种响应格式
-            if (data.choices && data.choices[0]) {
-                return data.choices[0].message?.content || data.choices[0].text;
-            } else if (data.response) {
-                return data.response;
-            } else if (data.content) {
-                return data.content;
-            }
-
-            throw new Error('Unknown response format');
-        } finally {
-            clearTimeout(timeoutId);
+        if (data.choices && data.choices[0]) {
+            return data.choices[0].message?.content || data.choices[0].text || '';
+        } else if (data.response) {
+            return data.response;
+        } else if (data.content) {
+            return data.content;
         }
+
+        throw new Error('Unknown response format');
     }
 
     /**
      * 流式聊天
      */
     async *streamChat(messages, options = {}) {
+        const payload = JSON.stringify({
+            model: this.model,
+            messages: messages,
+            stream: true,
+            ...options
+        });
+
+        const invoker = getTauriInvoker();
+        if (typeof invoker === 'function') {
+            const res = await this.request({
+                url: `${this.baseUrl}/chat/completions`,
+                method: 'POST',
+                headers: { ...this.getHeaders(), Accept: 'text/event-stream' },
+                body: payload,
+            });
+            if (!res.ok) {
+                const raw = String(res.body || '').trim();
+                let detail = '';
+                try {
+                    const j = JSON.parse(raw);
+                    detail = String(j?.error?.message || j?.message || j?.detail || j?.error || '').trim();
+                } catch (_e) {}
+                const error = new Error(`Custom API Error: ${res.status}${detail ? ` - ${detail}` : ''}`);
+                error.status = res.status;
+                error.response = res.body;
+                throw error;
+            }
+            for (const data of parseSSEText(res.body)) {
+                const content =
+                    data.choices?.[0]?.delta?.content ||
+                    data.choices?.[0]?.text ||
+                    data.delta?.content ||
+                    data.content;
+                if (content) yield content;
+            }
+            return;
+        }
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
         try {
             const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
-                headers: this.getHeaders(),
+                headers: { ...this.getHeaders(), Accept: 'text/event-stream' },
                 signal: controller.signal,
-                body: JSON.stringify({
-                    model: this.model,
-                    messages: messages,
-                    stream: true,
-                    ...options
-                })
+                body: payload
             });
 
             if (!response.ok) {
-                const error = new Error(`Custom API Error: ${response.status}`);
+                const txt = await response.text();
+                let detail = '';
+                try {
+                    const j = JSON.parse(String(txt || '').trim());
+                    detail = String(j?.error?.message || j?.message || j?.detail || j?.error || '').trim();
+                } catch (_e) {}
+                const error = new Error(`Custom API Error: ${response.status}${detail ? ` - ${detail}` : ''}`);
                 error.status = response.status;
+                error.response = txt;
                 throw error;
             }
 
             for await (const data of handleSSE(response)) {
-                // 支持多种流式响应格式
                 const content =
                     data.choices?.[0]?.delta?.content ||
                     data.choices?.[0]?.text ||
@@ -117,22 +231,15 @@ export class CustomProvider {
      */
     async listModels() {
         try {
-            const response = await fetch(`${this.baseUrl}/models`, {
-                headers: this.getHeaders()
+            const res = await this.request({
+                url: `${this.baseUrl}/models`,
+                method: 'GET',
+                headers: this.getHeaders(),
             });
-
-            if (!response.ok) {
-                return [this.model]; // 降级：返回当前配置的模型
-            }
-
-            const data = await response.json();
-
-            if (Array.isArray(data)) {
-                return data.map(m => m.id || m.name || m);
-            } else if (data.data && Array.isArray(data.data)) {
-                return data.data.map(m => m.id || m.name || m);
-            }
-
+            if (!res.ok) return [this.model];
+            const data = JSON.parse(res.body || '{}');
+            if (Array.isArray(data)) return data.map(m => m.id || m.name || m);
+            if (data.data && Array.isArray(data.data)) return data.data.map(m => m.id || m.name || m);
             return [this.model];
         } catch (error) {
             console.warn('Failed to fetch models:', error);

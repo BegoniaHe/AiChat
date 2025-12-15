@@ -90,6 +90,8 @@ export class PresetPanel {
         this.overlayElement = null;
         this.activeType = 'sysprompt';
         this.statusEl = null;
+        // Drafts keyed by `${storeType}:${presetId}` so changes across tabs aren't lost.
+        this.drafts = new Map();
     }
 
     getTypeLabel(type) {
@@ -238,6 +240,7 @@ export class PresetPanel {
             btn.addEventListener('click', async () => {
                 const type = btn.dataset.type;
                 if (!type) return;
+                this.captureDraft();
                 this.activeType = type;
                 await this.refreshAll();
             });
@@ -250,6 +253,7 @@ export class PresetPanel {
         };
 
         this.element.querySelector('#preset-select').onchange = async (e) => {
+            this.captureDraft();
             await this.store.setActive(this.getStoreType(), e.target.value);
             await this.refreshEditor();
             await this.applyBoundConfigIfAny();
@@ -611,7 +615,12 @@ export class PresetPanel {
         if (!root) return;
         root.innerHTML = '';
 
-        const p = this.store.getActive(this.getStoreType()) || {};
+        const storeType = this.getStoreType();
+        const presetId = this.store.getActiveId(storeType);
+        const key = this.getDraftKey(storeType, presetId);
+        const p = (key && this.drafts.has(key))
+            ? this.drafts.get(key)
+            : (this.store.getActive(storeType) || {});
 
         if (this.activeType === 'sysprompt') {
             root.appendChild(this.renderSyspromptEditor(p));
@@ -644,6 +653,32 @@ export class PresetPanel {
         if (this.activeType === 'custom') return 'openai';
         if (this.activeType === 'chatprompts') return 'sysprompt';
         return this.activeType;
+    }
+
+    getDraftKey(storeType, presetId) {
+        const st = String(storeType || '').trim();
+        const id = String(presetId || '').trim();
+        if (!st || !id) return null;
+        return `${st}:${id}`;
+    }
+
+    captureDraft() {
+        try {
+            if (!this.element) return;
+            const root = this.element.querySelector('#preset-editor');
+            if (!root || !root.children.length) return;
+            const storeType = this.getStoreType();
+            const presetId = this.store.getActiveId(storeType);
+            const key = this.getDraftKey(storeType, presetId);
+            if (!key) return;
+            const base = this.drafts.has(key)
+                ? this.drafts.get(key)
+                : deepClone(this.store.getActive(storeType) || {});
+            const next = this.collectEditorData(base);
+            this.drafts.set(key, next);
+        } catch (err) {
+            logger.debug('captureDraft failed', err);
+        }
     }
 
     renderSection(title, desc) {
@@ -1365,10 +1400,10 @@ export class PresetPanel {
         return wrap;
     }
 
-    collectEditorData() {
+    collectEditorData(base) {
         const root = this.element.querySelector('#preset-editor');
         const storeType = this.getStoreType();
-        const current = deepClone(this.store.getActive(storeType) || {});
+        const current = deepClone(base || this.store.getActive(storeType) || {});
 
         if (this.activeType === 'sysprompt') {
             current.content = root.querySelector('#sysprompt-content')?.value ?? '';
@@ -1488,13 +1523,33 @@ export class PresetPanel {
 
     async onSave() {
         await this.store.ready;
-        const storeType = this.getStoreType();
-        const currentId = this.store.getActiveId(storeType);
-        const data = this.collectEditorData();
-        const name = String(data.name || '').trim() || currentId || '未命名';
-
         try {
-            await this.store.upsert(storeType, { id: currentId, name, data: { ...data, name } });
+            // Save current tab into drafts first, then persist all drafts (all tabs) together.
+            this.captureDraft();
+
+            const toSave = [];
+            for (const [key, data] of this.drafts.entries()) {
+                const [storeType, presetId] = String(key).split(':');
+                if (!storeType || !presetId) continue;
+                const name = String(data?.name || '').trim() || presetId || '未命名';
+                toSave.push({ storeType, presetId, name, data: { ...(data || {}), name } });
+            }
+
+            // Also ensure active presets are saved even if not drafted (no-op update)
+            for (const st of ['sysprompt', 'context', 'instruct', 'openai']) {
+                const activeId = this.store.getActiveId(st);
+                if (!activeId) continue;
+                const key = this.getDraftKey(st, activeId);
+                if (key && this.drafts.has(key)) continue;
+                const data = deepClone(this.store.getActive(st) || {});
+                const name = String(data?.name || '').trim() || activeId || '未命名';
+                toSave.push({ storeType: st, presetId: activeId, name, data: { ...(data || {}), name } });
+            }
+
+            for (const item of toSave) {
+                await this.store.upsert(item.storeType, { id: item.presetId, name: item.name, data: item.data });
+            }
+
             await this.refreshAll();
             this.showStatus('保存成功', 'success');
             window.dispatchEvent(new CustomEvent('preset-changed'));
@@ -1508,10 +1563,15 @@ export class PresetPanel {
         await this.store.ready;
         const name = prompt('新建预设名称', '新预设');
         if (!name) return;
+        this.captureDraft();
         const base = this.store.getActive(this.getStoreType()) || {};
         const data = { ...deepClone(base), name };
         const id = await this.store.upsert(this.getStoreType(), { name, data });
         await this.store.setActive(this.getStoreType(), id);
+        // clear drafts for this type to avoid mixing
+        for (const k of Array.from(this.drafts.keys())) {
+            if (String(k).startsWith(`${this.getStoreType()}:`)) this.drafts.delete(k);
+        }
         await this.refreshAll();
         this.showStatus('已新建', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));
@@ -1522,9 +1582,16 @@ export class PresetPanel {
         const id = this.store.getActiveId(this.getStoreType());
         const current = this.store.getActive(this.getStoreType());
         if (!id || !current) return;
+        this.captureDraft();
         const name = prompt('重命名预设', current.name || id);
         if (!name) return;
         await this.store.upsert(this.getStoreType(), { id, name, data: { ...current, name } });
+        const key = this.getDraftKey(this.getStoreType(), id);
+        if (key && this.drafts.has(key)) {
+            const d = this.drafts.get(key) || {};
+            d.name = name;
+            this.drafts.set(key, d);
+        }
         await this.refreshAll();
         this.showStatus('已重命名', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));
@@ -1535,7 +1602,10 @@ export class PresetPanel {
         const id = this.store.getActiveId(this.getStoreType());
         if (!id) return;
         if (!confirm('删除该预设？此操作不可恢复。')) return;
+        this.captureDraft();
         await this.store.remove(this.getStoreType(), id);
+        const key = this.getDraftKey(this.getStoreType(), id);
+        if (key) this.drafts.delete(key);
         await this.refreshAll();
         this.showStatus('已删除', 'success');
         window.dispatchEvent(new CustomEvent('preset-changed'));

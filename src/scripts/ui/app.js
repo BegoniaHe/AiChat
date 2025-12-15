@@ -569,6 +569,108 @@ ${listPart || '-（无）'}
         return { show, hide };
     })();
 
+    /* ---------------- Prompt 预览面板（调试） ---------------- */
+    const promptPreviewModal = (() => {
+        let overlay = null;
+        let panel = null;
+        let textarea = null;
+        let metaEl = null;
+
+        const ensure = () => {
+            if (panel) return;
+            overlay = document.createElement('div');
+            overlay.id = 'prompt-preview-overlay';
+            overlay.style.cssText = `
+                display:none; position:fixed; inset:0;
+                background: rgba(0,0,0,0.38);
+                z-index: 22000;
+                padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px)) 10px;
+                box-sizing: border-box;
+            `;
+
+            panel = document.createElement('div');
+            panel.id = 'prompt-preview-panel';
+            panel.style.cssText = `
+                width: 100%;
+                height: 100%;
+                background: #fff;
+                border-radius: 14px;
+                overflow: hidden;
+                display:flex;
+                flex-direction:column;
+            `;
+            panel.addEventListener('click', (e) => e.stopPropagation());
+
+            panel.innerHTML = `
+                <div style="display:flex; align-items:center; gap:10px; padding:12px; background:#f3f4f6; border-bottom:1px solid #e5e7eb;">
+                    <div style="font-weight:900;">本次 Prompt</div>
+                    <div id="prompt-preview-meta" style="margin-left:auto; font-size:12px; color:#64748b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+                    <button id="prompt-preview-copy" style="border:1px solid #e5e7eb; background:#fff; border-radius:10px; padding:6px 10px;">复制</button>
+                    <button id="prompt-preview-close" style="border:1px solid #e5e7eb; background:#fff; border-radius:10px; padding:6px 10px;">关闭</button>
+                </div>
+                <div style="flex:1; min-height:0; overflow:auto; -webkit-overflow-scrolling:touch; padding:10px;">
+                    <textarea id="prompt-preview-text" readonly style="
+                        width:100%;
+                        height:100%;
+                        min-height: 100%;
+                        resize:none;
+                        border:1px solid rgba(0,0,0,0.10);
+                        border-radius:12px;
+                        padding:12px;
+                        font-size:13px;
+                        line-height:1.4;
+                        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+                        white-space: pre;
+                        box-sizing:border-box;
+                        outline:none;
+                    "></textarea>
+                </div>
+            `;
+
+            overlay.appendChild(panel);
+            overlay.addEventListener('click', () => hide());
+            document.body.appendChild(overlay);
+
+            textarea = panel.querySelector('#prompt-preview-text');
+            metaEl = panel.querySelector('#prompt-preview-meta');
+            panel.querySelector('#prompt-preview-close')?.addEventListener('click', hide);
+            panel.querySelector('#prompt-preview-copy')?.addEventListener('click', async () => {
+                const text = String(textarea?.value || '');
+                if (!text) {
+                    window.toastr?.warning?.('暂无内容可复制');
+                    return;
+                }
+                try {
+                    await navigator.clipboard.writeText(text);
+                    window.toastr?.success?.('已复制');
+                } catch {
+                    try {
+                        textarea?.select?.();
+                        document.execCommand?.('copy');
+                        window.toastr?.success?.('已复制');
+                    } catch {
+                        window.toastr?.error?.('复制失败');
+                    }
+                }
+            });
+        };
+
+        const show = (text, meta = '') => {
+            ensure();
+            if (!overlay || !panel || !textarea) return;
+            textarea.value = String(text || '');
+            if (metaEl) metaEl.textContent = meta || '';
+            overlay.style.display = 'block';
+        };
+
+        const hide = () => {
+            if (!overlay) return;
+            overlay.style.display = 'none';
+        };
+
+        return { show, hide };
+    })();
+
     /* ---------------- 頭像設置菜單 ---------------- */
     const settingsMenu = document.getElementById('settings-menu');
     const quickMenu = document.getElementById('quick-menu');
@@ -686,6 +788,32 @@ ${listPart || '-（无）'}
             if (action === 'world') worldPanel.show();
             if (action === 'regex') regexSessionPanel.show();
             if (action === 'chat-settings') openChatSettings();
+            if (action === 'prompt-preview') {
+                const sid = chatStore.getCurrent();
+                const contact = contactsStore.getContact(sid);
+                const name = contact?.name || sid;
+                const req = window.appBridge?.lastRequest;
+                const msgs = Array.isArray(req?.messages) ? req.messages : null;
+                if (!msgs || !msgs.length) {
+                    window.toastr?.warning?.('暂无本次 Prompt 记录（请先发送一次）');
+                } else {
+                    const at = req?.at ? new Date(req.at).toLocaleString() : '';
+                    const head = [
+                        `provider: ${req?.provider || ''}`,
+                        `model: ${req?.model || ''}`,
+                        `baseUrl: ${req?.baseUrl || ''}`,
+                        `stream: ${req?.stream ? 'true' : 'false'}`,
+                        req?.options ? `options: ${Object.entries(req.options).filter(([_, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(', ')}` : '',
+                    ].filter(Boolean).join('\n');
+                    const body = msgs.map((m, i) => {
+                        const role = String(m?.role || 'unknown');
+                        const content = String(m?.content ?? '');
+                        return `\n--- #${i + 1} ${role} ---\n${content}`;
+                    }).join('');
+                    const meta = `${name}${at ? ` · ${at}` : ''}`;
+                    promptPreviewModal.show(`${head}\n${body}`.trim(), meta);
+                }
+            }
             if (action === 'raw-reply') {
                 const sid = chatStore.getCurrent();
                 const contact = contactsStore.getContact(sid);
@@ -928,8 +1056,11 @@ ${listPart || '-（无）'}
             const byId = contactsStore.getContact(other);
             if (byId?.id) return byId.id;
 
-            // Do NOT create a new chat on mismatch (treat as format error)
-            return null;
+            // Do NOT create a new chat on mismatch.
+            // But in practice models may output alias/繁简体导致名字无法精确匹配。
+            // 为避免“明明在当前聊天室生成却全部丢弃”，此处回退到当前 session。
+            logger.debug('private_chat target name mismatch, fallback to current session', { other, currentName, sessionId });
+            return sessionId;
         };
         const resolveMomentAuthorId = (authorName) => {
             const raw = normalizeName(authorName);
@@ -1065,6 +1196,7 @@ ${listPart || '-（无）'}
                     const parser = new DialogueStreamParser({ userName });
                     const stream = await window.appBridge.generate(text, llmContext(text));
                     let fullRaw = '';
+                    let didAnything = false;
                     let mutatedMoments = false;
                     for await (const chunk of stream) {
                         fullRaw += chunk;
@@ -1074,6 +1206,7 @@ ${listPart || '-（无）'}
                                 try {
                                     momentsStore.addMany(ingestMoments(ev.moments || []));
                                     mutatedMoments = true;
+                                    didAnything = true;
                                     if (activePage === 'moments') momentsPanel.render();
                                 } catch {}
                                 continue;
@@ -1082,6 +1215,7 @@ ${listPart || '-（无）'}
                                 try {
                                     momentsStore.addComments(ev.momentId, ev.comments || []);
                                     mutatedMoments = true;
+                                    didAnything = true;
                                     if (activePage === 'moments') momentsPanel.render();
                                 } catch {}
                                 continue;
@@ -1110,6 +1244,7 @@ ${listPart || '-（无）'}
                                 }
                                 chatStore.appendMessage(parsed, targetSessionId);
                             });
+                            didAnything = true;
                             refreshChatAndContacts();
 
                             // Continue waiting animation until stream ends / next tag arrives
@@ -1122,6 +1257,9 @@ ${listPart || '-（无）'}
                         try { await momentsStore.flush(); } catch {}
                     }
                     refreshChatAndContacts();
+                    if (!didAnything) {
+                        window.toastr?.warning?.('未解析到有效对话标签，已丢弃（可在“三 > 原始回复”查看）');
+                    }
                 } else {
                     // 兼容旧逻辑（流式逐字）
                     streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
@@ -1232,7 +1370,7 @@ ${listPart || '-（无）'}
         } catch (error) {
             streamCtrl?.cancel?.();
             ui.hideTyping();
-            logger.error('发送失败', error);
+            logger.error('发送失败', error, { status: error?.status, response: error?.response });
             ui.showErrorBanner(error.message || '发送失败，請檢查網絡或 API 設置', {
                 label: '重試',
                 handler: () => handleSend()

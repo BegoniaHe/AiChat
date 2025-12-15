@@ -22,18 +22,12 @@ export class DeepseekProvider extends OpenAIProvider {
    */
   async listModels() {
     try {
-      const response = await fetch(`${this.baseUrl}/models`, {
+      const data = await this.requestJson({
+        url: `${this.baseUrl}/models`,
+        method: 'GET',
         headers: this.getHeaders(),
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return data.data
-        .filter(m => m.id.includes('deepseek'))
-        .map(m => m.id);
+      return (data.data || []).filter(m => m.id.includes('deepseek')).map(m => m.id);
     } catch (error) {
       console.warn('Failed to list Deepseek models, using defaults:', error);
       // Return common Deepseek models as fallback
