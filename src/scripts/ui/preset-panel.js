@@ -888,16 +888,29 @@ export class PresetPanel {
         }));
         list.appendChild(makePromptBlock({
             idPrefix: 'moment',
-            title: '动态提示词',
-            subtitle: '解析 moment_start/moment_reply_* 到动态页（评论部分暂时注释）',
-            enabledKey: 'moment_enabled',
-            positionKey: 'moment_position',
-            depthKey: 'moment_depth',
-            roleKey: 'moment_role',
-            rulesKey: 'moment_rules',
+            title: '动态发布决策提示词',
+            subtitle: '让模型决定是否要输出 moment_start/moment_end（仅用于私聊/群聊场景）',
+            enabledKey: 'moment_create_enabled',
+            positionKey: 'moment_create_position',
+            depthKey: 'moment_create_depth',
+            roleKey: 'moment_create_role',
+            rulesKey: 'moment_create_rules',
             defaultDepth: 0,
             enabledLabel: '启用',
-            placeholder: '动态协议提示词（<content> + moment_start...moment_end）',
+            placeholder: '动态发布决策提示词（决定是否输出 moment_start...moment_end）',
+        }));
+        list.appendChild(makePromptBlock({
+            idPrefix: 'moment-comment',
+            title: '动态评论回覆提示词',
+            subtitle: '仅用于“动态评论”场景：输出 moment_reply_start/moment_reply_end（不输出私聊/群聊）',
+            enabledKey: 'moment_comment_enabled',
+            positionKey: 'moment_comment_position',
+            depthKey: 'moment_comment_depth',
+            roleKey: 'moment_comment_role',
+            rulesKey: 'moment_comment_rules',
+            defaultDepth: 0,
+            enabledLabel: '启用',
+            placeholder: '动态评论回覆规则（<content> + moment_reply_*）',
         }));
         list.appendChild(makePromptBlock({
             idPrefix: 'group',
@@ -1438,11 +1451,17 @@ export class PresetPanel {
             current.dialogue_role = getInt(root.querySelector('#dialogue-role')?.value, current.dialogue_role ?? EXT_PROMPT_ROLES.SYSTEM);
             current.dialogue_rules = root.querySelector('#dialogue-rules')?.value ?? '';
 
-            current.moment_enabled = Boolean(root.querySelector('#moment-enabled')?.checked);
-            current.moment_position = getInt(root.querySelector('#moment-position')?.value, current.moment_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
-            current.moment_depth = getInt(root.querySelector('#moment-depth')?.value, current.moment_depth ?? 0);
-            current.moment_role = getInt(root.querySelector('#moment-role')?.value, current.moment_role ?? EXT_PROMPT_ROLES.SYSTEM);
-            current.moment_rules = root.querySelector('#moment-rules')?.value ?? '';
+            current.moment_create_enabled = Boolean(root.querySelector('#moment-enabled')?.checked);
+            current.moment_create_position = getInt(root.querySelector('#moment-position')?.value, current.moment_create_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            current.moment_create_depth = getInt(root.querySelector('#moment-depth')?.value, current.moment_create_depth ?? 1);
+            current.moment_create_role = getInt(root.querySelector('#moment-role')?.value, current.moment_create_role ?? EXT_PROMPT_ROLES.SYSTEM);
+            current.moment_create_rules = root.querySelector('#moment-rules')?.value ?? '';
+
+            current.moment_comment_enabled = Boolean(root.querySelector('#moment-comment-enabled')?.checked);
+            current.moment_comment_position = getInt(root.querySelector('#moment-comment-position')?.value, current.moment_comment_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            current.moment_comment_depth = getInt(root.querySelector('#moment-comment-depth')?.value, current.moment_comment_depth ?? 0);
+            current.moment_comment_role = getInt(root.querySelector('#moment-comment-role')?.value, current.moment_comment_role ?? EXT_PROMPT_ROLES.SYSTEM);
+            current.moment_comment_rules = root.querySelector('#moment-comment-rules')?.value ?? '';
 
             current.group_enabled = Boolean(root.querySelector('#group-enabled')?.checked);
             current.group_position = getInt(root.querySelector('#group-position')?.value, current.group_position ?? EXT_PROMPT_TYPES.IN_PROMPT);

@@ -186,12 +186,9 @@ const initApp = async () => {
             [authorName, ...candidates].forEach((n) => { if (n && !uniq.includes(n)) uniq.push(n); });
             const listPart = uniq.slice(0, 16).map(n => `- ${n}`).join('\n');
 
+            // 场景 C：动态评论（提示词规则由「预设 → 聊天提示词 → 动态评论回覆提示词」注入，这里只提供数据）
             const prompt = `
-你正在处理 QQ空间「动态评论回复」任务。
-
-用户【我】对角色【${authorName}】发布的动态发表了评论。
-
-【目标动态】
+【QQ空间动态评论回复（数据）】
 moment_id: ${id}
 发布者: ${authorName}
 动态内容: ${String(m.content || '').trim()}
@@ -200,23 +197,8 @@ moment_id: ${id}
 【用户评论】
 我：${userComment}
 
-【可用联系人名单】（参与评论只能从这里挑选；至少2名角色参与；发布者必须回复）
+【可用联系人名单】
 ${listPart || '-（无）'}
-
-【输出硬性要求】
-1) 只输出一个 <content>...</content> 区块，除此之外不要输出任何文字。
-2) <content> 内必须输出一段 moment_reply_start/moment_reply_end：
-   moment_reply_start
-   moment_id::${id}
-   评论人--评论内容
-   评论人--评论内容
-   moment_reply_end
-3) 发布者「${authorName}」必须回复用户评论；并且至少还要有 1 名其他角色参与评论。
-4) 评论内容若需要换行，使用 <br>。
-5) 可选：若需要更私密沟通，可在 moment_reply_end 之后（仍在 <content> 内）追加一个或多个私聊标签块：
-   <我和角色名的私聊>
-   - 私聊内容...
-   </我和角色名的私聊>
 `.trim();
 
             const normalizeName = (s) => String(s || '').trim();
@@ -287,15 +269,16 @@ ${listPart || '-（无）'}
                 const parser = new DialogueStreamParser({ userName: '我' });
                 let sawMomentReply = false;
 
+                const ctx = { user: { name: '我' }, character: { name: authorName }, history: [], task: { type: 'moment_comment' }, session: { id: originSessionId, isGroup: false } };
                 if (config.stream) {
-                    const stream = await window.appBridge.generate(prompt, { user: { name: '我' }, character: { name: authorName }, history: [] });
+                    const stream = await window.appBridge.generate(prompt, ctx);
                     for await (const chunk of stream) {
                         const events = parser.push(chunk);
                         const res = applyEvents(events);
                         if (res?.touchedMoments) sawMomentReply = true;
                     }
                 } else {
-                    const raw = await window.appBridge.generate(prompt, { user: { name: '我' }, character: { name: authorName }, history: [] });
+                    const raw = await window.appBridge.generate(prompt, ctx);
                     const events = parser.push(raw);
                     const res = applyEvents(events);
                     if (res?.touchedMoments) sawMomentReply = true;
@@ -1375,8 +1358,8 @@ ${listPart || '-（无）'}
                 const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
                 const privateEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
                 const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
-                const momentEnabled = Boolean(sysp?.moment_enabled) && String(sysp?.moment_rules || '').trim().length > 0;
-                const protocolEnabled = momentEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+                const momentCreateEnabled = Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
+                const protocolEnabled = momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled);
 
                 if (protocolEnabled) {
                     // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
@@ -1519,8 +1502,8 @@ ${listPart || '-（无）'}
                 const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
                 const privateEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
                 const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
-                const momentEnabled = Boolean(sysp?.moment_enabled) && String(sysp?.moment_rules || '').trim().length > 0;
-                const protocolEnabled = momentEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+                const momentCreateEnabled = Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
+                const protocolEnabled = momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled);
                 if (protocolEnabled) {
                     const parser = new DialogueStreamParser({ userName });
                     const events = parser.push(resultRaw);

@@ -19,8 +19,18 @@ const STORE_KEY = 'prompt_preset_store_v1';
 
 const genId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
-// 对话模式：从 `手机流式.html` 迁移过来的“私聊协议提示词”（已移除群聊/动态/主动消息部分）
-// 注意：该段提示词用于让模型输出可解析的私聊格式，后续会在 app 内解析分流。
+// 对话模式（私聊）提示词：
+// - 预设的优势：可按场景（私聊/群聊/动态评论）自动注入不同提示词块（见 bridge.js A/B/C）。
+// - 世界书的优势：可提供“格式大全/静态规则”并在缺失时自动创建（与手机流式一致）。
+// 决策：场景判别继续由预设/应用侧负责；手机格式说明由世界书 `手机-格式*` 提供。
+//
+// 下面这段历史默认值包含大量“格式协议/<content> 约束”，与世界书 `手机-格式2-QQ聊天` / `手机-格式3-QQ空间` 重复，
+// 且与我们后续要把 `<content>` 规则放在“预设-自定义”区块的做法冲突，因此默认不再内置这些约束。
+// （保留旧内容于注释，方便回滚/对照）
+//
+// const DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT_LEGACY_DUP = `
+// ...（旧版内容，包含 <content> 约束与私聊格式说明）...
+// `.trim();
 const DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT = `
 # 行为风格与节奏指南 (Style & Pacing Guide)
 - **🎭 角色扮演核心**:
@@ -31,129 +41,34 @@ const DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT = `
   - **禁止复述**: 严格禁止重复、补充或复述 {{user}} 输入内容；不要对 {{user}} 内容进行解释/改写。
   - **禁止冒充**: 严格禁止冒充 {{user}}，绝不模拟或代替 {{user}} 发言。
   - **保持互动**: 回复必须包含提问或引导，不能中断对话。
-
-# 对话模式输出协议（仅私聊 / 单聊天室）
-你可以在 \`<thinking>\` 里思考（可选），但 **程序只会解析 \`<content>\`**。
-
-## 输出硬性要求
-1. 输出必须包含一个 \`<content>\`...\`</content>\` 区块；**所有可见回复必须放在 content 内**。
-2. \`<content>\` 内必须且只能包含一个私聊标签：
-   - \`<{{user}}和{{char}}的私聊>\` ... \`</{{user}}和{{char}}的私聊>\`
-   - **标签名字顺序必须是**：\`{{user}}和{{char}}的私聊\`（不要写反）
-3. 私聊标签内部，每一行代表一条要发送到聊天室的消息，并且 **必须以 \`-\` 开头**：
-   - \`- 你好呀\`
-   - \`- 你现在在做什么？\`
-4. 若消息内容需要换行，请在消息内容中使用 \`<br>\`（而不是直接换行）。
-5. 禁止输出群聊、动态、评论、主动发起等任何其他格式/标签（本阶段仅私聊）。
-
-## 特殊消息类型（仍然作为一条消息，用 - 开头）
-以下类型必须作为独立的一条消息（独立成行）：
-- \`- [bqb-表情包内容]\`
-- \`- [zz-金额元]\`（仅私聊可用）
-- \`- [yy-语音内容]\`
-- \`- [music-歌名$歌手]\`
-- \`- [img-内容描述]\`
-
-## 私聊示例（仅示例，按当前对话生成）
-<thinking>...</thinking>
-<content>
-<{{user}}和{{char}}的私聊>
-- 你好呀，刚刚在忙什么？
-- 想听你说说今天发生了什么。
-</{{user}}和{{char}}的私聊>
-</content>
 `.trim();
 
-// 群聊提示词：从 `手机流式.html` 的“QQ聊天格式介绍”提取并适配到 <content> 内输出
+// 群聊提示词（默认精简版）：
+// - 旧版包含完整 QQ 聊天格式介绍，与世界书 `手机-格式2-QQ聊天` 重复，已停用（保留于注释对照）。
+// const DEFAULT_GROUP_RULES_LEGACY_DUP = `...`.trim();
 const DEFAULT_GROUP_RULES = `
-<QQ聊天格式介绍>
+【群聊场景提示词】
+当前处于群聊：{{group}}
+群成员：{{members}}
 
-你可以在 <thinking> 里思考（可选），但 **程序只会解析 <content>**。
-因此所有可见回复必须放在 <content> 内。
-
-格式示例如（群聊）：
-<content>
-<群聊:{{group}}>
-<成员>{{members}}</成员>
-<聊天内容>
-发言人--内容--HH:MM
-发言人--特殊消息类型--HH:MM
-</聊天内容>
-</群聊:{{group}}>
-</content>
-
-特殊消息类型：
-
-【表情包相关】
-- 输出格式为 [bqb-表情包内容]（仅使用列表中存在的表情包，不可自创或篡改）
-- 表情包作为独立的一条消息，一条消息只能包含一个表情包
-- 示例：路人a--[bqb-摸小猫下巴]--12:00
-
-【语音消息相关】
-- 格式：[yy-语音内容]
-- 必须独立成行，示例：路人a--[yy-想你了]--12:00
-- 可用范围：私聊，群聊
-
-【音乐分享消息相关】
-- 格式：[music-歌名$歌手]
-- 必须独立成行，示例：路人a--[music-富士山下$陈奕迅]--12:00
-- 可用范围：私聊，群聊
-
-【图片或视频消息相关】
-- 格式：[img-内容]
-- 示例：路人a--[img-一张自拍]--12:00
-- 可用范围：私聊，群聊，QQ空间
-- 在群聊和私聊时必须独立成行
-
-格式解释：
-群聊：包含多个成员的群组对话，所有群成员可见消息。
-确保群聊标签闭合；发言内容中如果需要换行，使用 <br>。
-若群聊中需要生成一些随机路人，禁止使用“路人A/匿名用户”等敷衍网名。
-
-</QQ聊天格式介绍>
+（注：QQ聊天/群聊格式、特殊消息类型等“手机格式提示词”已由世界书「手机-格式2-QQ聊天」提供；本区块仅保留场景信息，避免重复。）
 `.trim();
 
 // 动态（QQ空间）提示词：从 `手机流式.html` 的“QQ空间格式介绍”迁移并适配到 <content> 内输出
+// 动态（QQ空间）提示词（默认精简版）：
+// - 旧版包含完整 QQ空间格式介绍 + moment_start/end 规则，与世界书 `手机-格式3-QQ空间` 重复，已停用（保留于注释对照）。
+// const DEFAULT_MOMENT_RULES_LEGACY_DUP = `...`.trim();
 const DEFAULT_MOMENT_RULES = `
-<QQ空间格式介绍>
+【动态（QQ空间）场景提示词】
+（注：QQ空间格式、评论系统说明、moment_start/moment_end 等“手机格式提示词”已由世界书「手机-格式3-QQ空间」提供；本区块默认不重复这些格式说明。）
+`.trim();
 
-{{user}} 和角色们都会使用聊天软件 QQ。QQ空间是 QQ 的公开个人空间，可以在里面发布动态，所有人都能看到。
-
-重要：你可以在 <thinking> 里思考（可选），但 **程序只会解析 <content>**。因此动态内容必须在 <content> 内输出。
-
-输出格式（可包含多个动态，按行解析）：
-moment_start
-发言人--发言内容--发言时间--已浏览人数--已点赞人数
-发言人--评论内容
-发言人--评论内容
-发言人--发言内容--发言时间--已浏览人数--已点赞人数
-发言人--评论内容
-moment_end
-
-动态规则：
-1. 每条动态 0-4 条评论；当出现用户评论时，动态发布者必须优先回复。
-2. 发言内容中如果需要换行，使用 <br>。
-4. 动态若有配图，使用 [img-内容] 这个格式嵌入到发言内容中，例如：
-   角色名--我好看吗[img-一张自拍]--12:00--67--32
-5. 仅输出 moment_start/moment_end（不要输出群聊/私聊格式块；本阶段只做动态页面）。
-
-动态评论回复格式（当用户在某条动态下评论时）：
-moment_reply_start
-moment_id::动态ID
-评论人--评论内容
-评论人--评论内容
-moment_reply_end
-
-评论回复规则：
-1. 必须至少 2 名角色参与评论，其中 **动态发布者必须回复用户**。
-2. 评论人必须是具体名字（优先从联系人中挑选）；不要使用“匿名网友”等敷衍名字。
-3. 可选：若评论内容需要更私密沟通，可在 moment_reply_end 之后追加一个私聊标签块（仍需放在 <content> 内），例如：
-   <{{user}}和角色名的私聊>
-   - 私聊内容...
-   </{{user}}和角色名的私聊>
-
-## 任务：动态发布决策（从 手机流式.html 搬运）
+// 动态发布决策提示词：从 DEFAULT_MOMENT_RULES 中的“任务：动态发布决策”段落拆分
+const DEFAULT_MOMENT_CREATION_RULES = `
+## 任务：动态发布决策
 在回应聊天之后，请评估当前对话情景，并决定是否要发布一条新的动态。
+
+	（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留决策逻辑。）
 
 **【决策流程】**
 1. **评估时机**：回顾刚刚的对话内容，判断是否属于以下【发布动态的参考时机】。
@@ -170,8 +85,31 @@ moment_reply_end
 **【输出格式】**
 - 如果决定发布动态，请在 <content> 内输出完整的 \`moment_start\` ... \`moment_end\` 区块。
 - 如果决定不发布，则**不要输出任何与动态相关的内容**。
+`.trim();
 
-</QQ空间格式介绍>
+// 动态评论回复提示词：用于“动态评论”场景（仅输出评论回覆规则）
+const DEFAULT_MOMENT_COMMENT_RULES = `
+你正在处理 QQ空间「动态评论回复」任务。
+
+（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回覆规则。）
+
+【输入中会提供】
+- moment_id、发布者、动态内容、用户评论、可用联系人名单
+
+【输出硬性要求】
+1) 只输出一个 <content>...</content> 区块，除此之外不要输出任何文字。
+2) <content> 内必须输出一段 moment_reply_start/moment_reply_end：
+   moment_reply_start
+   moment_id::动态ID（使用输入中提供的 moment_id）
+   评论人--评论内容
+   评论人--评论内容
+   moment_reply_end
+3) 发布者必须回复用户评论；并且至少还要有 1 名其他角色参与评论。
+4) 评论内容若需要换行，使用 <br>。
+
+【注意】
+- 评论人必须是具体名字（优先从联系人名单中挑选）；不要使用“匿名网友”等敷衍名字。
+- 本场景不要输出私聊/群聊标签块（只输出评论回复）。
 `.trim();
 
 const clone = (v) => {
@@ -299,6 +237,23 @@ export class PresetStore {
                     p.moment_rules = DEFAULT_MOMENT_RULES;
                 }
 
+                // 分场景：动态发布决策 / 动态评论回复
+                if (typeof p.moment_create_enabled !== 'boolean') p.moment_create_enabled = true;
+                if (typeof p.moment_create_position !== 'number') p.moment_create_position = 0;
+                if (typeof p.moment_create_depth !== 'number') p.moment_create_depth = 1;
+                if (typeof p.moment_create_role !== 'number') p.moment_create_role = 0;
+                if (typeof p.moment_create_rules !== 'string' || !p.moment_create_rules.trim()) {
+                    p.moment_create_rules = DEFAULT_MOMENT_CREATION_RULES;
+                }
+
+                if (typeof p.moment_comment_enabled !== 'boolean') p.moment_comment_enabled = true;
+                if (typeof p.moment_comment_position !== 'number') p.moment_comment_position = 0;
+                if (typeof p.moment_comment_depth !== 'number') p.moment_comment_depth = 0;
+                if (typeof p.moment_comment_role !== 'number') p.moment_comment_role = 0;
+                if (typeof p.moment_comment_rules !== 'string' || !p.moment_comment_rules.trim()) {
+                    p.moment_comment_rules = DEFAULT_MOMENT_COMMENT_RULES;
+                }
+
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
                 if (typeof p.group_position !== 'number') p.group_position = 0;
                 if (typeof p.group_depth !== 'number') p.group_depth = 1;
@@ -337,7 +292,12 @@ export class PresetStore {
                 if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0; // SYSTEM
                 const rules = (typeof p.dialogue_rules === 'string') ? p.dialogue_rules : '';
                 const looksLegacy = rules.includes('msg_start') && rules.includes('QQ 私聊格式协议') && !rules.includes('<content>');
-                if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim() || looksLegacy) {
+                // Migration: 旧默认值包含 <content> 约束与大量格式说明（与世界书手机-格式重复）
+                const looksDupDialogueDefault =
+                    rules.includes('对话模式输出协议') &&
+                    rules.includes('输出硬性要求') &&
+                    (rules.includes('程序只会解析') || rules.includes('<content>'));
+                if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim() || looksLegacy || looksDupDialogueDefault) {
                     p.dialogue_rules = DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT;
                 }
 
@@ -355,11 +315,30 @@ export class PresetStore {
                     p.moment_rules = DEFAULT_MOMENT_RULES;
                 }
 
+                // Migration: 旧 moment_* 迁移到 moment_comment_*（避免把“发布决策”误当成评论规则）
+                if (typeof p.moment_comment_enabled !== 'boolean') p.moment_comment_enabled = true;
+                if (typeof p.moment_comment_position !== 'number') p.moment_comment_position = (typeof p.moment_position === 'number') ? p.moment_position : 0;
+                if (typeof p.moment_comment_depth !== 'number') p.moment_comment_depth = (typeof p.moment_depth === 'number') ? p.moment_depth : 0;
+                if (typeof p.moment_comment_role !== 'number') p.moment_comment_role = (typeof p.moment_role === 'number') ? p.moment_role : 0;
+                if (typeof p.moment_comment_rules !== 'string' || !p.moment_comment_rules.trim()) {
+                    p.moment_comment_rules = DEFAULT_MOMENT_COMMENT_RULES;
+                }
+
+                if (typeof p.moment_create_enabled !== 'boolean') p.moment_create_enabled = true;
+                if (typeof p.moment_create_position !== 'number') p.moment_create_position = 0;
+                if (typeof p.moment_create_depth !== 'number') p.moment_create_depth = 1;
+                if (typeof p.moment_create_role !== 'number') p.moment_create_role = 0;
+                if (typeof p.moment_create_rules !== 'string' || !p.moment_create_rules.trim()) {
+                    p.moment_create_rules = DEFAULT_MOMENT_CREATION_RULES;
+                }
+
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
                 if (typeof p.group_position !== 'number') p.group_position = 0; // IN_PROMPT
                 if (typeof p.group_depth !== 'number') p.group_depth = 1;
                 if (typeof p.group_role !== 'number') p.group_role = 0;
-                if (typeof p.group_rules !== 'string' || !p.group_rules.trim()) {
+                const gr = (typeof p.group_rules === 'string') ? p.group_rules : '';
+                const looksDupGroupDefault = gr.includes('<QQ聊天格式介绍>') || (gr.includes('格式示例如') && gr.includes('<群聊:'));
+                if (typeof p.group_rules !== 'string' || !p.group_rules.trim() || looksDupGroupDefault) {
                     p.group_rules = DEFAULT_GROUP_RULES;
                 }
             }

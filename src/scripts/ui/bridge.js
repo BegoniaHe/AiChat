@@ -8,6 +8,7 @@ import { ChatStorage } from '../storage/chat.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
 import { PresetStore } from '../storage/preset-store.js';
 import { RegexStore, regex_placement } from '../storage/regex-store.js';
+import { BUILTIN_PHONE_FORMAT_WORLDBOOK, BUILTIN_PHONE_FORMAT_WORLDBOOK_ID } from '../storage/builtin-worldbooks.js';
 import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
@@ -85,6 +86,52 @@ class AppBridge {
         this.hydrateGlobalWorldId();
     }
 
+    async ensureBuiltinWorldbooks() {
+        await this.worldStore.ready;
+        try {
+            const existing = this.worldStore.load(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID);
+            const incoming = BUILTIN_PHONE_FORMAT_WORLDBOOK;
+            if (!existing || !Array.isArray(existing.entries)) {
+                await this.worldStore.save(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, incoming);
+                logger.info(`已写入内置世界书：${BUILTIN_PHONE_FORMAT_WORLDBOOK_ID}`);
+                return;
+            }
+            const byComment = new Map();
+            for (const e of existing.entries || []) {
+                const key = String(e?.comment || e?.title || e?.id || '').trim();
+                if (key) byComment.set(key, e);
+            }
+            let changed = false;
+            const merged = [];
+            const incomingKeys = new Set();
+            for (const ie of incoming.entries || []) {
+                const key = String(ie?.comment || ie?.title || ie?.id || '').trim();
+                if (!key) continue;
+                incomingKeys.add(key);
+                const cur = byComment.get(key);
+                if (!cur) {
+                    merged.push(ie);
+                    changed = true;
+                    continue;
+                }
+                const next = { ...cur, ...ie };
+                if (JSON.stringify(next) !== JSON.stringify(cur)) changed = true;
+                merged.push(next);
+            }
+            for (const e of existing.entries || []) {
+                const key = String(e?.comment || e?.title || e?.id || '').trim();
+                if (key && incomingKeys.has(key)) continue;
+                merged.push(e);
+            }
+            if (changed) {
+                await this.worldStore.save(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { ...existing, entries: merged });
+                logger.info(`已更新内置世界书：${BUILTIN_PHONE_FORMAT_WORLDBOOK_ID}`);
+            }
+        } catch (err) {
+            logger.warn('内置世界书迁移失败（忽略）', err);
+        }
+    }
+
     loadGlobalWorldId() {
         try {
             const raw = localStorage.getItem('global_world_id_v1');
@@ -155,6 +202,7 @@ class AppBridge {
             // 加载配置
             await this.presets.ready;
             await this.regex.ready;
+            await this.ensureBuiltinWorldbooks();
             let config = await this.config.load();
 
             // 若当前启用的“生成参数/提示词区块”预设绑定了连接配置，则优先切换到该 profile（ST 风格：预设可携带/绑定连接）
@@ -422,33 +470,34 @@ class AppBridge {
 
         const name1 = context?.user?.name || 'user';
         const name2 = context?.character?.name || 'assistant';
+        const historyForMatch = Array.isArray(context.history) ? context.history : [];
+        const matchText = [
+            String(userMessage ?? ''),
+            ...historyForMatch.map((m) => String(m?.content ?? '')),
+        ].join('\n');
+        const isMomentCommentTask = String(context?.task?.type || '').toLowerCase() === 'moment_comment';
         const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
         const groupName = String(context?.group?.name || '').trim();
         const groupMemberIds = Array.isArray(context?.group?.members) ? context.group.members.map(String) : [];
         const groupMemberNames = Array.isArray(context?.group?.memberNames) ? context.group.memberNames.map(String) : [];
-        const worldPrompt = (() => {
-            const globalPart = this.formatWorldPrompt(this.globalWorldId, '全局世界书提示');
+        const worldPrompt = isMomentCommentTask ? '' : (() => {
+            const builtinPart = this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText });
+            const globalPart = (this.globalWorldId && String(this.globalWorldId) !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID)
+                ? this.formatWorldPrompt(this.globalWorldId, { matchText })
+                : '';
             if (!isGroupChat) {
-                const sessionPart = this.formatWorldPrompt(this.currentWorldId, '世界书提示');
-                if (globalPart && sessionPart) return `${globalPart}\n\n${sessionPart}`;
-                return globalPart || sessionPart || '';
+                const sessionPart = this.currentWorldId ? this.formatWorldPrompt(this.currentWorldId, { matchText }) : '';
+                return [builtinPart, globalPart, sessionPart].filter(Boolean).join('\n\n');
             }
-            const nameMap = new Map();
-            groupMemberIds.forEach((id, idx) => {
-                const nm = String(groupMemberNames[idx] || '').trim();
-                if (id) nameMap.set(id, nm);
-            });
             const parts = [];
             for (const memberSessionId of groupMemberIds) {
                 const wid = this.worldSessionMap[String(memberSessionId) || ''] || null;
                 if (!wid) continue;
-                const labelName = nameMap.get(memberSessionId) || String(memberSessionId);
-                const p = this.formatWorldPrompt(wid, `成员世界书提示（${labelName}）`);
+                const p = this.formatWorldPrompt(wid, { matchText });
                 if (p) parts.push(p);
             }
             const mergedMembers = parts.join('\n\n');
-            if (globalPart && mergedMembers) return `${globalPart}\n\n${mergedMembers}`;
-            return globalPart || mergedMembers || '';
+            return [builtinPart, globalPart, mergedMembers].filter(Boolean).join('\n\n');
         })();
 
         const presetState = this.presets?.getState?.() || null;
@@ -469,13 +518,21 @@ class AppBridge {
         const dialogueDepth = Number.isFinite(Number(syspActive?.dialogue_depth)) ? Math.max(0, Math.trunc(Number(syspActive.dialogue_depth))) : 1;
         const dialogueRole = Number.isFinite(Number(syspActive?.dialogue_role)) ? Math.trunc(Number(syspActive.dialogue_role)) : 0;
 
-        // 动态模式：QQ空间格式（保存于 sysprompt 预设）
-        const momentEnabled = Boolean(syspActive?.moment_enabled);
-        const momentRulesRaw = (typeof syspActive?.moment_rules === 'string') ? syspActive.moment_rules : '';
-        const momentRules = applyMacros(momentRulesRaw, { user: name1, char: name2 });
-        const momentPosition = Number.isFinite(Number(syspActive?.moment_position)) ? Number(syspActive.moment_position) : 0;
-        const momentDepth = Number.isFinite(Number(syspActive?.moment_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_depth))) : 0;
-        const momentRole = Number.isFinite(Number(syspActive?.moment_role)) ? Math.trunc(Number(syspActive.moment_role)) : 0;
+        // 动态发布决策提示词（用于私聊/群聊场景）
+        const momentCreateEnabled = Boolean(syspActive?.moment_create_enabled);
+        const momentCreateRulesRaw = (typeof syspActive?.moment_create_rules === 'string') ? syspActive.moment_create_rules : '';
+        const momentCreateRules = applyMacros(momentCreateRulesRaw, { user: name1, char: name2 });
+        const momentCreatePosition = Number.isFinite(Number(syspActive?.moment_create_position)) ? Number(syspActive.moment_create_position) : 0;
+        const momentCreateDepth = Number.isFinite(Number(syspActive?.moment_create_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_create_depth))) : 1;
+        const momentCreateRole = Number.isFinite(Number(syspActive?.moment_create_role)) ? Math.trunc(Number(syspActive.moment_create_role)) : 0;
+
+        // 动态评论回复提示词（仅用于“动态评论”场景）
+        const momentCommentEnabled = Boolean(syspActive?.moment_comment_enabled);
+        const momentCommentRulesRaw = (typeof syspActive?.moment_comment_rules === 'string') ? syspActive.moment_comment_rules : '';
+        const momentCommentRules = applyMacros(momentCommentRulesRaw, { user: name1, char: name2 });
+        const momentCommentPosition = Number.isFinite(Number(syspActive?.moment_comment_position)) ? Number(syspActive.moment_comment_position) : 0;
+        const momentCommentDepth = Number.isFinite(Number(syspActive?.moment_comment_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_comment_depth))) : 0;
+        const momentCommentRole = Number.isFinite(Number(syspActive?.moment_comment_role)) ? Math.trunc(Number(syspActive.moment_comment_role)) : 0;
 
         // 群聊模式：群聊协议提示词（保存于 sysprompt 预设）
         const groupEnabled = Boolean(syspActive?.group_enabled);
@@ -510,8 +567,8 @@ class AppBridge {
                 return { role, content: out };
             });
 
-            // 私聊提示词：仅在非群聊会话注入
-            if (!isGroupChat && dialogueEnabled && dialogueRules) {
+            // 私聊提示词：仅在私聊且非“动态评论”场景注入
+            if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules) {
                 if (dialoguePosition === 1) { // IN_CHAT
                     const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
                     const role = roleMap[dialogueRole] || 'system';
@@ -524,8 +581,8 @@ class AppBridge {
                 }
             }
 
-            // 群聊提示词：仅在群聊会话注入
-            if (isGroupChat && groupEnabled && groupRules) {
+            // 群聊提示词：仅在群聊且非“动态评论”场景注入
+            if (!isMomentCommentTask && isGroupChat && groupEnabled && groupRules) {
                 if (groupPosition === 1) { // IN_CHAT
                     const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
                     const role = roleMap[groupRole] || 'system';
@@ -537,17 +594,31 @@ class AppBridge {
                     messages.push({ role, content: groupRules });
                 }
             }
-            // 动态提示词：按 ST extension prompt 的位置/深度语义注入
-            if (momentEnabled && momentRules) {
-                if (momentPosition === 1) { // IN_CHAT
+            // 动态提示词：按场景注入
+            // C) 动态评论：只注入评论回覆规则
+            if (isMomentCommentTask && momentCommentEnabled && momentCommentRules) {
+                if (momentCommentPosition === 1) { // IN_CHAT
                     const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-                    const role = roleMap[momentRole] || 'system';
-                    const idx = Math.max(0, history.length - momentDepth);
-                    history.splice(idx, 0, { role, content: momentRules });
-                } else if (momentPosition === 2 || momentPosition === 0) { // BEFORE_PROMPT or IN_PROMPT
+                    const role = roleMap[momentCommentRole] || 'system';
+                    const idx = Math.max(0, history.length - momentCommentDepth);
+                    history.splice(idx, 0, { role, content: momentCommentRules });
+                } else if (momentCommentPosition === 2 || momentCommentPosition === 0) { // BEFORE_PROMPT or IN_PROMPT
                     const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-                    const role = roleMap[momentRole] || 'system';
-                    messages.push({ role, content: momentRules });
+                    const role = roleMap[momentCommentRole] || 'system';
+                    messages.push({ role, content: momentCommentRules });
+                }
+            }
+            // A/B) 私聊/群聊：注入动态发布决策提示词
+            if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules) {
+                if (momentCreatePosition === 1) { // IN_CHAT
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[momentCreateRole] || 'system';
+                    const idx = Math.max(0, history.length - momentCreateDepth);
+                    history.splice(idx, 0, { role, content: momentCreateRules });
+                } else if (momentCreatePosition === 2 || momentCreatePosition === 0) { // BEFORE_PROMPT or IN_PROMPT
+                    const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                    const role = roleMap[momentCreateRole] || 'system';
+                    messages.push({ role, content: momentCreateRules });
                 }
             }
             const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
@@ -679,23 +750,30 @@ class AppBridge {
             messages.push({ role: 'system', content: combinedStoryString });
         }
 
-        // 私聊提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入（仅非群聊）
-        if (!isGroupChat && dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
+        // C) 动态评论：BEFORE_PROMPT / IN_PROMPT 仅注入评论回覆规则
+        if (isMomentCommentTask && momentCommentEnabled && momentCommentRules && (momentCommentPosition === 2 || momentCommentPosition === 0)) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[momentCommentRole] || 'system';
+            messages.push({ role, content: momentCommentRules });
+        }
+
+        // A) 私聊提示词：BEFORE_PROMPT / IN_PROMPT（仅非群聊/非动态评论）
+        if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && (dialoguePosition === 2 || dialoguePosition === 0)) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
             const role = roleMap[dialogueRole] || 'system';
             messages.push({ role, content: dialogueRules });
         }
         // 群聊提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入（仅群聊）
-        if (isGroupChat && groupEnabled && groupRules && (groupPosition === 2 || groupPosition === 0)) {
+        if (!isMomentCommentTask && isGroupChat && groupEnabled && groupRules && (groupPosition === 2 || groupPosition === 0)) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
             const role = roleMap[groupRole] || 'system';
             messages.push({ role, content: groupRules });
         }
-        // 动态提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入
-        if (momentEnabled && momentRules && (momentPosition === 2 || momentPosition === 0)) {
+        // A/B) 动态发布决策：BEFORE_PROMPT / IN_PROMPT（仅私聊/群聊）
+        if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules && (momentCreatePosition === 2 || momentCreatePosition === 0)) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-            const role = roleMap[momentRole] || 'system';
-            messages.push({ role, content: momentRules });
+            const role = roleMap[momentCreateRole] || 'system';
+            messages.push({ role, content: momentCreateRules });
         }
 
         // If context preset disabled, fall back to legacy system prompt building
@@ -727,26 +805,33 @@ class AppBridge {
             const idx = Math.max(0, history.length - injectDepth);
             history.splice(idx, 0, { role, content: combinedStoryString });
         }
-        // IN_CHAT: inject private-chat rules into history (depth + role)
-        if (!isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition === 1) {
+        // C) 动态评论：IN_CHAT 仅注入评论回覆规则
+        if (isMomentCommentTask && momentCommentEnabled && momentCommentRules && momentCommentPosition === 1) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[momentCommentRole] || 'system';
+            const idx = Math.max(0, history.length - momentCommentDepth);
+            history.splice(idx, 0, { role, content: momentCommentRules });
+        }
+        // A) 私聊：IN_CHAT 注入私聊提示词（非动态评论）
+        if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition === 1) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
             const role = roleMap[dialogueRole] || 'system';
             const idx = Math.max(0, history.length - dialogueDepth);
             history.splice(idx, 0, { role, content: dialogueRules });
         }
         // IN_CHAT: inject group-chat rules into history (depth + role)
-        if (isGroupChat && groupEnabled && groupRules && groupPosition === 1) {
+        if (!isMomentCommentTask && isGroupChat && groupEnabled && groupRules && groupPosition === 1) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
             const role = roleMap[groupRole] || 'system';
             const idx = Math.max(0, history.length - groupDepth);
             history.splice(idx, 0, { role, content: groupRules });
         }
-        // IN_CHAT: inject moment rules into history (depth + role)
-        if (momentEnabled && momentRules && momentPosition === 1) {
+        // A/B) 私聊/群聊：IN_CHAT 注入动态发布决策提示词（非动态评论）
+        if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition === 1) {
             const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-            const role = roleMap[momentRole] || 'system';
-            const idx = Math.max(0, history.length - momentDepth);
-            history.splice(idx, 0, { role, content: momentRules });
+            const role = roleMap[momentCreateRole] || 'system';
+            const idx = Math.max(0, history.length - momentCreateDepth);
+            history.splice(idx, 0, { role, content: momentCreateRules });
         }
 
         if (history.length > 0) {
@@ -960,23 +1045,72 @@ class AppBridge {
     }
 
     formatWorldPrompt(worldId, label) {
-        if (!worldId) return '';
-        const data = this.worldStore.load(worldId);
+        const id = String(worldId || '').trim();
+        if (!id) return '';
+        const data = this.worldStore.load(id);
         if (!data || !Array.isArray(data.entries)) return '';
-        const entries = [...data.entries].sort((a, b) => (b.priority || 0) - (a.priority || 0));
-        const parts = entries.map(e => e.content).filter(Boolean);
+
+        const matchTextRaw = typeof label === 'object' && label ? String(label.matchText || '') : '';
+        const matchText = matchTextRaw;
+
+        const norm = (v) => String(v ?? '').trim();
+        const normalizeKeys = (e) => {
+            const keys = Array.isArray(e?.key) ? e.key : (Array.isArray(e?.triggers) ? e.triggers : []);
+            return keys.map(norm).filter(Boolean);
+        };
+        const isRegexLiteral = (k) => k.length >= 2 && k.startsWith('/') && k.endsWith('/') && k.indexOf('/', 1) === (k.length - 1);
+        const matchKey = (key, text, caseSensitive) => {
+            const k = norm(key);
+            if (!k) return false;
+            if (isRegexLiteral(k)) {
+                const body = k.slice(1, -1);
+                try {
+                    const re = new RegExp(body, caseSensitive ? '' : 'i');
+                    return re.test(text);
+                } catch {
+                    return false;
+                }
+            }
+            if (caseSensitive) return text.includes(k);
+            return text.toLowerCase().includes(k.toLowerCase());
+        };
+
+        const shouldInclude = (e) => {
+            if (!e || typeof e !== 'object') return false;
+            if (Boolean(e.disable)) return false;
+            // Legacy behavior: when no match text provided, include all enabled entries.
+            if (!matchTextRaw) return Boolean(e.content);
+            if (Boolean(e.constant)) return Boolean(e.content);
+            const keys = normalizeKeys(e);
+            if (!keys.length) return false;
+            const cs = Boolean(e.caseSensitive);
+            const text = cs ? matchText : matchText.toLowerCase();
+            return keys.some((k) => matchKey(k, text, cs));
+        };
+
+        const entries = [...data.entries]
+            .filter(shouldInclude)
+            .sort((a, b) => {
+                const oa = Number.isFinite(Number(a?.order)) ? Number(a.order) : (Number.isFinite(Number(a?.priority)) ? Number(a.priority) : 0);
+                const ob = Number.isFinite(Number(b?.order)) ? Number(b.order) : (Number.isFinite(Number(b?.priority)) ? Number(b.priority) : 0);
+                return oa - ob;
+            });
+
+        const parts = entries.map((e) => String(e.content || '')).filter((t) => t.trim().length > 0);
         if (!parts.length) return '';
-        return `${label}（${worldId}）：\n` + parts.join('\n\n');
+        return parts.join('\n\n');
     }
 
     /**
         * 生成當前世界書的提示串
         */
     getActiveWorldPrompt() {
-        const globalPart = this.formatWorldPrompt(this.globalWorldId, '全局世界书提示');
-        const sessionPart = this.formatWorldPrompt(this.currentWorldId, '世界书提示');
-        if (globalPart && sessionPart) return `${globalPart}\n\n${sessionPart}`;
-        return globalPart || sessionPart || '';
+        const builtinPart = this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText: '' });
+        const globalPart = (this.globalWorldId && String(this.globalWorldId) !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID)
+            ? this.formatWorldPrompt(this.globalWorldId, { matchText: '' })
+            : '';
+        const sessionPart = this.currentWorldId ? this.formatWorldPrompt(this.currentWorldId, { matchText: '' }) : '';
+        return [builtinPart, globalPart, sessionPart].filter(Boolean).join('\n\n');
     }
 
     getWorldForSession(sessionId = this.activeSessionId) {
