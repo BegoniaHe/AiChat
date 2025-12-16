@@ -156,7 +156,15 @@ export class ChatUI {
     }
 
     onInputChange(handler) {
-        this.inputEl.addEventListener('input', () => handler(this.inputEl.value));
+        let timer = null;
+        this.inputEl.addEventListener('input', () => {
+            // Clear existing timer
+            if (timer) clearTimeout(timer);
+            // Debounce draft saving (500ms)
+            timer = setTimeout(() => {
+                handler(this.inputEl.value);
+            }, 500);
+        });
     }
 
     clearMessages() {

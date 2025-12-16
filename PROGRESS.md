@@ -1049,7 +1049,11 @@
 - 2025-12-16 23:10（Tauri KV 持久化增强 - Android fsync 和详细日志）
   - **问题发现**：通过用户截图确认根本原因 - 保存的 activeProfileId（profile-1765814569599-2f6ecb，Vertex）与重新打开后加载的 activeProfileId（profile-1765817736355-18596b，Deepseek）完全不同，说明 Tauri KV 存储没有正确持久化数据。
   - **修复方案**：
-    - 在 Android 上添加 `fsync()` 系统调用，强制将数据立即刷新到磁盘，防止数据丢失。
+    - 修复：Android 文件系统同步 (`fsync`) 确保 activeProfileId 正确落盘。
+- 2025-12-16 23:45（性能优化 - 解决 Android 输入卡顿）
+  - **问题诊断**：手机端输入时严重卡顿，原因定位为 CSS `backdrop-filter` 导致的 GPU 过载，以及 `input` 事件触发高频同步 `localStorage` 写入。
+  - **CSS 优化**：移除 `qq-legacy.css` 和 `main.css` 中所有 `backdrop-filter: blur(...)`，改用纯半透明背景，大幅降低 GPU 渲染压力。
+  - **JS 优化**：在 `chat-ui.js` 的 `onInputChange` 中增加 500ms 防抖 (Debounce)，避免每输入一个字符就触发一次磁盘写入/序列化，释放主线程资源。
     - 为 `save_kv` 和 `load_kv` 命令添加详细的终端日志（eprintln），显示文件路径、数据大小、activeProfileId 和 profiles 数量。
   - **修改文件**：
     - `src-tauri/src/commands.rs` (save_kv 函数)：添加 fsync() 调用和日志输出

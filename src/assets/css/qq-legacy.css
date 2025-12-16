@@ -115,7 +115,7 @@
     padding: 10px 12px;
     /* 避免部分 WebView 對 env()/clamp() 計算異常導致頂欄高度不穩定 */
     background: rgba(230, 230, 230, 0.9);
-    backdrop-filter: blur(10px);
+    /* backdrop-filter: blur(10px); */
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
     flex-shrink: 0;
     min-height: 52px;
@@ -381,7 +381,7 @@
 
     /* 外观 */
     background: rgba(240, 240, 240, 0.95);
-    backdrop-filter: blur(10px);
+    /* backdrop-filter: blur(10px); */
     border-top: 1px solid rgba(0, 0, 0, 0.08);
 }
 
@@ -522,7 +522,7 @@
     background: var(--qq-color-status-bg);
     border-radius: 12px;
     box-shadow: var(--qq-shadow-sm);
-    backdrop-filter: blur(4px);
+    /* backdrop-filter: blur(4px); */
 
     /* 间距 */
     padding: 3px 8px;
@@ -582,7 +582,7 @@
     cursor: pointer;
     transition: all 0.3s ease;
     box-shadow: var(--qq-shadow-md);
-    backdrop-filter: blur(10px);
+    /* backdrop-filter: blur(10px); */
 }
 
 .interactive-mode-button:hover {
@@ -680,8 +680,8 @@
 
 /* 毛玻璃效果 */
 .qq-glass {
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    /* backdrop-filter: blur(10px); */
+    /* -webkit-backdrop-filter: blur(10px); */
 }
 
 /* 文本省略 */
