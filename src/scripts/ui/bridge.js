@@ -932,6 +932,27 @@ class AppBridge {
         window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId } }));
     }
 
+    /**
+     * Bind a world book to a session without switching the current session world.
+     * (Used by group chat to auto-enable member world books.)
+     */
+    bindWorldToSession(sessionId, worldId, { silent = true } = {}) {
+        const sid = String(sessionId || '').trim();
+        const wid = String(worldId || '').trim();
+        if (!sid) return;
+        if (!wid) {
+            delete this.worldSessionMap[sid];
+            this.persistWorldSessionMap();
+            return;
+        }
+        this.worldSessionMap[sid] = wid;
+        this.persistWorldSessionMap();
+        if (!silent && sid === this.activeSessionId) {
+            this.currentWorldId = wid;
+            window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: wid } }));
+        }
+    }
+
     setGlobalWorld(worldId) {
         this.globalWorldId = worldId || null;
         this.persistGlobalWorldId();

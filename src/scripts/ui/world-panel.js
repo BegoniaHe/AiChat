@@ -9,13 +9,15 @@ import { logger } from '../utils/logger.js';
 import { WorldEditorModal } from './world-editor.js';
 
 export class WorldPanel {
-    constructor() {
+    constructor({ contactsStore = null, getSessionId = null } = {}) {
         this.overlay = null;
         this.panel = null;
         this.listEl = null;
         this.importTextarea = null;
         this.fileInput = null;
         this.scope = 'session'; // session | global
+        this.contactsStore = contactsStore;
+        this.getSessionId = typeof getSessionId === 'function' ? getSessionId : null;
         this.editor = new WorldEditorModal({
             onSaved: async () => {
                 await this.refreshList();
@@ -42,7 +44,9 @@ export class WorldPanel {
         if (!this.listEl) return;
         this.listEl.innerHTML = '';
         try {
-            const sessionId = window.appBridge?.activeSessionId || 'default';
+            const sessionId = this.getSessionId ? this.getSessionId() : (window.appBridge?.activeSessionId || 'default');
+            const contact = this.contactsStore?.getContact?.(sessionId) || null;
+            const isGroupSession = this.scope === 'session' && (Boolean(contact?.isGroup) || String(sessionId).startsWith('group:'));
             const currentId = this.scope === 'global'
                 ? (window.appBridge.globalWorldId || '')
                 : (window.appBridge.currentWorldId || '');
@@ -50,7 +54,7 @@ export class WorldPanel {
             if (indicator) {
                 indicator.textContent = this.scope === 'global'
                     ? `全局當前：${currentId || '未啟用'}`
-                    : `會話 ${sessionId} 當前：${currentId || '未啟用'}`;
+                    : (isGroupSession ? `群聊 ${contact?.name || sessionId}：按成员绑定世界书` : `會話 ${sessionId} 當前：${currentId || '未啟用'}`);
             }
             const names = await window.appBridge.listWorlds?.();
             if (!names || !names.length) {
@@ -60,6 +64,93 @@ export class WorldPanel {
                 this.listEl.appendChild(li);
                 return;
             }
+
+            // Group chat: show per-member world bindings (do not rely on world name == member name)
+            if (isGroupSession) {
+                const members = Array.isArray(contact?.members) ? contact.members : [];
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'padding:10px 8px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc; margin:0 0 10px 0;';
+                const title = document.createElement('div');
+                title.style.cssText = 'font-weight:800; color:#0f172a;';
+                title.textContent = '群聊世界书（按成员绑定，自动合并 A+B+...）';
+                const desc = document.createElement('div');
+                desc.style.cssText = 'color:#64748b; font-size:12px; margin-top:4px;';
+                desc.textContent = '提示：在某个成员的私聊里启用世界书，会自动绑定到该成员；群聊会自动使用所有成员已绑定的世界书。';
+                wrap.appendChild(title);
+                wrap.appendChild(desc);
+
+                const list = document.createElement('div');
+                list.style.cssText = 'margin-top:10px; display:flex; flex-direction:column; gap:8px;';
+
+                const getMemberLabel = (mid) => {
+                    const c = this.contactsStore?.getContact?.(mid);
+                    return { name: c?.name || mid, avatar: c?.avatar || './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp' };
+                };
+
+                const bindForMember = (memberId, worldId) => {
+                    const sid = String(memberId || '').trim();
+                    if (!sid) return;
+                    window.appBridge?.bindWorldToSession?.(sid, worldId, { silent: true });
+                    window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: window.appBridge?.currentWorldId } }));
+                };
+
+                members.forEach((mid) => {
+                    const memberId = String(mid || '').trim();
+                    if (!memberId) return;
+                    const { name, avatar } = getMemberLabel(memberId);
+                    const bound = window.appBridge?.getWorldForSession?.(memberId) || '';
+
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px; border:1px solid rgba(0,0,0,0.08); border-radius:12px; background:#fff;';
+                    row.innerHTML = `
+                        <img src="${avatar}" alt="" style="width:34px; height:34px; border-radius:50%; object-fit:cover;">
+                        <div style="flex:1; min-width:0;">
+                            <div style="font-weight:800; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${name}</div>
+                            <div style="color:${bound ? '#0f172a' : '#94a3b8'}; font-size:12px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                ${bound ? `已绑定：${bound}` : '未绑定世界书'}
+                            </div>
+                        </div>
+                    `;
+
+                    const btnWrap = document.createElement('div');
+                    btnWrap.style.cssText = 'display:flex; gap:6px; align-items:center;';
+                    const pickBtn = document.createElement('button');
+                    pickBtn.textContent = bound ? '更换' : '绑定';
+                    pickBtn.style.cssText = 'padding:6px 10px;border:1px solid #ddd;border-radius:10px;background:#fff;cursor:pointer;';
+                    pickBtn.onclick = () => {
+                        const options = (names || []).slice().sort((a, b) => String(a).localeCompare(String(b)));
+                        const hint = options.slice(0, 40).join('\n');
+                        const raw = prompt(`为「${name}」选择要绑定的世界书名称（输入名称即可）：\n\n（部分列表）\n${hint}\n\n也可直接输入完整名称`, bound || '');
+                        const next = String(raw || '').trim();
+                        if (!next) return;
+                        if (!options.includes(next)) {
+                            window.toastr?.warning?.('未找到该世界书名称');
+                            return;
+                        }
+                        bindForMember(memberId, next);
+                        this.refreshList();
+                    };
+                    const offBtn = document.createElement('button');
+                    offBtn.textContent = '停用';
+                    offBtn.style.cssText = 'padding:6px 10px;border:1px solid #fecaca;border-radius:10px;background:#fee2e2;color:#b91c1c;cursor:pointer;';
+                    offBtn.disabled = !bound;
+                    offBtn.onclick = () => {
+                        bindForMember(memberId, '');
+                        this.refreshList();
+                    };
+                    btnWrap.appendChild(pickBtn);
+                    btnWrap.appendChild(offBtn);
+                    row.appendChild(btnWrap);
+                    list.appendChild(row);
+                });
+
+                wrap.appendChild(list);
+                const host = document.createElement('li');
+                host.style.listStyle = 'none';
+                host.appendChild(wrap);
+                this.listEl.appendChild(host);
+            }
+
             names.forEach((name) => {
                 const li = document.createElement('li');
                 li.style.display = 'flex';
@@ -94,22 +185,48 @@ export class WorldPanel {
                 actions.style.gap = '6px';
 
                 const activate = document.createElement('button');
-                activate.textContent = name === currentId ? '當前' : '啟用';
-                activate.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
-                if (name === currentId) {
+                if (isGroupSession && this.scope === 'session') {
+                    activate.textContent = '（群聊）';
                     activate.disabled = true;
-                    activate.style.opacity = '0.7';
-                }
-                activate.onclick = async () => {
-                    if (this.scope === 'global') {
-                        await window.appBridge.setGlobalWorld(name);
-                    } else {
-                        await window.appBridge.setCurrentWorld(name);
+                    activate.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:not-allowed;opacity:0.7;';
+                } else {
+                    activate.textContent = name === currentId ? '當前' : '啟用';
+                    activate.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
+                    if (name === currentId) {
+                        activate.disabled = true;
+                        activate.style.opacity = '0.7';
                     }
-                    const data = await window.appBridge.getWorldInfo(name);
-                    logger.info('Activated world', name, data);
-                    window.toastr?.success(`已啟用世界書：${name}`);
-                    window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: name } }));
+                    activate.onclick = async () => {
+                        if (this.scope === 'global') {
+                            await window.appBridge.setGlobalWorld(name);
+                        } else {
+                            await window.appBridge.setCurrentWorld(name);
+                        }
+                        const data = await window.appBridge.getWorldInfo(name);
+                        logger.info('Activated world', name, data);
+                        window.toastr?.success(`已啟用世界書：${name}`);
+                        window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: name } }));
+                        await this.refreshList();
+                    };
+                }
+
+                const deactivate = document.createElement('button');
+                deactivate.textContent = '停用';
+                deactivate.style.cssText = 'padding:4px 8px;border:1px solid #fecaca;border-radius:6px;background:#fee2e2;color:#b91c1c;cursor:pointer;';
+                if (this.scope === 'global') {
+                    deactivate.disabled = !currentId;
+                } else {
+                    deactivate.disabled = !currentId || isGroupSession;
+                }
+                deactivate.style.opacity = deactivate.disabled ? '0.6' : '1';
+                deactivate.onclick = async () => {
+                    if (deactivate.disabled) return;
+                    if (this.scope === 'global') {
+                        await window.appBridge.setGlobalWorld('');
+                    } else {
+                        window.appBridge?.bindWorldToSession?.(sessionId, '', { silent: false });
+                    }
+                    window.toastr?.success('已停用世界書');
                     await this.refreshList();
                 };
 
@@ -136,6 +253,7 @@ export class WorldPanel {
                 };
 
                 actions.appendChild(activate);
+                actions.appendChild(deactivate);
                 actions.appendChild(exportBtn);
                 li.appendChild(title);
                 li.appendChild(actions);

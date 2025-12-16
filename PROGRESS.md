@@ -950,3 +950,24 @@
     - 修改：`src/scripts/ui/chat/chat-ui.js`
     - 修改：`src/assets/css/qq-legacy.css`
     - 修改：`src/index.html`
+
+- 2025-12-16 10:21 - 群聊/联系人分离展示 + 群聊自动启用群员世界书
+  - **联系人界面**：群聊单独显示在「群聊」区域，不参与联系人分组/未分组逻辑（与 `手机流式.html` 一致）。
+  - **群聊世界书**：创建/编辑群聊后，若群员存在同名世界书（按成员 id/名称匹配），会自动绑定到对应私聊会话，确保群聊 prompt 合并时能自动启用（A+B+...）。
+  - 文件修改：
+    - 修改：`src/index.html`
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/bridge.js`
+
+- 2025-12-16 10:44 - 联系人页群聊可进入 + 群聊世界书改为“按成员绑定”显示/管理
+  - **修复**：联系人页点击群聊现在可正常进入对应群聊会话。
+  - **世界书面板（群聊）**：进入群聊后打开世界书，会显示每个成员当前绑定的世界书，并可对成员执行「绑定/更换/停用」；群聊世界书合并逻辑直接使用这些绑定（不依赖世界书名称与成员名称一致）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/world-panel.js`
+
+- 2025-12-16 10:47 - 修复启动崩溃：WorldPanel 初始化时引用未定义变量
+  - **问题**：`app.js` 中在 `contactsStore/chatStore` 初始化之前创建 `WorldPanel`，导致 `ReferenceError: Cannot access 'contactsStore' before initialization`。
+  - **修复**：调整初始化顺序，先创建 store，再创建 `WorldPanel`。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`

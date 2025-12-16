@@ -25,10 +25,10 @@ const initApp = async () => {
     const configPanel = new ConfigPanel();
     const presetPanel = new PresetPanel();
     const regexPanel = new RegexPanel();
-    const worldPanel = new WorldPanel();
     const chatStore = new ChatStore();
     const contactsStore = new ContactsStore();
     const momentsStore = new MomentsStore();
+    const worldPanel = new WorldPanel({ contactsStore, getSessionId: () => chatStore.getCurrent() });
     await chatStore.ready;
     await contactsStore.ready;
     await momentsStore.ready;
@@ -423,7 +423,7 @@ ${listPart || '-（无）'}
     const renderContactsUngrouped = () => {
         const el = document.getElementById('contacts-ungrouped-list');
         if (!el) return;
-        const contacts = contactsStore.listContacts();
+        const contacts = contactsStore.listContacts().filter(c => c && !c.isGroup);
         el.innerHTML = '';
         if (!contacts.length) {
             const empty = document.createElement('div');
@@ -456,9 +456,47 @@ ${listPart || '-（无）'}
         });
     };
 
+    const renderGroupsList = () => {
+        const el = document.getElementById('contacts-groups-list');
+        if (!el) return;
+        const groups = contactsStore.listContacts().filter(c => c && c.isGroup);
+        el.innerHTML = '';
+        if (!groups.length) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'padding:12px 6px; color:#94a3b8; font-size:13px;';
+            empty.textContent = '（暂无群聊）';
+            el.appendChild(empty);
+            return;
+        }
+        groups.forEach((g) => {
+            const id = g.id;
+            const last = getLastVisibleMessage(id);
+            const preview = snippetFromMessage(last);
+            const time = last?.timestamp ? formatTime(last.timestamp) : '';
+            const name = g.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
+            const avatar = g.avatar || avatars.assistant;
+            const count = Array.isArray(g.members) ? g.members.length : 0;
+
+            const item = document.createElement('div');
+            item.className = 'contact-item';
+            item.dataset.session = id;
+            item.dataset.name = name;
+            item.innerHTML = `
+                <img src="${avatar}" alt="" class="contact-avatar">
+                <div class="contact-info">
+                    <div class="contact-name">${name}</div>
+                    <div class="contact-desc">${preview || `群成员：${count}人`}</div>
+                </div>
+                <div class="contact-time">${time || String(count).padStart(2, '0') + '人'}</div>
+            `;
+            el.appendChild(item);
+        });
+    };
+
     const refreshChatAndContacts = () => {
         contactsStore.ensureFromSessions(chatStore.listSessions(), { defaultAvatar: avatars.assistant });
         renderChatList();
+        renderGroupsList();
         renderContactsUngrouped();
     };
     sessionPanel.onUpdated = refreshChatAndContacts;
@@ -1018,6 +1056,17 @@ ${listPart || '-（无）'}
 
     const contactsUngroupedEl = document.getElementById('contacts-ungrouped-list');
     contactsUngroupedEl?.addEventListener('click', (e) => {
+        const item = e.target.closest('.contact-item');
+        if (!item || !item.dataset.session) return;
+        const id = item.dataset.session;
+        const name = item.dataset.name || id;
+        const origin = activePage;
+        switchPage('chat');
+        enterChatRoom(id, name, origin);
+    });
+
+    const contactsGroupsEl = document.getElementById('contacts-groups-list');
+    contactsGroupsEl?.addEventListener('click', (e) => {
         const item = e.target.closest('.contact-item');
         if (!item || !item.dataset.session) return;
         const id = item.dataset.session;
