@@ -45,13 +45,19 @@ const initApp = async () => {
     const regexSessionPanel = new RegexSessionPanel(() => chatStore.getCurrent());
     const contactSettingsPanel = new ContactSettingsPanel({
         contactsStore,
+        chatStore,
         getSessionId: () => chatStore.getCurrent(),
-        onSaved: () => {
+        onSaved: ({ forceRefresh } = {}) => {
             refreshChatAndContacts();
             const id = chatStore.getCurrent();
             const c = contactsStore.getContact(id);
             const titleEl = document.getElementById('current-chat-title');
             if (titleEl) titleEl.textContent = c?.name || id;
+            if (forceRefresh) {
+                const msgs = chatStore.getMessages(id);
+                ui.clearMessages();
+                ui.preloadHistory(decorateMessagesForDisplay(msgs));
+            }
             try {
                 if (activePage === 'moments') momentsPanel.render({ preserveScroll: true });
             } catch {}
@@ -1785,9 +1791,9 @@ ${listPart || '-（无）'}
             }
             return;
         }
-        if (action === 'edit' && message.role === 'user') {
-            const newText = prompt('編輯消息', message.content || '');
-            if (newText === null) return;
+        if (action === 'edit-confirm' && message.role === 'user') {
+            const newText = String(payload?.text ?? '');
+            if (!newText) return;
             const stored = window.appBridge.applyInputStoredRegex(newText, { isEdit: true });
             const display = window.appBridge.applyInputDisplayRegex(stored, { isEdit: true, depth: 0 });
             const updated = chatStore.updateMessage(message.id, { content: display, raw: stored, time: formatNowTime() }, sessionId);
@@ -1795,6 +1801,10 @@ ${listPart || '-（无）'}
                 ui.updateMessage(message.id, { ...updated, role: 'user', type: 'text', avatar: avatars.user, name: '我' });
                 refreshChatAndContacts();
             }
+            return;
+        }
+        if (action === 'edit' && message.role === 'user') {
+            // 已由 UI 層接管 startInlineEdit，此處保留舊邏輯備份或直接移除
             return;
         }
         if (action === 'regenerate' && message.role === 'assistant') {

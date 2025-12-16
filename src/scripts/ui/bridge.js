@@ -988,6 +988,25 @@ class AppBridge {
         }
     }
 
+    /**
+     * 删除世界书
+     */
+    async deleteWorldInfo(worldId) {
+        try {
+            await this.worldStore.remove(worldId);
+            if (this.currentWorldId === worldId) {
+                this.setCurrentWorld(null);
+            }
+            if (this.globalWorldId === worldId) {
+                this.setGlobalWorld(null);
+            }
+            logger.debug('世界书已删除', worldId);
+        } catch (error) {
+            logger.error('删除世界书失败:', error);
+            throw error;
+        }
+    }
+
     async listWorlds() {
         if (this.worldStore.ready) {
             await this.worldStore.ready;

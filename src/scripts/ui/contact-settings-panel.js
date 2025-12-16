@@ -6,8 +6,9 @@ import { logger } from '../utils/logger.js';
 import { avatarDataUrlFromFile } from '../utils/image.js';
 
 export class ContactSettingsPanel {
-    constructor({ contactsStore, getSessionId, onSaved } = {}) {
+    constructor({ contactsStore, chatStore, getSessionId, onSaved } = {}) {
         this.contactsStore = contactsStore;
+        this.chatStore = chatStore;
         this.getSessionId = typeof getSessionId === 'function' ? getSessionId : () => 'default';
         this.onSaved = typeof onSaved === 'function' ? onSaved : null;
         this.overlay = null;
@@ -15,12 +16,14 @@ export class ContactSettingsPanel {
         this.fileInput = null;
         this.avatarPreview = null;
         this.nameInput = null;
+        this.archivesList = null;
         this.currentAvatar = '';
     }
 
     show() {
         if (!this.panel) this.createUI();
         this.populate();
+        this.renderArchives();
         this.overlay.style.display = 'block';
         this.panel.style.display = 'block';
     }
@@ -87,6 +90,15 @@ export class ContactSettingsPanel {
                     </div>
                 </div>
 
+                <div style="margin-top:20px; border-top:1px solid #eee; padding-top:14px;">
+                    <div style="font-weight:700; color:#0f172a; margin-bottom:10px;">聊天管理</div>
+                    <button id="contact-new-chat" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fff; color:#019aff; font-weight:700; margin-bottom:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px;">
+                        <span>✨</span> 开启新聊天（存档当前）
+                    </button>
+                    <div style="font-size:12px; color:#64748b; margin-bottom:6px;">历史存档（点击加载）</div>
+                    <div id="contact-archives-list" style="max-height:160px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#f9f9f9; padding:0;"></div>
+                </div>
+
                 <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
                     <button id="contact-avatar-clear" type="button" style="padding:10px 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer;">清除头像</button>
                     <button id="contact-settings-cancel" type="button" style="padding:10px 18px; border:1px solid #e2e8f0; border-radius:10px; background:#f8fafc; cursor:pointer;">取消</button>
@@ -101,6 +113,7 @@ export class ContactSettingsPanel {
 
         this.avatarPreview = this.panel.querySelector('#contact-avatar-preview');
         this.nameInput = this.panel.querySelector('#contact-name-input');
+        this.archivesList = this.panel.querySelector('#contact-archives-list');
 
         this.panel.querySelector('#contact-settings-close').onclick = () => this.hide();
         this.panel.querySelector('#contact-settings-cancel').onclick = () => this.hide();
@@ -113,6 +126,71 @@ export class ContactSettingsPanel {
             if (this.avatarPreview) this.avatarPreview.src = './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
         };
         this.panel.querySelector('#contact-settings-save').onclick = () => this.save();
+        this.panel.querySelector('#contact-new-chat').onclick = () => this.startNewChat();
+    }
+
+    renderArchives() {
+        if (!this.archivesList || !this.chatStore) return;
+        const sid = this.getSessionId();
+        const archives = this.chatStore.getArchives(sid);
+        const currentId = this.chatStore.state.sessions[sid]?.currentArchiveId; 
+        this.archivesList.innerHTML = '';
+        
+        if (!archives.length) {
+            this.archivesList.innerHTML = '<div style="padding:12px; color:#94a3b8; text-align:center; font-size:12px;">暂无历史存档</div>';
+            return;
+        }
+
+        archives.forEach(arc => {
+            const dateStr = new Date(arc.timestamp).toLocaleString();
+            const msgCount = Array.isArray(arc.messages) ? arc.messages.length : 0;
+            const isCurrent = arc.id === currentId;
+            const row = document.createElement('div');
+            row.style.cssText = `display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; background:${isCurrent ? '#eff6ff' : '#fff'}; border-left:${isCurrent ? '3px solid #019aff' : 'none'};`;
+            
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1; cursor:pointer; min-width:0;';
+            info.innerHTML = `
+                <div style="font-weight:600; color:#334155; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${arc.name || '未命名存档'} ${isCurrent ? '(当前)' : ''}</div>
+                <div style="color:#94a3b8; font-size:11px;">${dateStr} · ${msgCount}条消息</div>
+            `;
+            info.onclick = () => {
+                if (isCurrent) return;
+                if (confirm(`确定要加载存档「${arc.name}」吗？\n当前聊天将被自动保存。`)) {
+                    this.chatStore.loadArchivedMessages(arc.id, sid);
+                    window.toastr?.success('已加载存档');
+                    this.onSaved?.({ id: sid, forceRefresh: true }); 
+                    this.hide();
+                }
+            };
+
+            const delBtn = document.createElement('button');
+            delBtn.textContent = '×';
+            delBtn.style.cssText = 'padding:4px 8px; border:none; background:transparent; color:#94a3b8; font-size:16px; cursor:pointer; margin-left:6px;';
+            delBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (confirm('确定要删除这条存档吗？')) {
+                    this.chatStore.deleteArchive(arc.id, sid);
+                    this.renderArchives();
+                }
+            };
+
+            row.appendChild(info);
+            row.appendChild(delBtn);
+            this.archivesList.appendChild(row);
+        });
+    }
+
+    startNewChat() {
+        if (!this.chatStore) return;
+        const sid = this.getSessionId();
+        const raw = prompt('请输入当前聊天的存档名称（留空将自动命名）：');
+        if (raw === null) return; 
+        
+        this.chatStore.startNewChat(sid, raw.trim());
+        window.toastr?.success('已开启新聊天');
+        this.onSaved?.({ id: sid, forceRefresh: true });
+        this.hide();
     }
 
     populate() {

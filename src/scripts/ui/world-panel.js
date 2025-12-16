@@ -230,6 +230,16 @@ export class WorldPanel {
                     await this.refreshList();
                 };
 
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = '删除';
+                deleteBtn.style.cssText = 'padding:4px 8px;border:1px solid #fecaca;border-radius:6px;background:#fff;color:#b91c1c;cursor:pointer;';
+                deleteBtn.onclick = async () => {
+                    if (!confirm(`确定要删除世界书「${name}」吗？此操作不可恢复。`)) return;
+                    await window.appBridge.deleteWorldInfo(name);
+                    window.toastr?.success('已删除世界书');
+                    await this.refreshList();
+                };
+
                 const exportBtn = document.createElement('button');
                 exportBtn.textContent = '導出';
                 exportBtn.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
@@ -255,6 +265,7 @@ export class WorldPanel {
                 actions.appendChild(activate);
                 actions.appendChild(deactivate);
                 actions.appendChild(exportBtn);
+                actions.appendChild(deleteBtn);
                 li.appendChild(title);
                 li.appendChild(actions);
                 this.listEl.appendChild(li);

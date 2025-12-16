@@ -226,4 +226,107 @@ export class ChatStore {
     getLastRawAt(id = this.currentId) {
         return Number(this.state.sessions[id]?.lastRawAt || 0) || 0;
     }
+
+    _tsSuffix() {
+        const d = new Date();
+        return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    }
+
+    archiveCurrentMessages(id = this.currentId, name = '', forceCreate = false) {
+        if (!this.state.sessions[id]) return null;
+        const messages = this.state.sessions[id].messages || [];
+        if (!messages.length) return null;
+        
+        if (!this.state.sessions[id].archives) {
+            this.state.sessions[id].archives = [];
+        }
+
+        const currentArchiveId = this.state.sessions[id].currentArchiveId;
+        const timestamp = Date.now();
+        const suffix = ` (${this._tsSuffix()})`;
+        
+        // 1. Update existing archive (if not forced new and attached)
+        if (!forceCreate && currentArchiveId) {
+            const idx = this.state.sessions[id].archives.findIndex(a => a.id === currentArchiveId);
+            if (idx !== -1) {
+                this.state.sessions[id].archives[idx].messages = [...messages];
+                this.state.sessions[id].archives[idx].timestamp = timestamp;
+                if (name) {
+                    const clean = name.trim();
+                    // Append suffix only if no timestamp looks present
+                    this.state.sessions[id].archives[idx].name = clean.match(/\d{4}\/\d{2}\/\d{2}/) ? clean : (clean + suffix);
+                }
+                this._persist();
+                return currentArchiveId;
+            }
+        }
+
+        // 2. Create new archive
+        const archiveId = `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+        let baseName = name || '存档';
+        if (!baseName.match(/\d{4}\/\d{2}\/\d{2}/)) {
+            baseName += suffix;
+        }
+
+        this.state.sessions[id].archives.push({
+            id: archiveId,
+            name: baseName,
+            timestamp,
+            messages: [...messages]
+        });
+        
+        this._persist();
+        return archiveId;
+    }
+
+    startNewChat(id = this.currentId, archiveName = '') {
+        const session = this.state.sessions[id];
+        if (!session) return;
+
+        if (session.messages && session.messages.length > 0) {
+            // Force create a snapshot of current state before clearing
+            this.archiveCurrentMessages(id, archiveName, true);
+        }
+
+        session.messages = [];
+        session.currentArchiveId = null;
+        session.draft = '';
+        session.lastRawResponse = '';
+        this._persist();
+    }
+
+    getArchives(id = this.currentId) {
+        return (this.state.sessions[id]?.archives || []).sort((a, b) => b.timestamp - a.timestamp);
+    }
+
+    loadArchivedMessages(archiveId, id = this.currentId) {
+        const session = this.state.sessions[id];
+        if (!session || !session.archives) return false;
+        
+        const archive = session.archives.find(a => a.id === archiveId);
+        if (!archive) return false;
+        
+        // Save current state before switching
+        if (session.messages && session.messages.length > 0) {
+             const isDetached = !session.currentArchiveId;
+             const autoName = isDetached ? '自动存档' : '';
+             this.archiveCurrentMessages(id, autoName, false);
+        }
+        
+        session.messages = [...archive.messages];
+        session.currentArchiveId = archiveId;
+        this._persist();
+        return true;
+    }
+
+    deleteArchive(archiveId, id = this.currentId) {
+        const session = this.state.sessions[id];
+        if (!session || !session.archives) return false;
+        session.archives = session.archives.filter(a => a.id !== archiveId);
+        if (session.currentArchiveId === archiveId) {
+            session.currentArchiveId = null;
+        }
+        this._persist();
+        return true;
+    }
 }

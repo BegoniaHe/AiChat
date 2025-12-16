@@ -401,15 +401,23 @@
 
 .chat-input {
     flex: 1;
-    height: 58px;
-    min-height: 58px;
-    padding: 0 20px;
-    border-radius: 29px;
+    min-height: 40px;
+    max-height: 120px; /* 限制最大高度，超过滚动 */
+    padding: 10px 16px;
+    border-radius: 20px;
     border: 1px solid rgba(0, 0, 0, 0.12);
     background: rgba(255, 255, 255, 0.9);
     font-size: 16px;
-    line-height: 58px;
+    line-height: 1.4;
     outline: none;
+    resize: none; /* 禁止手动拖拽调整大小 */
+    overflow-y: auto; /* 超过高度显示滚动条 */
+    scrollbar-width: none; /* Firefox */
+    font-family: inherit;
+}
+
+.chat-input::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
 }
 
 .chat-send-btn {

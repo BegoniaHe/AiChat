@@ -75,14 +75,19 @@ export class ChatUI {
     bindInputAutosize() {
         const el = this.inputEl;
         if (!el) return;
-        // 目前聊天室輸入是 <input>（單行），避免 autosize 覆寫 CSS 高度
-        if (el.tagName !== 'TEXTAREA') return;
+        
         const resize = () => {
             el.style.height = 'auto';
-            el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+            // CSS max-height handles the limit
+            el.style.height = `${el.scrollHeight}px`;
         };
+        // Reset initially
+        el.setAttribute('rows', '1');
         el.addEventListener('input', resize);
-        resize();
+        // Also resize on focus/blur to ensure correct size
+        el.addEventListener('focus', resize);
+        // Initial sizing
+        setTimeout(resize, 0);
     }
 
     bindFocusScroll() {
@@ -837,9 +842,11 @@ export class ChatUI {
             actions.push({ key: 'copy-code', label: '复制' });
         }
         if (message.role === 'assistant') {
+            actions.push({ key: 'copy-text', label: '复制' });
             actions.push({ key: 'regenerate', label: '重新生成' });
             actions.push({ key: 'delete', label: '删除' });
         } else if (message.role === 'user') {
+            actions.push({ key: 'copy-text', label: '复制' });
             actions.push({ key: 'edit', label: '编辑' });
             actions.push({ key: 'delete', label: '删除' });
         }
@@ -873,6 +880,16 @@ export class ChatUI {
                     this.openCodeViewer({ message, text: raw });
                     return;
                 }
+                if (act.key === 'copy-text') {
+                    const text = message.content || '';
+                    this.copyToClipboard(text)
+                        .then((ok) => ok ? window.toastr?.success?.('已複製') : window.toastr?.warning?.('複製失敗'));
+                    return;
+                }
+                if (act.key === 'edit') {
+                    this.startInlineEdit(message);
+                    return;
+                }
                 this.actionHandler?.(act.key, message);
             };
             this.contextMenu.appendChild(btn);
@@ -894,6 +911,73 @@ export class ChatUI {
         this.contextMenu.style.left = `${left}px`;
         this.contextMenu.style.top = `${top}px`;
         this.contextMenu.style.visibility = 'visible';
+    }
+
+    startInlineEdit(message) {
+        const wrapper = this.scrollEl.querySelector(`[data-msg-id="${message.id}"]`);
+        const bubble = wrapper?.querySelector('.QQ_chat_msgdiv');
+        if (!bubble) return;
+
+        const originalText = message.content || '';
+        const ta = document.createElement('textarea');
+        ta.value = originalText;
+        ta.style.cssText = `
+            width: 100%;
+            min-width: 200px;
+            max-width: 100%;
+            height: auto;
+            min-height: 40px;
+            border: 1px solid #019aff;
+            border-radius: 4px;
+            padding: 6px;
+            font: inherit;
+            resize: none;
+            outline: none;
+            background: #fff;
+            color: #000;
+            box-sizing: border-box;
+        `;
+
+        // 自动高度
+        const resize = () => {
+            ta.style.height = 'auto';
+            ta.style.height = ta.scrollHeight + 'px';
+        };
+        ta.addEventListener('input', resize);
+
+        const save = () => {
+            const newText = ta.value.trim();
+            if (newText && newText !== originalText) {
+                // Notify app to update storage
+                this.actionHandler?.('edit-confirm', message, { text: newText });
+            } else {
+                // Restore original text if unchanged or empty
+                bubble.textContent = originalText;
+                bubble.style.whiteSpace = 'pre-wrap';
+            }
+        };
+
+        ta.addEventListener('blur', save);
+        ta.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                ta.blur(); // Trigger save
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                bubble.textContent = originalText; // Cancel
+                bubble.style.whiteSpace = 'pre-wrap';
+            }
+        });
+
+        bubble.innerHTML = '';
+        bubble.appendChild(ta);
+        setTimeout(() => {
+            resize();
+            ta.focus();
+            // Cursor to end
+            ta.setSelectionRange(ta.value.length, ta.value.length);
+        }, 0);
     }
 
     openLightbox(url) {
