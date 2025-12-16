@@ -204,22 +204,9 @@ class AppBridge {
             await this.regex.ready;
             await this.ensureBuiltinWorldbooks();
             let config = await this.config.load();
-
-            // 若当前启用的“生成参数/提示词区块”预设绑定了连接配置，则优先切换到该 profile（ST 风格：预设可携带/绑定连接）
-            try {
-                const presetState = this.presets.getState?.();
-                const useOpenAIPreset = Boolean(presetState?.enabled?.openai);
-                if (useOpenAIPreset) {
-                    const openp = this.presets.getActive('openai');
-                    const boundId = openp?.boundProfileId;
-                    if (boundId && this.config.getActiveProfileId?.() !== boundId) {
-                        const runtime = await this.config.setActiveProfile(boundId);
-                        config = runtime || this.config.get();
-                    }
-                }
-            } catch (err) {
-                logger.debug('预设绑定连接初始化失败（忽略）', err);
-            }
+            // 注意：不要在启动时强制用“预设绑定连接”覆盖用户最后一次使用的连接配置。
+            // 预设绑定仅在用户切换预设时应用（由 preset-panel 调用 applyBoundConfigIfAny），否则会导致
+            // “明明保存/选择了 Deepseek，重启又回到默认配置”的问题。
 
             // 初始化 LLM 客户端
             if (canInitClient(config)) {

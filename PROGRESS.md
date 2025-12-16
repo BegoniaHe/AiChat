@@ -1008,6 +1008,12 @@
     - 修改：`src/index.html`
     - 修改：`src/assets/css/main.css`
     - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-16 23:20 - 修复启动后连接配置回退：不再被“预设绑定连接”覆盖
+  - **问题**：启动时 `AppBridge.init()` 会根据预设的 `boundProfileId` 强制切换连接，导致用户明明保存并正在使用 Deepseek，重启后又被切回旧的默认/其他配置。
+  - **修复**：启动时不再用预设绑定覆盖“最后一次使用的连接配置”；预设绑定仅在用户切换预设时应用（由 `preset-panel` 触发）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/bridge.js`
 - 2025-12-16 17：45
   - 实现联系人分组完整功能：新增 group-store.js（分组存储）、group-panel.js（分组管理面板）、contact-drag-manager.js（拖拽管理）、contact-group-renderer.js（分组渲染）。
   - 新增 contact-groups.css 样式文件，支持分组折叠/展开、拖拽放置区高亮、拖拽状态反馈。
