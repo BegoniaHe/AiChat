@@ -1008,3 +1008,11 @@
     - 修改：`src/index.html`
     - 修改：`src/assets/css/main.css`
     - 修改：`src/scripts/ui/app.js`
+- 2025-12-16 17：45
+  - 实现联系人分组完整功能：新增 group-store.js（分组存储）、group-panel.js（分组管理面板）、contact-drag-manager.js（拖拽管理）、contact-group-renderer.js（分组渲染）。
+  - 新增 contact-groups.css 样式文件，支持分组折叠/展开、拖拽放置区高亮、拖拽状态反馈。
+  - 修改 app.js：集成 GroupStore、ContactDragManager、GroupPanel、ContactGroupRenderer；修改 renderContactsUngrouped 使用分组渲染；连接快捷菜单「新建分组」按钮。
+  - 修改 index.html：引入 contact-groups.css。
+  - 功能完整度：✅ 创建分组、✅ 重命名分组、✅ 删除分组、✅ 折叠/展开、✅ 拖拽联系人到分组、✅ 拖拽到未分组区域、✅ 数据持久化（localStorage + Tauri KV）。
+  - 新增文档：CONTACT_GROUPS_IMPLEMENTATION.md（详细实现说明、使用指南、测试建议）。
+  - 参考原文件：手机流式.html 第 32729-33428 行分组功能实现。

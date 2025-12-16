@@ -5,6 +5,7 @@ import { parseSpecialMessage } from './chat/message-parser.js';
 import { WorldPanel } from './world-panel.js';
 import { ChatStore } from '../storage/chat-store.js';
 import { ContactsStore } from '../storage/contacts-store.js';
+import { GroupStore } from '../storage/group-store.js';
 import { SessionPanel } from './session-panel.js';
 import { StickerPicker } from './sticker-picker.js';
 import { MediaPicker } from './media-picker.js';
@@ -19,6 +20,9 @@ import { DialogueStreamParser } from './chat/dialogue-stream-parser.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { MomentsPanel } from './moments-panel.js';
 import { GroupCreatePanel, GroupSettingsPanel } from './group-chat-panels.js';
+import { GroupPanel } from './group-panel.js';
+import { ContactGroupRenderer } from './contact-group-renderer.js';
+import { ContactDragManager } from './contact-drag-manager.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -27,10 +31,12 @@ const initApp = async () => {
     const regexPanel = new RegexPanel();
     const chatStore = new ChatStore();
     const contactsStore = new ContactsStore();
+    const groupStore = new GroupStore();
     const momentsStore = new MomentsStore();
     const worldPanel = new WorldPanel({ contactsStore, getSessionId: () => chatStore.getCurrent() });
     await chatStore.ready;
     await contactsStore.ready;
+    await groupStore.ready;
     await momentsStore.ready;
     await window.appBridge?.regex?.ready;
     await window.appBridge?.presets?.ready;
@@ -81,6 +87,22 @@ const initApp = async () => {
             const c = contactsStore.getContact(id);
             const cur = chatStore.getCurrent();
             if (cur === id && currentChatTitle) currentChatTitle.textContent = c?.name || id;
+        }
+    });
+
+    // 联系人分组功能
+    const contactDragManager = new ContactDragManager({
+        groupStore,
+        onDrop: () => {
+            try { refreshChatAndContacts(); } catch {}
+        }
+    });
+    contactDragManager.init();
+
+    const groupPanel = new GroupPanel({
+        groupStore,
+        onGroupChanged: () => {
+            try { refreshChatAndContacts(); } catch {}
         }
     });
 
@@ -403,25 +425,18 @@ ${listPart || '-（无）'}
         });
     };
 
-    const renderContactsUngrouped = () => {
-        const el = document.getElementById('contacts-ungrouped-list');
-        if (!el) return;
-        const contacts = contactsStore.listContacts().filter(c => c && !c.isGroup);
-        el.innerHTML = '';
-        if (!contacts.length) {
-            const empty = document.createElement('div');
-            empty.style.cssText = 'padding:12px 6px; color:#94a3b8; font-size:13px;';
-            empty.textContent = '（暂无联系人）';
-            el.appendChild(empty);
-            return;
-        }
-        contacts.forEach((c) => {
-            const id = c.id;
+    // 创建联系人分组渲染器
+    const contactGroupRenderer = new ContactGroupRenderer({
+        groupStore,
+        contactsStore,
+        dragManager: contactDragManager,
+        renderContactFn: (contact) => {
+            const id = contact.id;
             const last = getLastVisibleMessage(id);
             const preview = snippetFromMessage(last);
             const time = last?.timestamp ? formatTime(last.timestamp) : '';
-            const name = c.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
-            const avatar = c.avatar || avatars.assistant;
+            const name = contact.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
+            const avatar = contact.avatar || avatars.assistant;
 
             const item = document.createElement('div');
             item.className = 'contact-item';
@@ -435,8 +450,24 @@ ${listPart || '-（无）'}
                 </div>
                 <div class="contact-time">${time}</div>
             `;
-            el.appendChild(item);
-        });
+            return item;
+        }
+    });
+
+    const renderContactsUngrouped = () => {
+        const el = document.getElementById('contacts-ungrouped-list');
+        if (!el) return;
+        const contacts = contactsStore.listContacts().filter(c => c && !c.isGroup);
+        if (!contacts.length) {
+            el.innerHTML = '';
+            const empty = document.createElement('div');
+            empty.style.cssText = 'padding:12px 6px; color:#94a3b8; font-size:13px;';
+            empty.textContent = '（暂无联系人）';
+            el.appendChild(empty);
+            return;
+        }
+        // 使用分组渲染器渲染联系人
+        contactGroupRenderer.render(el);
     };
 
     const renderGroupsList = () => {
@@ -1136,7 +1167,7 @@ ${listPart || '-（无）'}
             const action = btn.dataset.action;
             if (action === 'add-friend') sessionPanel.show({ focusAdd: true });
             if (action === 'create-group') groupCreatePanel.show();
-            if (action === 'new-group') window.toastr?.info('新建分组占位');
+            if (action === 'new-group') groupPanel.show();
             hideMenus();
         });
     });
