@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(target_os = "android")]
+use std::os::unix::io::AsRawFd;
+
 /// 获取数据目录
 fn get_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -247,18 +250,61 @@ pub async fn save_kv(app: AppHandle, name: String, data: Value) -> Result<(), St
     fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let file = data_dir.join(format!("{name}.json"));
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    fs::write(file, json).map_err(|e| e.to_string())
+
+    // 写入文件并强制刷新到磁盘
+    fs::write(&file, &json).map_err(|e| e.to_string())?;
+
+    // Android 上强制同步到磁盘
+    #[cfg(target_os = "android")]
+    {
+        if let Ok(f) = fs::File::open(&file) {
+            unsafe {
+                libc::fsync(f.as_raw_fd());
+            }
+        }
+    }
+
+    // 记录保存的文件路径和数据摘要（用于调试）
+    eprintln!("[save_kv] 文件: {:?}, 大小: {} bytes", file, json.len());
+    if name == "llm_profiles_v1" {
+        if let Some(obj) = data.as_object() {
+            if let Some(active_id) = obj.get("activeProfileId") {
+                eprintln!("[save_kv] activeProfileId: {}", active_id);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn load_kv(app: AppHandle, name: String) -> Result<Value, String> {
     let data_dir = get_data_dir(&app)?;
     let file = data_dir.join(format!("{name}.json"));
+
     if !file.exists() {
+        eprintln!("[load_kv] 文件不存在: {:?}", file);
         return Ok(serde_json::json!({}));
     }
-    let json = fs::read_to_string(file).map_err(|e| e.to_string())?;
+
+    let json = fs::read_to_string(&file).map_err(|e| e.to_string())?;
     let data: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+
+    // 记录加载的文件路径和数据摘要（用于调试）
+    eprintln!("[load_kv] 文件: {:?}, 大小: {} bytes", file, json.len());
+    if name == "llm_profiles_v1" {
+        if let Some(obj) = data.as_object() {
+            if let Some(active_id) = obj.get("activeProfileId") {
+                eprintln!("[load_kv] activeProfileId: {}", active_id);
+            }
+            if let Some(profiles) = obj.get("profiles") {
+                if let Some(profiles_obj) = profiles.as_object() {
+                    eprintln!("[load_kv] profiles数量: {}", profiles_obj.len());
+                }
+            }
+        }
+    }
+
     Ok(data)
 }
 

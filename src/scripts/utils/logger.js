@@ -15,12 +15,22 @@ class Logger {
         this.level = LogLevel.INFO;
         this.enableTimestamp = true;
         this.enableStackTrace = false;
+        this.debugPanel = null;
 
         // 从 localStorage 恢复日志级别
         const saved = localStorage.getItem('log_level');
         if (saved !== null) {
             this.level = parseInt(saved);
         }
+
+        // 懒加载调试面板
+        setTimeout(() => {
+            try {
+                import('../ui/debug-panel.js').then(module => {
+                    this.debugPanel = module.getDebugPanel();
+                });
+            } catch {}
+        }, 1000);
     }
 
     /**
@@ -50,6 +60,15 @@ class Logger {
             : `${levelName}:`;
 
         console.log(`%c${prefix}`, `color: ${color}; font-weight: bold`, ...args);
+
+        // 输出到调试面板（仅 INFO/WARN/ERROR）
+        if (level >= LogLevel.INFO && this.debugPanel) {
+            try {
+                const message = args.map(a => String(a)).join(' ');
+                const type = levelName.toLowerCase();
+                this.debugPanel.log(message, type);
+            } catch {}
+        }
 
         if (this.enableStackTrace && level >= LogLevel.ERROR) {
             console.trace();

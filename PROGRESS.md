@@ -1016,3 +1016,40 @@
   - 功能完整度：✅ 创建分组、✅ 重命名分组、✅ 删除分组、✅ 折叠/展开、✅ 拖拽联系人到分组、✅ 拖拽到未分组区域、✅ 数据持久化（localStorage + Tauri KV）。
   - 新增文档：CONTACT_GROUPS_IMPLEMENTATION.md（详细实现说明、使用指南、测试建议）。
   - 参考原文件：手机流式.html 第 32729-33428 行分组功能实现。
+- 2025-12-16 18：40（配置加载修复）
+  - 修复 API 配置在重新打开 APP 时自动切换到错误配置的问题。
+  - 问题原因：ensureStores() 在 activeProfileId 无效时，按插入顺序选择第一个配置，而不是按最后使用时间。
+  - 修复方案：1) 确保 activeProfileId 字段存在（防止 undefined）；2) 按 updatedAt 降序选择最近使用的配置；3) 添加调试日志。
+  - 修改文件：src/scripts/storage/config.js（ensureStores、load、save、setActiveProfile 方法）。
+  - 新增文档：CONFIG_LOAD_FIX.md（详细说明问题、修复方案、验证步骤）。
+  - 现在每次打开 APP 时，会自动加载最后一次保存/使用的配置，而不是第一个创建的配置。
+- 2025-12-16 19：35（Android 配置调试工具）
+  - 为 Android 设备添加屏幕调试面板，无需连接电脑即可查看日志。
+  - 新增文件：src/scripts/ui/debug-panel.js（屏幕调试面板，右下角 DEBUG 按钮切换）。
+  - 修改 src/scripts/utils/logger.js：所有 INFO/WARN/ERROR 日志同时输出到调试面板。
+  - 修改 src/scripts/storage/config.js：增强持久化和加载日志，显示 activeProfileId 和配置数量。
+  - 修改 src/scripts/ui/config-panel.js：添加「调试信息」按钮，显示当前配置状态和 localStorage 数据。
+  - 调试面板功能：显示实时日志（最多20条）、支持显示配置状态、按时间戳显示、颜色区分日志级别。
+  - persistProfiles 方法改进：显式保存 activeProfileId 和 profiles 字段，同时保存到 Tauri KV 和 localStorage。
+  - 新增文档：DEBUG_CONFIG_ANDROID.md（详细的 Android 调试指南、使用方法、问题诊断步骤）。
+- 2025-12-16 22：30（按钮布局优化和配置切换防护）
+  - 修复 API 配置面板底部按钮布局不美观的问题。
+  - 修改 src/scripts/ui/config-panel.js：将「调试信息」按钮改为小按钮独立放置在上方，主要操作按钮（测试连接、取消、保存）统一样式和大小，右对齐排列。
+  - 按钮样式改进：统一 padding、border-radius、min-width，使用更柔和的颜色（#e2e8f0 边框、#f8fafc 背景）。
+  - 修改 src/scripts/ui/debug-panel.js：APP 启动时自动显示调试面板 8 秒，让用户能看到配置加载日志；增加 maxLogs 到 30 条；增强 showConfigStatus 显示每个配置的最后修改时间。
+  - 防止配置意外切换：添加 isRefreshingProfile 标志，防止刷新配置选择器时触发 onchange 事件导致配置被意外切换。
+  - 增强日志：在配置选择器 onchange 中添加日志，记录用户手动切换配置的操作。
+
+- 2025-12-16 23:10（Tauri KV 持久化增强 - Android fsync 和详细日志）
+  - **问题发现**：通过用户截图确认根本原因 - 保存的 activeProfileId（profile-1765814569599-2f6ecb，Vertex）与重新打开后加载的 activeProfileId（profile-1765817736355-18596b，Deepseek）完全不同，说明 Tauri KV 存储没有正确持久化数据。
+  - **修复方案**：
+    - 在 Android 上添加 `fsync()` 系统调用，强制将数据立即刷新到磁盘，防止数据丢失。
+    - 为 `save_kv` 和 `load_kv` 命令添加详细的终端日志（eprintln），显示文件路径、数据大小、activeProfileId 和 profiles 数量。
+  - **修改文件**：
+    - `src-tauri/src/commands.rs` (save_kv 函数)：添加 fsync() 调用和日志输出
+    - `src-tauri/src/commands.rs` (load_kv 函数)：添加详细的加载日志
+  - **测试方法**：
+    - 重新编译 Android APK：`npm run tauri android build`
+    - 在终端运行 `npm run dev` 并在手机上打开 APP，观察终端输出的 [save_kv] 和 [load_kv] 日志
+    - 保存配置时记录 activeProfileId，关闭 APP 后重新打开，确认加载的 activeProfileId 是否一致
+  - **预期结果**：fsync() 确保数据立即写入磁盘，解决 Android 文件系统缓存导致的数据丢失问题。

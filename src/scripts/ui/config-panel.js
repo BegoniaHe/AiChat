@@ -23,6 +23,7 @@ export class ConfigPanel {
         this.modelOptions = [];
         this.keyOverlay = null;
         this.keyModal = null;
+        this.isRefreshingProfile = false; // 防止刷新时触发 onchange
     }
 
     /**
@@ -192,17 +193,26 @@ export class ConfigPanel {
 
                 <div id="config-status" style="margin-bottom: 15px; padding: 10px; border-radius: 5px; display: none;"></div>
 
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button id="config-test" style="padding: 10px 20px; border-radius: 5px; border: 1px solid #ddd;
-                                                     background: #f5f5f5; cursor: pointer; font-size: 14px;">
+                <!-- 调试信息按钮（左上角小按钮） -->
+                <div style="margin-bottom: 10px;">
+                    <button id="config-debug" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0;
+                                                     background: #f8fafc; cursor: pointer; font-size: 12px; color: #64748b;">
+                        🔍 调试信息
+                    </button>
+                </div>
+
+                <!-- 主要操作按钮 -->
+                <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                    <button id="config-test" style="padding: 10px 16px; border-radius: 8px; border: 1px solid #e2e8f0;
+                                                     background: #ffffff; cursor: pointer; font-size: 14px; color: #475569; min-width: 90px;">
                         测试连接
                     </button>
-                    <button id="config-cancel" style="padding: 10px 20px; border-radius: 5px; border: 1px solid #ddd;
-                                                       background: #f5f5f5; cursor: pointer; font-size: 14px;">
+                    <button id="config-cancel" style="padding: 10px 16px; border-radius: 8px; border: 1px solid #e2e8f0;
+                                                       background: #f8fafc; cursor: pointer; font-size: 14px; color: #475569; min-width: 70px;">
                         取消
                     </button>
-                    <button id="config-save" style="padding: 10px 20px; border-radius: 5px; border: none;
-                                                     background: #019aff; color: white; cursor: pointer; font-size: 14px; font-weight: bold;">
+                    <button id="config-save" style="padding: 10px 16px; border-radius: 8px; border: none;
+                                                     background: #019aff; color: white; cursor: pointer; font-size: 14px; font-weight: 600; min-width: 70px;">
                         保存
                     </button>
                 </div>
@@ -227,6 +237,7 @@ export class ConfigPanel {
         this.saveButton.onclick = () => this.onSave();
         this.element.querySelector('#config-cancel').onclick = () => this.hide();
         this.testButton.onclick = () => this.onTest();
+        this.element.querySelector('#config-debug').onclick = () => this.showDebugInfo();
         this.element.querySelector('#toggle-apikey').onclick = () => this.toggleApiKey();
         this.element.querySelector('#manage-keys').onclick = () => this.openKeyManager();
         this.element.querySelector('#profile-new').onclick = () => this.createProfile();
@@ -237,7 +248,14 @@ export class ConfigPanel {
 
         // 連線設定檔切換
         this.element.querySelector('#config-profile').onchange = async (e) => {
+            // 防止刷新选项时触发 onchange
+            if (this.isRefreshingProfile) {
+                logger.debug('忽略配置选择器的 onchange（刷新中）');
+                return;
+            }
+
             const profileId = e.target.value;
+            logger.info(`用户切换配置: ${profileId.slice(0, 20)}...`);
             await this.configManager.setActiveProfile(profileId);
             const config = await this.configManager.load();
             this.populateForm(config);
@@ -589,16 +607,30 @@ export class ConfigPanel {
         const panel = this.element || document;
         const select = panel.querySelector('#config-profile');
         if (!select) return;
-        const profiles = this.configManager.getProfiles?.() || [];
-        const activeId = this.configManager.getActiveProfileId?.();
-        select.innerHTML = '';
-        profiles.forEach((p) => {
-            const opt = document.createElement('option');
-            opt.value = p.id;
-            opt.textContent = p.name;
-            select.appendChild(opt);
-        });
-        if (activeId) select.value = activeId;
+
+        // 设置标志防止触发 onchange
+        this.isRefreshingProfile = true;
+
+        try {
+            const profiles = this.configManager.getProfiles?.() || [];
+            const activeId = this.configManager.getActiveProfileId?.();
+            select.innerHTML = '';
+            profiles.forEach((p) => {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.textContent = p.name;
+                select.appendChild(opt);
+            });
+            if (activeId) {
+                select.value = activeId;
+                logger.debug(`刷新配置选择器，当前: ${activeId.slice(0, 20)}...`);
+            }
+        } finally {
+            // 延迟重置标志，确保 onchange 事件不会触发
+            setTimeout(() => {
+                this.isRefreshingProfile = false;
+            }, 100);
+        }
     }
 
     getMaskedActiveKey() {
@@ -1062,6 +1094,37 @@ export class ConfigPanel {
         } finally {
             this.testButton.textContent = originalText;
             this.testButton.disabled = false;
+        }
+    }
+
+    async showDebugInfo() {
+        try {
+            const { getDebugPanel } = await import('./debug-panel.js');
+            const panel = getDebugPanel();
+
+            panel.log('=== 配置调试信息 ===');
+            panel.showConfigStatus(this.configManager);
+
+            // 显示 localStorage 和 Tauri KV 的状态
+            try {
+                const lsData = localStorage.getItem('llm_profiles_v1');
+                if (lsData) {
+                    const parsed = JSON.parse(lsData);
+                    panel.log(`localStorage activeProfileId: ${parsed.activeProfileId || '无'}`);
+                } else {
+                    panel.log('localStorage: 无数据', 'warn');
+                }
+            } catch (err) {
+                panel.log(`localStorage 读取失败: ${err.message}`, 'error');
+            }
+
+            panel.log('=== 调试面板已打开 ===');
+            panel.toggle(); // 确保面板显示
+
+            window.toastr?.success('调试信息已输出到屏幕底部');
+        } catch (err) {
+            window.toastr?.error('显示调试信息失败');
+            logger.error('显示调试信息失败:', err);
         }
     }
 

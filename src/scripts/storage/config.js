@@ -95,7 +95,7 @@ export class ConfigManager {
             const active = this.getActiveProfile();
             this.config = await this.buildRuntimeConfig(active);
             this.isLoaded = true;
-            logger.info('配置加载成功（profiles）');
+            logger.info(`配置加载成功: ${active.name} (ID: ${active.id}), provider: ${active.provider}`);
         } catch (e) {
             logger.error('配置加载失败，回退默认值', e);
             this.config = this.getDefault();
@@ -142,6 +142,7 @@ export class ConfigManager {
 
         this.profileStore.profiles[nextProfile.id] = nextProfile;
         this.profileStore.activeProfileId = nextProfile.id;
+        logger.info(`保存配置: ${nextProfile.name} (ID: ${nextProfile.id}), 设置为活跃配置`);
         await this.persistProfiles();
 
         // 更新运行时 config（解密 SA + 解密 active key）
@@ -186,6 +187,9 @@ export class ConfigManager {
         let profiles = null;
         try {
             profiles = await safeInvoke('load_kv', { name: PROFILE_STORE_KEY });
+            if (profiles) {
+                logger.info(`load_kv profiles 成功 (Tauri): activeProfileId=${profiles.activeProfileId}, profiles数量=${Object.keys(profiles.profiles || {}).length}`);
+            }
         } catch (err) {
             logger.debug('load_kv profiles failed (可能非 Tauri)', err);
         }
@@ -195,6 +199,9 @@ export class ConfigManager {
         let keyring = null;
         try {
             keyring = await safeInvoke('load_kv', { name: KEYRING_STORE_KEY });
+            if (keyring) {
+                logger.info('load_kv keyring 成功 (Tauri)');
+            }
         } catch (err) {
             logger.debug('load_kv keyring failed (可能非 Tauri)', err);
         }
@@ -244,19 +251,33 @@ export class ConfigManager {
         if (!profiles) {
             try {
                 const raw = localStorage.getItem(PROFILE_STORE_KEY);
-                if (raw) profiles = JSON.parse(raw);
-            } catch {}
+                if (raw) {
+                    profiles = JSON.parse(raw);
+                    logger.info(`localStorage profiles 加载成功（备份）: activeProfileId=${profiles.activeProfileId}, profiles数量=${Object.keys(profiles.profiles || {}).length}`);
+                }
+            } catch (err) {
+                logger.error('localStorage profiles 加载失败', err);
+            }
         }
         if (!keyring) {
             try {
                 const raw = localStorage.getItem(KEYRING_STORE_KEY);
-                if (raw) keyring = JSON.parse(raw);
-            } catch {}
+                if (raw) {
+                    keyring = JSON.parse(raw);
+                    logger.info('localStorage keyring 加载成功（备份）');
+                }
+            } catch (err) {
+                logger.error('localStorage keyring 加载失败', err);
+            }
         }
 
         // init store
         if (!profiles || !profiles.profiles) {
             profiles = { activeProfileId: null, profiles: {} };
+        }
+        // 确保 activeProfileId 字段存在（防止 undefined）
+        if (!profiles.hasOwnProperty('activeProfileId')) {
+            profiles.activeProfileId = null;
         }
         if (!keyring || !keyring.keysByProfile) {
             keyring = { keysByProfile: {} };
@@ -282,10 +303,14 @@ export class ConfigManager {
             await this.persistKeyring(this.keyringStore);
         }
 
-        // ensure active profile
-        if (!this.profileStore.activeProfileId) {
-            this.profileStore.activeProfileId = Object.keys(this.profileStore.profiles)[0] || null;
-            await this.persistProfiles(this.profileStore);
+        // ensure active profile - 按照 updatedAt 排序选择最近使用的
+        if (!this.profileStore.activeProfileId || !this.profileStore.profiles[this.profileStore.activeProfileId]) {
+            const profileList = Object.values(this.profileStore.profiles).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+            this.profileStore.activeProfileId = profileList[0]?.id || null;
+            if (this.profileStore.activeProfileId) {
+                logger.info(`自动选择最近使用的配置: ${profileList[0]?.name}`);
+                await this.persistProfiles(this.profileStore);
+            }
         }
 
         this.storesEnsured = true;
@@ -326,11 +351,25 @@ export class ConfigManager {
 
     async persistProfiles(next = this.profileStore) {
         this.profileStore = next;
+        const toSave = {
+            activeProfileId: this.profileStore.activeProfileId,
+            profiles: this.profileStore.profiles
+        };
+        logger.info(`持久化配置: activeProfileId=${toSave.activeProfileId}, profiles数量=${Object.keys(toSave.profiles || {}).length}`);
+
         try {
-            await safeInvoke('save_kv', { name: PROFILE_STORE_KEY, data: this.profileStore });
+            await safeInvoke('save_kv', { name: PROFILE_STORE_KEY, data: toSave });
+            logger.info('save_kv profiles 成功 (Tauri)');
         } catch (err) {
             logger.warn('save_kv profiles failed (可能非 Tauri)，回退 localStorage', err);
-            localStorage.setItem(PROFILE_STORE_KEY, JSON.stringify(this.profileStore));
+        }
+
+        // 同时保存到 localStorage 作为备份
+        try {
+            localStorage.setItem(PROFILE_STORE_KEY, JSON.stringify(toSave));
+            logger.info('localStorage profiles 保存成功（备份）');
+        } catch (localErr) {
+            logger.error('localStorage profiles 保存失败', localErr);
         }
     }
 
@@ -364,10 +403,14 @@ export class ConfigManager {
 
     async setActiveProfile(profileId) {
         await this.ensureStores();
-        if (!profileId || !this.profileStore?.profiles?.[profileId]) return;
+        if (!profileId || !this.profileStore?.profiles?.[profileId]) {
+            logger.warn(`尝试切换到不存在的配置: ${profileId}`);
+            return;
+        }
         this.profileStore.activeProfileId = profileId;
         await this.persistProfiles();
         const p = this.getActiveProfile();
+        logger.info(`切换活跃配置: ${p.name} (ID: ${profileId})`);
         this.config = await this.buildRuntimeConfig(p);
         this.isLoaded = true;
         return this.config;
