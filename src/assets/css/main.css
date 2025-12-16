@@ -671,18 +671,59 @@ body,
   background: rgba(255, 255, 255, 0.8);
 }
 
+.search-box-wrapper-inner {
+  position: relative;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.95);
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
 .contact-search {
   width: 100%;
-  padding: 8px 12px;
+  padding: 8px 32px 8px 12px;
   border-radius: 20px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.95);
+  border: 0;
+  background: transparent;
   font-size: 14px;
   outline: none;
 }
 
 .contact-search::placeholder {
   color: #999;
+}
+
+.search-clear-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 0;
+  background: rgba(0, 0, 0, 0.08);
+  color: #555;
+  font-size: 16px;
+  line-height: 22px;
+  padding: 0;
+}
+
+.search-box-wrapper-inner.is-active {
+  border-color: rgba(25, 154, 255, 0.6);
+  background: rgba(239, 243, 255, 0.95);
+}
+
+.search-box-wrapper-inner.is-focus {
+  box-shadow: 0 2px 8px rgba(25, 154, 255, 0.3);
+}
+
+.search-highlight {
+  background-color: #ffe066;
+  color: #333;
+  font-weight: 700;
+  padding: 1px 2px;
+  border-radius: 2px;
 }
 
 .contacts-list {

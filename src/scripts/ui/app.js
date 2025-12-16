@@ -481,8 +481,119 @@ ${listPart || '-（无）'}
         renderChatList();
         renderGroupsList();
         renderContactsUngrouped();
+        try { applyContactsSearchFilter(); } catch {}
     };
     sessionPanel.onUpdated = refreshChatAndContacts;
+
+    /* ---------------- 联系人搜索（参照手机流式.html） ---------------- */
+    const contactsSearch = {
+        term: '',
+        timeout: null,
+    };
+
+    const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const setHighlighted = (el, term) => {
+        if (!el) return;
+        const original = el.getAttribute('data-original-text') || el.textContent || '';
+        if (!el.getAttribute('data-original-text')) el.setAttribute('data-original-text', original);
+        const t = String(term || '').trim();
+        if (!t) {
+            el.innerHTML = original;
+            return;
+        }
+        const re = new RegExp(`(${escapeRegExp(t)})`, 'gi');
+        el.innerHTML = original.replace(re, '<span class="search-highlight">$1</span>');
+    };
+
+    const restoreHighlighted = (el) => {
+        if (!el) return;
+        const original = el.getAttribute('data-original-text');
+        if (original != null) el.innerHTML = original;
+    };
+
+    const filterContactItem = (item, searchLower, rawTerm) => {
+        const nameEl = item.querySelector('.contact-name');
+        const descEl = item.querySelector('.contact-desc');
+        const name = (nameEl?.getAttribute('data-original-text') || nameEl?.textContent || '').toLowerCase();
+        const desc = (descEl?.getAttribute('data-original-text') || descEl?.textContent || '').toLowerCase();
+        const isMatch = !searchLower || name.includes(searchLower) || desc.includes(searchLower);
+        item.style.display = isMatch ? '' : 'none';
+        if (!searchLower) {
+            restoreHighlighted(nameEl);
+            restoreHighlighted(descEl);
+        } else {
+            if (name.includes(searchLower)) setHighlighted(nameEl, rawTerm);
+            else restoreHighlighted(nameEl);
+            if (desc.includes(searchLower)) setHighlighted(descEl, rawTerm);
+            else restoreHighlighted(descEl);
+        }
+        return isMatch;
+    };
+
+    const applyContactsSearchFilter = () => {
+        const rawTerm = String(contactsSearch.term || '').trim();
+        const searchLower = rawTerm.toLowerCase();
+
+        const groupsWrap = document.getElementById('contacts-groups-list')?.closest('.contact-group') || null;
+        const ungroupedWrap = document.getElementById('contacts-ungrouped-list')?.closest('.contact-group') || null;
+        const groupsList = document.getElementById('contacts-groups-list');
+        const ungroupedList = document.getElementById('contacts-ungrouped-list');
+
+        const filterSection = (listEl, wrapperEl) => {
+            if (!listEl || !wrapperEl) return;
+            const items = [...listEl.querySelectorAll('.contact-item')];
+            let visible = 0;
+            for (const it of items) {
+                if (filterContactItem(it, searchLower, rawTerm)) visible++;
+            }
+            wrapperEl.style.display = (rawTerm && visible === 0) ? 'none' : '';
+        };
+
+        filterSection(groupsList, groupsWrap);
+        filterSection(ungroupedList, ungroupedWrap);
+    };
+
+    const initContactSearch = () => {
+        const input = document.getElementById('contact_search_input');
+        const clearBtn = document.getElementById('search_clear_btn');
+        const box = document.getElementById('floating_search_box');
+        if (!input || !clearBtn || !box) return;
+        if (input.hasAttribute('data-initialized')) return;
+
+        const setActiveUi = (active) => {
+            box.classList.toggle('is-active', Boolean(active));
+        };
+
+        const update = (nextTerm, { immediate = false } = {}) => {
+            contactsSearch.term = String(nextTerm || '');
+            const has = contactsSearch.term.trim().length > 0;
+            clearBtn.style.display = has ? 'block' : 'none';
+            setActiveUi(has);
+            if (contactsSearch.timeout) clearTimeout(contactsSearch.timeout);
+            const run = () => applyContactsSearchFilter();
+            if (immediate) run();
+            else contactsSearch.timeout = setTimeout(run, 300);
+        };
+
+        input.addEventListener('input', (e) => update(e.target.value));
+        input.addEventListener('focus', () => box.classList.add('is-focus'));
+        input.addEventListener('blur', () => box.classList.remove('is-focus'));
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                update('', { immediate: true });
+                input.value = '';
+            }
+        });
+        clearBtn.addEventListener('click', () => {
+            input.value = '';
+            update('', { immediate: true });
+            input.focus();
+        });
+
+        input.setAttribute('data-initialized', 'true');
+    };
 
     /* ---------------- 底部导航（聊天/联系人/动态） ---------------- */
     const navBtns = document.querySelectorAll('.bottom-nav .nav-btn');
@@ -509,6 +620,9 @@ ${listPart || '-（无）'}
     };
     navBtns.forEach(btn => btn.addEventListener('click', () => switchPage(btn.dataset.page)));
     switchPage('chat');
+
+    // 搜索框初始化（仅联系人页）
+    initContactSearch();
 
     /* ---------------- 原始回复面板（调试） ---------------- */
     const rawReplyModal = (() => {

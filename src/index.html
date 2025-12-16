@@ -85,7 +85,10 @@
 
             <!-- 搜索框 -->
             <div class="search-box-wrapper">
-                <input type="text" class="contact-search" placeholder="搜索联系人...">
+                <div id="floating_search_box" class="search-box-wrapper-inner">
+                    <input type="text" id="contact_search_input" class="contact-search" placeholder="搜索联系人...">
+                    <button id="search_clear_btn" class="search-clear-btn" type="button" aria-label="清除搜索" style="display:none;">×</button>
+                </div>
             </div>
 
             <!-- 联系人列表：分组显示 -->
