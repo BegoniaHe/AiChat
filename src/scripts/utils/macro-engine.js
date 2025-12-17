@@ -10,6 +10,11 @@ export class MacroEngine {
         this.chatStore = chatStore;
     }
 
+    normalizeSeparators(text) {
+        // Normalize full-width colons used in some IME inputs: ：：
+        return String(text || '').replace(/：：/g, '::');
+    }
+
     normalizeMacroValue(value) {
         if (value === null || value === undefined) return '';
         if (typeof value === 'string') return value;
@@ -20,6 +25,152 @@ export class MacroEngine {
         return '';
     }
 
+    getSessionId(context) {
+        return String(context?.sessionId || 'default').trim() || 'default';
+    }
+
+    getLastByRole(role, sessionId) {
+        try {
+            const msgs = this.chatStore?.getMessages?.(sessionId) || [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (!m) continue;
+                if (String(m.role || '') !== role) continue;
+                const raw = (typeof m.raw === 'string' && m.raw) ? m.raw : (typeof m.content === 'string' ? m.content : '');
+                return String(raw || '');
+            }
+        } catch {}
+        return '';
+    }
+
+    getLastIdByRole(role, sessionId) {
+        try {
+            const msgs = this.chatStore?.getMessages?.(sessionId) || [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (!m) continue;
+                if (role && String(m.role || '') !== role) continue;
+                const id = (m && typeof m.id === 'string') ? m.id : '';
+                if (id) return id;
+            }
+        } catch {}
+        return '';
+    }
+
+    getLastMessage(sessionId) {
+        try {
+            const msgs = this.chatStore?.getMessages?.(sessionId) || [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                const m = msgs[i];
+                if (!m) continue;
+                const raw = (typeof m.raw === 'string' && m.raw) ? m.raw : (typeof m.content === 'string' ? m.content : '');
+                if (raw) return String(raw);
+            }
+        } catch {}
+        return '';
+    }
+
+    formatIsoDate(d = new Date()) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    formatIsoTime(d = new Date()) {
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    applyVariableMacros(text, context) {
+        const sessionId = this.getSessionId(context);
+        let out = String(text || '');
+
+        // Replace {{setvar::name::value}} with empty string and set local variable
+        out = out.replace(/{{setvar::([^:}]+)::([^}]*)}}/gi, (_m, name, value) => {
+            const key = String(name || '').trim();
+            if (key) this.chatStore?.setVariable?.(key, String(value ?? ''), sessionId);
+            return '';
+        });
+        // {{addvar::name::value}} - numeric add when possible
+        out = out.replace(/{{addvar::([^:}]+)::([^}]*)}}/gi, (_m, name, value) => {
+            const key = String(name || '').trim();
+            if (!key) return '';
+            const curRaw = this.chatStore?.getVariable?.(key, sessionId);
+            const curNum = Number(curRaw);
+            const addNum = Number(value);
+            const next = (Number.isFinite(curNum) && Number.isFinite(addNum)) ? String(curNum + addNum) : `${String(curRaw ?? '')}${String(value ?? '')}`;
+            this.chatStore?.setVariable?.(key, next, sessionId);
+            return '';
+        });
+        // {{incvar::name}} / {{decvar::name}} return updated value
+        out = out.replace(/{{incvar::([^}]+)}}/gi, (_m, name) => {
+            const key = String(name || '').trim();
+            const cur = Number(this.chatStore?.getVariable?.(key, sessionId));
+            const next = (Number.isFinite(cur) ? cur : 0) + 1;
+            this.chatStore?.setVariable?.(key, String(next), sessionId);
+            return String(next);
+        });
+        out = out.replace(/{{decvar::([^}]+)}}/gi, (_m, name) => {
+            const key = String(name || '').trim();
+            const cur = Number(this.chatStore?.getVariable?.(key, sessionId));
+            const next = (Number.isFinite(cur) ? cur : 0) - 1;
+            this.chatStore?.setVariable?.(key, String(next), sessionId);
+            return String(next);
+        });
+        out = out.replace(/{{getvar::([^}]+)}}/gi, (_m, name) => {
+            const key = String(name || '').trim();
+            const val = this.chatStore?.getVariable?.(key, sessionId);
+            return (val === undefined || val === null) ? '' : String(val);
+        });
+
+        return out;
+    }
+
+    applyBuiltInMacros(text, context, baseVars) {
+        const sessionId = this.getSessionId(context);
+        let out = String(text || '');
+        const user = String(baseVars?.user || 'User');
+        const char = String(baseVars?.char || 'Assistant');
+
+        // Legacy non-curly macros (ST-style)
+        out = out.replace(/<USER>/gi, user);
+        out = out.replace(/<CHARIFNOTGROUP>/gi, baseVars?.group ? String(baseVars.group) : char);
+        out = out.replace(/<GROUP>/gi, baseVars?.group ? String(baseVars.group) : '');
+        out = out.replace(/<BOT>/gi, char);
+        out = out.replace(/<CHAR>/gi, char);
+
+        // Also accept lower-case variants (some IME / templates use these)
+        out = out.replace(/<user>/gi, user);
+        out = out.replace(/<char>/gi, char);
+        out = out.replace(/<bot>/gi, char);
+
+        // Common utility macros
+        out = out.replace(/{{newline}}/gi, '\n');
+        out = out.replace(/(?:\r?\n)*{{trim}}(?:\r?\n)*/gi, '');
+        out = out.replace(/{{noop}}/gi, '');
+        // {{// comment}} => removed
+        out = out.replace(/\{\{\/\/([\s\S]*?)\}\}/gm, '');
+
+        // Message macros (subset)
+        out = out.replace(/{{lastMessage}}/gi, () => this.getLastMessage(sessionId));
+        out = out.replace(/{{lastMessageId}}/gi, () => this.getLastIdByRole('', sessionId));
+        out = out.replace(/{{lastUserMessage}}/gi, () => this.getLastByRole('user', sessionId));
+        out = out.replace(/{{lastCharMessage}}/gi, () => this.getLastByRole('assistant', sessionId));
+        out = out.replace(/{{lastUserMessageId}}/gi, () => this.getLastIdByRole('user', sessionId));
+        out = out.replace(/{{lastCharMessageId}}/gi, () => this.getLastIdByRole('assistant', sessionId));
+
+        // Time macros (subset, no moment.js dependency)
+        out = out.replace(/{{time}}/gi, () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        out = out.replace(/{{date}}/gi, () => new Date().toLocaleDateString());
+        out = out.replace(/{{weekday}}/gi, () => new Date().toLocaleDateString(undefined, { weekday: 'long' }));
+        out = out.replace(/{{isotime}}/gi, () => this.formatIsoTime(new Date()));
+        out = out.replace(/{{isodate}}/gi, () => this.formatIsoDate(new Date()));
+
+        // Reverse macro: {{reverse:...}}
+        out = out.replace(/{{reverse:(.+?)}}/gi, (_m, str) => Array.from(String(str ?? '')).reverse().join(''));
+
+        return out;
+    }
+
     /**
      * 处理文本中的宏
      * @param {string} text - 原始文本
@@ -28,11 +179,13 @@ export class MacroEngine {
      */
     process(text, context = {}) {
         if (!text || typeof text !== 'string') return '';
-        if (!text.includes('{{')) return text; // 快速返回
+        if (!text.includes('{{') && !text.includes('<')) return text; // 快速返回
 
         let output = text;
         const maxPasses = 5; // 防止死循环
         let pass = 0;
+
+        output = this.normalizeSeparators(output);
 
         const baseVars = {};
         // 基础变量（兼容 ST 常用 {{user}} / {{char}}）
@@ -58,6 +211,15 @@ export class MacroEngine {
             }
         }
 
+        // Case-insensitive base variable lookup (SillyTavern presets often use {{USER}}/{{CHAR}})
+        const baseVarsLower = Object.create(null);
+        try {
+            for (const [k, v] of Object.entries(baseVars)) {
+                if (!k) continue;
+                baseVarsLower[String(k).toLowerCase()] = v;
+            }
+        } catch {}
+
         // 匹配 {{...}}
         const macroRegex = /\{\{(.*?)\}\}/g;
 
@@ -65,23 +227,34 @@ export class MacroEngine {
             let hasMatch = false;
             let replacedInThisPass = false;
 
+            // Apply built-ins + variables macros on every pass (ST ordering: pre-env macros first)
+            const before = output;
+            output = this.applyBuiltInMacros(output, context, baseVars);
+            output = this.applyVariableMacros(output, context);
+            if (output !== before) replacedInThisPass = true;
+
             output = output.replace(macroRegex, (match, content) => {
                 hasMatch = true;
-                const trimmed = content.trim();
+                const trimmed = this.normalizeSeparators(content).trim();
+                const trimmedLower = trimmed.toLowerCase();
 
                 // 1. 优先匹配基础变量 (e.g. {{user}})
-                if (baseVars.hasOwnProperty(trimmed)) {
+                if (Object.prototype.hasOwnProperty.call(baseVars, trimmed)) {
                     replacedInThisPass = true;
                     return baseVars[trimmed];
                 }
+                if (Object.prototype.hasOwnProperty.call(baseVarsLower, trimmedLower)) {
+                    replacedInThisPass = true;
+                    return baseVarsLower[trimmedLower];
+                }
 
                 // 2. 解析指令 {{cmd::arg1::arg2}}
-                const parts = trimmed.split('::');
+                const parts = trimmed.split(/::/);
                 const cmd = parts[0].toLowerCase();
                 const args = parts.slice(1);
 
                 // 如果没有参数且不是基础变量，可能是尚未定义的变量或者无效格式
-                if (parts.length === 1 && !baseVars.hasOwnProperty(trimmed)) {
+                if (parts.length === 1 && !Object.prototype.hasOwnProperty.call(baseVars, trimmed) && !Object.prototype.hasOwnProperty.call(baseVarsLower, trimmedLower)) {
                     // 尝试作为 getvar 简写？ST 不支持 {{myVar}} 直接获取，必须 {{getvar::myVar}}
                     // 但为了方便，如果不是命令，我们可以保留原样
                     return match;
@@ -128,6 +301,18 @@ export class MacroEngine {
                 const def = args[1] || '';
                 const val = this.chatStore.getVariable(key, sessionId);
                 return (val !== undefined && val !== null) ? val : def;
+            }
+            case 'addvar': {
+                // {{addvar::key::value}}
+                if (args.length < 2) return '';
+                const key = args[0];
+                const addRaw = args.slice(1).join('::');
+                const curRaw = this.chatStore.getVariable(key, sessionId);
+                const curNum = Number(curRaw);
+                const addNum = Number(addRaw);
+                const next = (Number.isFinite(curNum) && Number.isFinite(addNum)) ? String(curNum + addNum) : `${String(curRaw ?? '')}${String(addRaw ?? '')}`;
+                this.chatStore.setVariable(key, next, sessionId);
+                return '';
             }
             case 'incvar': {
                 // {{incvar::key::amount}}

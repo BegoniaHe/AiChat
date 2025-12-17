@@ -25,6 +25,7 @@ import { ContactGroupRenderer } from './contact-group-renderer.js';
 import { ContactDragManager } from './contact-drag-manager.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { PersonaPanel } from './persona-panel.js';
+import { VariablePanel } from './variable-panel.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -156,6 +157,11 @@ const initApp = async () => {
     });
     // Initial sync
     syncUserPersonaUI(chatStore.getCurrent());
+
+    const variablePanel = new VariablePanel({
+        chatStore,
+        getSessionId: () => chatStore.getCurrent(),
+    });
 
     const getContactCountN = () => {
         try {
@@ -1084,6 +1090,7 @@ ${listPart || '-（无）'}
             const action = btn.dataset.action;
             if (action === 'world') worldPanel.show();
             if (action === 'regex') regexSessionPanel.show();
+            if (action === 'vars') variablePanel.show();
             if (action === 'chat-settings') openChatSettings();
             if (action === 'prompt-preview') {
                 const sid = chatStore.getCurrent();
@@ -1425,6 +1432,9 @@ ${listPart || '-（无）'}
         logger.warn('加载历史记录失败，跳过', error);
     }
 
+    // Track the current in-flight generation so we can support "收回" (cancel + retract)
+    let activeGeneration = null; // { sessionId, userMsgId, streamCtrl, cancelled }
+
     // Send handler
     const handleSend = async () => {
         const text = ui.getInputText();
@@ -1617,6 +1627,7 @@ ${listPart || '-（无）'}
         };
         ui.addMessage(userMsg);
         chatStore.appendMessage(userMsg, sessionId);
+        activeGeneration = { sessionId, userMsgId: userMsg.id, streamCtrl: null, cancelled: false };
         refreshChatAndContacts();
         ui.clearInput();
         ui.setSendingState(true);
@@ -1624,6 +1635,7 @@ ${listPart || '-（无）'}
         const config = window.appBridge.config.get();
 
         let streamCtrl = null;
+        let suppressErrorUI = false;
         try {
             if (config.stream) {
                 const assistantAvatar = getAssistantAvatarForSession(sessionId);
@@ -1642,6 +1654,7 @@ ${listPart || '-（无）'}
                     let didAnything = false;
                     let mutatedMoments = false;
                     for await (const chunk of stream) {
+                        if (activeGeneration?.cancelled) break;
                         fullRaw += chunk;
                         const events = parser.push(chunk);
                         for (const ev of events) {
@@ -1724,6 +1737,7 @@ ${listPart || '-（无）'}
                             ui.showTyping(assistantAvatar);
                         }
                     }
+                    if (activeGeneration?.cancelled) return;
                     ui.hideTyping();
                     chatStore.setLastRawResponse(fullRaw, sessionId);
                     if (mutatedMoments) {
@@ -1736,12 +1750,15 @@ ${listPart || '-（无）'}
                 } else {
                     // 兼容旧逻辑（流式逐字）
                     streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
+                    if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
                     const stream = await window.appBridge.generate(text, llmContext(text));
                     let full = '';
                     for await (const chunk of stream) {
+                        if (activeGeneration?.cancelled) break;
                         full += chunk;
                         streamCtrl.update(full);
                     }
+                    if (activeGeneration?.cancelled) return;
                     chatStore.setLastRawResponse(full, sessionId);
                     let stored = full;
                     let display = full;
@@ -1872,6 +1889,10 @@ ${listPart || '-（无）'}
         } catch (error) {
             streamCtrl?.cancel?.();
             ui.hideTyping();
+            if (error?.cancelled || (activeGeneration?.cancelled && String(error?.name || '') === 'AbortError')) {
+                suppressErrorUI = true;
+            }
+            if (suppressErrorUI) return;
             logger.error('发送失败', error, { status: error?.status, response: error?.response });
             ui.showErrorBanner(error.message || '发送失败，請檢查網絡或 API 設置', {
                 label: '重試',
@@ -1880,6 +1901,7 @@ ${listPart || '-（无）'}
             window.toastr?.error(error.message || '发送失败', '错误');
         } finally {
             ui.setSendingState(false);
+            activeGeneration = null;
         }
     };
 
@@ -1887,6 +1909,20 @@ ${listPart || '-（无）'}
     ui.onInputChange((text) => chatStore.setDraft(text, chatStore.getCurrent()));
     ui.onMessageAction(async (action, message, payload) => {
         const sessionId = chatStore.getCurrent();
+        if (action === 'retract' && message.role === 'user') {
+            const pending = activeGeneration && activeGeneration.sessionId === sessionId && activeGeneration.userMsgId === message.id;
+            if (pending) {
+                try { activeGeneration.cancelled = true; } catch {}
+                try { window.appBridge.cancelCurrentGeneration('retract'); } catch {}
+                try { activeGeneration.streamCtrl?.cancel?.(); } catch {}
+                try { ui.hideTyping?.(); } catch {}
+                try { ui.setSendingState(false); } catch {}
+            }
+            chatStore.deleteMessage(message.id, sessionId);
+            ui.removeMessage(message.id);
+            refreshChatAndContacts();
+            return;
+        }
         if (action === 'delete') {
             chatStore.deleteMessage(message.id, sessionId);
             ui.removeMessage(message.id);

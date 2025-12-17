@@ -1095,3 +1095,14 @@
     - UI 状态保存/恢复：用 `sessionStorage` 记住当前页签/是否在聊天室/当前会话，页面重载后自动恢复。
     - 草稿保护：输入框实时镜像到 `sessionStorage`，避免热更新/意外重载丢最后几次输入。
     - invoke 延迟等待：`ChatStore/ContactsStore/MomentsStore` 在检测到 `__TAURI__` 存在但 invoke 尚未就绪时短暂等待，减少“只剩默认会话”的概率。
+
+- 2025-12-17 11:50（宏/变量对齐 ST + 变量管理器）
+  - **宏替换对齐**：增强 `MacroEngine`，支持 `<USER>/<CHAR>/<BOT>`、`{{lastUserMessage}}/{{lastCharMessage}}`、`{{lastMessageId}}`、`{{newline}}/{{trim}}`、`{{isodate}}/{{isotime}}`、`{{reverse:...}}`、`{{//注释}}` 等常用占位符。
+  - **变量宏增强**：支持 `{{setvar::k::v}}/{{getvar::k}}/{{addvar::k::v}}/{{incvar::k}}/{{decvar::k}}`，并兼容全角分隔符 `：：`。
+  - **变量管理器 UI**：聊天室菜单新增「🧮 变量管理器」，可查看/搜索/新增/编辑/删除/清空当前会话变量。
+
+- 2025-12-17 12:22（用户/宏修复 + 消息收回）
+  - **修复 `{{user}}` 替换**：`MacroEngine` 的基础变量查找改为大小写不敏感，兼容 `{{USER}}/{{Char}}` 等写法。
+  - **避免 `{{lastUserMessage}}` 重复**：`AppBridge.buildMessages()` 检测 prompt blocks 是否已通过 `{{lastUserMessage}}` 注入当前输入，若已注入则不再额外追加末尾 user message。
+  - **消息“收回”**：长按用户消息菜单新增「收回」，若该消息仍在等待 AI 回覆则会中断生成并撤回该消息；若已回覆则仅撤回该用户消息（不删除 AI 回覆）。
+  - **可取消请求**：`AppBridge` 增加 `cancelCurrentGeneration()`，并将 `AbortSignal` 贯通到各 provider（OpenAI/Custom/Anthropic/Gemini/Makersuite/Vertex）；Tauri 原生 `http_request` 路径无法真正中断时至少停止 UI 处理与输出。

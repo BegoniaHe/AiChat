@@ -4,6 +4,7 @@
  */
 
 import { handleSSE } from '../stream.js';
+import { createLinkedAbortController, splitRequestOptions } from '../abort.js';
 
 const getTauriInvoker = () => {
   const g = typeof globalThis !== 'undefined' ? globalThis : undefined;
@@ -61,9 +62,16 @@ const parseSSEText = function* (text) {
   }
 };
 
-const request = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 60000 }) => {
+const makeAbortError = () => {
+  const err = new Error('Aborted');
+  err.name = 'AbortError';
+  return err;
+};
+
+const request = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 60000, signal } = {}) => {
   const invoker = getTauriInvoker();
   if (typeof invoker === 'function') {
+    if (signal?.aborted) throw makeAbortError();
     return invoker('http_request', {
       url,
       method,
@@ -77,8 +85,7 @@ const request = async ({ url, method = 'GET', headers = {}, body = undefined, ti
     throw new Error('Tauri invoke not available for Vertex AI; cannot use fetch due to CORS');
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const { controller, cleanup } = createLinkedAbortController({ timeoutMs, signal });
   try {
     const resp = await fetch(url, { method, headers, body, signal: controller.signal });
     const text = await resp.text();
@@ -86,12 +93,12 @@ const request = async ({ url, method = 'GET', headers = {}, body = undefined, ti
     resp.headers.forEach((v, k) => { outHeaders[k] = v; });
     return { status: resp.status, ok: resp.ok, headers: outHeaders, body: text };
   } finally {
-    clearTimeout(timeoutId);
+    cleanup();
   }
 };
 
-const requestJson = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 60000 }) => {
-  const res = await request({ url, method, headers, body, timeoutMs });
+const requestJson = async ({ url, method = 'GET', headers = {}, body = undefined, timeoutMs = 60000, signal } = {}) => {
+  const res = await request({ url, method, headers, body, timeoutMs, signal });
   if (!res.ok) {
     const raw = String(res.body || '').trim();
     let detail = '';
@@ -335,8 +342,9 @@ export class VertexAIProvider {
    * Send chat message (non-streaming)
    */
   async chat(messages, options = {}) {
+    const { signal, options: payloadOptions } = splitRequestOptions(options);
     const headers = await this.getHeaders();
-    const body = this.buildRequestBody(messages, options);
+    const body = this.buildRequestBody(messages, payloadOptions);
     const tryOnce = async ({ region, baseHost }) => {
       const url = this.buildUrlFor({ stream: false, region, baseHost, model: this.model });
       return requestJson({
@@ -345,6 +353,7 @@ export class VertexAIProvider {
         headers,
         body: JSON.stringify(body),
         timeoutMs: this.timeout,
+        signal,
       });
     };
 
@@ -388,20 +397,23 @@ export class VertexAIProvider {
    * Stream chat messages
    */
   async *streamChat(messages, options = {}) {
+    const { signal, options: payloadOptions } = splitRequestOptions(options);
     const headers = await this.getHeaders();
-    const body = this.buildRequestBody(messages, options);
+    const body = this.buildRequestBody(messages, payloadOptions);
 
     const invoker = getTauriInvoker();
     const tryStreamOnce = async function* ({ region, baseHost }) {
       const url = this.buildUrlFor({ stream: true, region, baseHost, model: this.model });
 
       if (typeof invoker === 'function') {
+        if (signal?.aborted) throw makeAbortError();
         const res = await request({
           url,
           method: 'POST',
           headers: { ...headers, Accept: 'text/event-stream' },
           body: JSON.stringify(body),
           timeoutMs: this.timeout,
+          signal,
         });
         if (!res.ok) {
           const err = new Error(`Vertex AI Error: ${res.status}`);
@@ -424,8 +436,7 @@ export class VertexAIProvider {
       }
 
       // Browser fallback
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+      const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
       try {
         const response = await fetch(url, {
           method: 'POST',
@@ -451,7 +462,7 @@ export class VertexAIProvider {
           }
         }
       } finally {
-        clearTimeout(timeoutId);
+        cleanup();
       }
     }.bind(this);
 

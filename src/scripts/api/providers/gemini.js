@@ -4,6 +4,7 @@
  */
 
 import { handleSSE } from '../stream.js';
+import { createLinkedAbortController, splitRequestOptions } from '../abort.js';
 
 const GEMINI_SAFETY = [
   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
@@ -130,12 +131,12 @@ export class GeminiProvider {
    * Send chat message (non-streaming)
    */
   async chat(messages, options = {}) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const { signal, options: payloadOptions } = splitRequestOptions(options);
+    const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
 
     try {
       const url = this.buildUrl(false);
-      const body = this.buildRequestBody(messages, options);
+      const body = this.buildRequestBody(messages, payloadOptions);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -179,7 +180,7 @@ export class GeminiProvider {
 
       return responseText;
     } finally {
-      clearTimeout(timeoutId);
+      cleanup();
     }
   }
 
@@ -187,12 +188,12 @@ export class GeminiProvider {
    * Stream chat messages
    */
   async *streamChat(messages, options = {}) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const { signal, options: payloadOptions } = splitRequestOptions(options);
+    const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
 
     try {
       const url = this.buildUrl(true);
-      const body = this.buildRequestBody(messages, options);
+      const body = this.buildRequestBody(messages, payloadOptions);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -222,7 +223,7 @@ export class GeminiProvider {
         }
       }
     } finally {
-      clearTimeout(timeoutId);
+      cleanup();
     }
   }
 

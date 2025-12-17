@@ -4,6 +4,7 @@
  */
 
 import { handleSSE } from '../stream.js';
+import { createLinkedAbortController, splitRequestOptions } from '../abort.js';
 
 const getTauriInvoker = () => {
     const g = typeof globalThis !== 'undefined' ? globalThis : undefined;
@@ -38,6 +39,12 @@ const parseSSEText = function* (text) {
     }
 };
 
+const makeAbortError = () => {
+    const err = new Error('Aborted');
+    err.name = 'AbortError';
+    return err;
+};
+
 export class CustomProvider {
     constructor(config) {
         this.provider = config.provider || 'custom';
@@ -59,10 +66,11 @@ export class CustomProvider {
         return headers;
     }
 
-    async request({ url, method = 'GET', headers = {}, body = undefined }) {
+    async request({ url, method = 'GET', headers = {}, body = undefined, signal } = {}) {
         const mergedHeaders = { ...headers };
         const invoker = getTauriInvoker();
         if (typeof invoker === 'function') {
+            if (signal?.aborted) throw makeAbortError();
             try {
                 return await invoker('http_request', {
                     url,
@@ -81,8 +89,7 @@ export class CustomProvider {
             }
         }
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
         try {
             const response = await fetch(url, {
                 method,
@@ -97,12 +104,12 @@ export class CustomProvider {
             });
             return { status: response.status, ok: response.ok, headers: outHeaders, body: text };
         } finally {
-            clearTimeout(timeoutId);
+            cleanup();
         }
     }
 
-    async requestJson({ url, method = 'GET', headers = {}, body = undefined }) {
-        const res = await this.request({ url, method, headers, body });
+    async requestJson({ url, method = 'GET', headers = {}, body = undefined, signal } = {}) {
+        const res = await this.request({ url, method, headers, body, signal });
         if (!res.ok) {
             const raw = String(res.body || '').trim();
             let detail = '';
@@ -122,6 +129,7 @@ export class CustomProvider {
      * 发送聊天消息（非流式）
      */
     async chat(messages, options = {}) {
+        const { signal, options: payloadOptions } = splitRequestOptions(options);
         const data = await this.requestJson({
             url: `${this.baseUrl}/chat/completions`,
             method: 'POST',
@@ -130,8 +138,9 @@ export class CustomProvider {
                 model: this.model,
                 messages: messages,
                 stream: false,
-                ...options
-            })
+                ...payloadOptions
+            }),
+            signal,
         });
 
         if (data.choices && data.choices[0]) {
@@ -149,20 +158,23 @@ export class CustomProvider {
      * 流式聊天
      */
     async *streamChat(messages, options = {}) {
+        const { signal, options: payloadOptions } = splitRequestOptions(options);
         const payload = JSON.stringify({
             model: this.model,
             messages: messages,
             stream: true,
-            ...options
+            ...payloadOptions
         });
 
         const invoker = getTauriInvoker();
         if (typeof invoker === 'function') {
+            if (signal?.aborted) throw makeAbortError();
             const res = await this.request({
                 url: `${this.baseUrl}/chat/completions`,
                 method: 'POST',
                 headers: { ...this.getHeaders(), Accept: 'text/event-stream' },
                 body: payload,
+                signal,
             });
             if (!res.ok) {
                 const raw = String(res.body || '').trim();
@@ -187,8 +199,7 @@ export class CustomProvider {
             return;
         }
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
         try {
             const response = await fetch(`${this.baseUrl}/chat/completions`, {
                 method: 'POST',
@@ -222,7 +233,7 @@ export class CustomProvider {
                 }
             }
         } finally {
-            clearTimeout(timeoutId);
+            cleanup();
         }
     }
 

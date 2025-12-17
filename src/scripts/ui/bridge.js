@@ -66,6 +66,8 @@ class AppBridge {
         this.activeSessionId = 'default';
         this.worldSessionMap = this.loadWorldSessionMap();
         this.isGenerating = false;
+        this.abortController = null;
+        this.abortReason = '';
         this.chatStore = null; // Injected
         this.macroEngine = null; // Initialized on setChatStore
         this.hydrateWorldSessionMap();
@@ -84,6 +86,15 @@ class AppBridge {
             ...extraContext
         };
         return this.macroEngine.process(text, ctx);
+    }
+
+    cancelCurrentGeneration(reason = 'user') {
+        this.abortReason = String(reason || 'user');
+        try {
+            if (this.abortController && !this.abortController.signal.aborted) {
+                this.abortController.abort();
+            }
+        } catch {}
     }
 
     async ensureBuiltinWorldbooks() {
@@ -351,6 +362,9 @@ class AppBridge {
         }
 
         this.isGenerating = true;
+        this.abortController = new AbortController();
+        this.abortReason = '';
+        let streaming = false;
 
         try {
             const originalInput = userMessage;
@@ -373,6 +387,7 @@ class AppBridge {
             const messages = this.buildMessages(promptInput, context);
             const config = this.config.get();
             const genOptions = this.getGenerationOptions();
+            const requestOptions = { ...(genOptions || {}), signal: this.abortController.signal };
 
             logger.debug('发送消息到 LLM:', { messageCount: messages.length, stream: config.stream });
             // Debug: keep the exact request payload used for the latest generation
@@ -387,13 +402,24 @@ class AppBridge {
             };
 
             if (config.stream) {
-                return this.generateStream(messages, genOptions, originalInput);
+                streaming = true;
+                const inner = this.generateStream(messages, requestOptions, originalInput);
+                const self = this;
+                return (async function* () {
+                    try {
+                        yield* inner;
+                    } finally {
+                        self.isGenerating = false;
+                        self.abortController = null;
+                        self.abortReason = '';
+                    }
+                })();
             } else {
                 const response = await retryWithBackoff(
-                    () => this.client.chat(messages, genOptions),
+                    () => this.client.chat(messages, requestOptions),
                     {
                         maxRetries: config.maxRetries || 3,
-                        shouldRetry: isRetryableError
+                        shouldRetry: (err) => !this.abortController?.signal?.aborted && isRetryableError(err)
                     }
                 );
 
@@ -405,7 +431,11 @@ class AppBridge {
             logger.error('生成失败:', error);
             throw error;
         } finally {
-            this.isGenerating = false;
+            if (!streaming) {
+                this.isGenerating = false;
+                this.abortController = null;
+                this.abortReason = '';
+            }
         }
     }
 
@@ -424,6 +454,14 @@ class AppBridge {
             // 流式完成后保存到历史记录
             await this.saveToHistory(originalUserMessage || '', fullResponse);
         } catch (error) {
+            // User-initiated cancellation (e.g. message retract) should not be converted into a timeout error.
+            if (this.abortController?.signal?.aborted && this.abortReason) {
+                const e = new Error('cancelled');
+                e.name = 'AbortError';
+                e.cancelled = true;
+                e.reason = this.abortReason;
+                throw e;
+            }
             const normalized = (() => {
                 try {
                     // Android WebView may throw DOMException on abort/timeout
@@ -457,12 +495,26 @@ class AppBridge {
 
         const name1 = context?.user?.name || 'user';
         const name2 = context?.character?.name || 'assistant';
+        const pendingUserText = String(userMessage ?? '').trim();
+        const lastUserMessageRe = /{{\s*lastUserMessage\s*}}/i;
+        let usedLastUserMessageForPendingInput = false;
+        const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
+            const raw = String(rawText ?? '');
+            const out = raw ? this.processTextMacros(raw, extraContext) : '';
+            if (!usedLastUserMessageForPendingInput && pendingUserText && lastUserMessageRe.test(raw)) {
+                const rendered = String(out ?? '').trim();
+                if (rendered && rendered.includes(pendingUserText)) {
+                    usedLastUserMessageForPendingInput = true;
+                }
+            }
+            return out;
+        };
         // SillyTavern-like persona settings (subset)
         const personaRaw = String(context?.user?.persona || '');
         const personaPosition = Number.isFinite(Number(context?.user?.personaPosition)) ? Number(context.user.personaPosition) : 0; // IN_PROMPT
         const personaDepth = Number.isFinite(Number(context?.user?.personaDepth)) ? Math.max(0, Math.trunc(Number(context.user.personaDepth))) : 2;
         const personaRole = Number.isFinite(Number(context?.user?.personaRole)) ? Math.max(0, Math.min(2, Math.trunc(Number(context.user.personaRole)))) : 0; // 0=system
-        const personaText = personaRaw ? this.processTextMacros(personaRaw, { user: name1, char: name2 }) : '';
+        const personaText = personaRaw ? processTextMacrosWithPendingFlag(personaRaw, { user: name1, char: name2 }) : '';
         const historyForMatch = Array.isArray(context.history) ? context.history : [];
         const matchText = [
             String(userMessage ?? ''),
@@ -506,7 +558,7 @@ class AppBridge {
         // ST extension prompt types => IN_PROMPT:0, IN_CHAT:1, BEFORE_PROMPT:2, NONE:-1
         const dialogueEnabled = Boolean(syspActive?.dialogue_enabled);
         const dialogueRulesRaw = (typeof syspActive?.dialogue_rules === 'string') ? syspActive.dialogue_rules : '';
-        const dialogueRules = this.processTextMacros(dialogueRulesRaw, { user: name1, char: name2 });
+        const dialogueRules = processTextMacrosWithPendingFlag(dialogueRulesRaw, { user: name1, char: name2 });
         const dialoguePosition = Number.isFinite(Number(syspActive?.dialogue_position)) ? Number(syspActive.dialogue_position) : 0;
         const dialogueDepth = Number.isFinite(Number(syspActive?.dialogue_depth)) ? Math.max(0, Math.trunc(Number(syspActive.dialogue_depth))) : 1;
         const dialogueRole = Number.isFinite(Number(syspActive?.dialogue_role)) ? Math.trunc(Number(syspActive.dialogue_role)) : 0;
@@ -514,7 +566,7 @@ class AppBridge {
         // 动态发布决策提示词（用于私聊/群聊场景）
         const momentCreateEnabled = Boolean(syspActive?.moment_create_enabled);
         const momentCreateRulesRaw = (typeof syspActive?.moment_create_rules === 'string') ? syspActive.moment_create_rules : '';
-        const momentCreateRules = this.processTextMacros(momentCreateRulesRaw, { user: name1, char: name2 });
+        const momentCreateRules = processTextMacrosWithPendingFlag(momentCreateRulesRaw, { user: name1, char: name2 });
         const momentCreatePosition = Number.isFinite(Number(syspActive?.moment_create_position)) ? Number(syspActive.moment_create_position) : 0;
         const momentCreateDepth = Number.isFinite(Number(syspActive?.moment_create_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_create_depth))) : 1;
         const momentCreateRole = Number.isFinite(Number(syspActive?.moment_create_role)) ? Math.trunc(Number(syspActive.moment_create_role)) : 0;
@@ -522,7 +574,7 @@ class AppBridge {
         // 动态评论回复提示词（仅用于“动态评论”场景）
         const momentCommentEnabled = Boolean(syspActive?.moment_comment_enabled);
         const momentCommentRulesRaw = (typeof syspActive?.moment_comment_rules === 'string') ? syspActive.moment_comment_rules : '';
-        const momentCommentRules = this.processTextMacros(momentCommentRulesRaw, { user: name1, char: name2 });
+        const momentCommentRules = processTextMacrosWithPendingFlag(momentCommentRulesRaw, { user: name1, char: name2 });
         const momentCommentPosition = Number.isFinite(Number(syspActive?.moment_comment_position)) ? Number(syspActive.moment_comment_position) : 0;
         const momentCommentDepth = Number.isFinite(Number(syspActive?.moment_comment_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_comment_depth))) : 0;
         const momentCommentRole = Number.isFinite(Number(syspActive?.moment_comment_role)) ? Math.trunc(Number(syspActive.moment_comment_role)) : 0;
@@ -531,7 +583,7 @@ class AppBridge {
         const groupEnabled = Boolean(syspActive?.group_enabled);
         const groupRulesRaw = (typeof syspActive?.group_rules === 'string') ? syspActive.group_rules : '';
         const membersText = groupMemberNames.filter(Boolean).join(',');
-        const groupRules = this.processTextMacros(groupRulesRaw, { user: name1, char: name2, group: groupName || name2, members: membersText });
+        const groupRules = processTextMacrosWithPendingFlag(groupRulesRaw, { user: name1, char: name2, group: groupName || name2, members: membersText });
         const groupPosition = Number.isFinite(Number(syspActive?.group_position)) ? Number(syspActive.group_position) : 0;
         const groupDepth = Number.isFinite(Number(syspActive?.group_depth)) ? Math.max(0, Math.trunc(Number(syspActive.group_depth))) : 1;
         const groupRole = Number.isFinite(Number(syspActive?.group_role)) ? Math.trunc(Number(syspActive.group_role)) : 0;
@@ -627,8 +679,8 @@ class AppBridge {
             prompts.forEach(p => { if (p?.identifier) byId.set(p.identifier, p); });
 
             const macroVars = { user: name1, char: name2, scenario: context?.character?.scenario || '', personality: context?.character?.personality || '' };
-            const formatScenario = this.processTextMacros(scenarioFormat, { scenario: macroVars.scenario });
-            const formatPersonality = this.processTextMacros(personalityFormat, { personality: macroVars.personality });
+            const formatScenario = processTextMacrosWithPendingFlag(scenarioFormat, { scenario: macroVars.scenario });
+            const formatPersonality = processTextMacrosWithPendingFlag(personalityFormat, { personality: macroVars.personality });
             // WORLD_INFO placement for prompt stage (supports promptOnly scripts)
             let worldForPrompt = worldPrompt || '';
             if (worldForPrompt) {
@@ -691,7 +743,7 @@ class AppBridge {
                     if (useSysprompt && sysp?.content) content = sysp.content;
                     else if (context.systemPrompt) content = context.systemPrompt;
                 }
-                content = this.processTextMacros(content, { user: name1, char: name2 });
+                content = processTextMacrosWithPendingFlag(content, { user: name1, char: name2 });
                 if (!content) continue;
 
                 const role = String(pr?.role || 'system').toLowerCase();
@@ -703,8 +755,10 @@ class AppBridge {
                 messages.push(...history);
             }
 
-            // Append current user message
-            messages.push({ role: 'user', content: userMessage });
+            // Append current user message (unless already injected via {{lastUserMessage}} in prompt blocks)
+            if (!usedLastUserMessageForPendingInput) {
+                messages.push({ role: 'user', content: userMessage });
+            }
             return messages;
         }
 
@@ -712,12 +766,12 @@ class AppBridge {
             user: name1,
             char: name2,
             system: (() => {
-                if (useSysprompt && sysp?.content) return this.processTextMacros(sysp.content, { user: name1, char: name2 });
+                if (useSysprompt && sysp?.content) return processTextMacrosWithPendingFlag(sysp.content, { user: name1, char: name2 });
                 return (context.systemPrompt || '');
             })(),
             description: context?.character?.description || '',
-            personality: this.processTextMacros(personalityFormat, { personality: (context?.character?.personality || '') }),
-            scenario: this.processTextMacros(scenarioFormat, { scenario: (context?.character?.scenario || '') }),
+            personality: processTextMacrosWithPendingFlag(personalityFormat, { personality: (context?.character?.personality || '') }),
+            scenario: processTextMacrosWithPendingFlag(scenarioFormat, { scenario: (context?.character?.scenario || '') }),
             persona: personaPosition === 0 ? personaText : '',
             wiBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
             wiAfter: '',
@@ -850,14 +904,16 @@ class AppBridge {
         // 4) Post-history instructions (sysprompt.post_history)
         const postHistory = useSysprompt ? (sysp?.post_history || '') : '';
         if (postHistory) {
-            const phi = this.processTextMacros(postHistory, { user: name1, char: name2 });
+            const phi = processTextMacrosWithPendingFlag(postHistory, { user: name1, char: name2 });
             if (phi) {
                 messages.push({ role: 'user', content: phi });
             }
         }
 
         // 5) Current user message
-        messages.push({ role: 'user', content: userMessage });
+        if (!usedLastUserMessageForPendingInput) {
+            messages.push({ role: 'user', content: userMessage });
+        }
         return messages;
     }
 

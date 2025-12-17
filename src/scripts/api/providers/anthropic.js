@@ -3,6 +3,7 @@
  */
 
 import { handleSSE } from '../stream.js';
+import { createLinkedAbortController, splitRequestOptions } from '../abort.js';
 
 export class AnthropicProvider {
     constructor(config) {
@@ -40,8 +41,11 @@ export class AnthropicProvider {
      * 发送聊天消息（非流式）
      */
     async chat(messages, options = {}) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const { signal, options: payloadOptionsRaw } = splitRequestOptions(options);
+        const maxTokens = payloadOptionsRaw?.maxTokens ?? payloadOptionsRaw?.max_tokens;
+        const payloadOptions = { ...(payloadOptionsRaw || {}) };
+        delete payloadOptions.maxTokens;
+        const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
 
         const { system, messages: convertedMessages } = this.convertMessages(messages);
 
@@ -54,9 +58,9 @@ export class AnthropicProvider {
                     model: this.model,
                     messages: convertedMessages,
                     system: system,
-                    max_tokens: options.maxTokens || 4096,
+                    max_tokens: maxTokens || payloadOptions.max_tokens || 4096,
                     stream: false,
-                    ...options
+                    ...payloadOptions
                 })
             });
 
@@ -70,7 +74,7 @@ export class AnthropicProvider {
             const data = await response.json();
             return data.content[0].text;
         } finally {
-            clearTimeout(timeoutId);
+            cleanup();
         }
     }
 
@@ -78,8 +82,11 @@ export class AnthropicProvider {
      * 流式聊天
      */
     async *streamChat(messages, options = {}) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+        const { signal, options: payloadOptionsRaw } = splitRequestOptions(options);
+        const maxTokens = payloadOptionsRaw?.maxTokens ?? payloadOptionsRaw?.max_tokens;
+        const payloadOptions = { ...(payloadOptionsRaw || {}) };
+        delete payloadOptions.maxTokens;
+        const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
 
         const { system, messages: convertedMessages } = this.convertMessages(messages);
 
@@ -92,9 +99,9 @@ export class AnthropicProvider {
                     model: this.model,
                     messages: convertedMessages,
                     system: system,
-                    max_tokens: options.maxTokens || 4096,
+                    max_tokens: maxTokens || payloadOptions.max_tokens || 4096,
                     stream: true,
-                    ...options
+                    ...payloadOptions
                 })
             });
 
@@ -113,7 +120,7 @@ export class AnthropicProvider {
                 }
             }
         } finally {
-            clearTimeout(timeoutId);
+            cleanup();
         }
     }
 

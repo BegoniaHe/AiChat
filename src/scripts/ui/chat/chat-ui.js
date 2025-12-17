@@ -848,6 +848,7 @@ export class ChatUI {
         } else if (message.role === 'user') {
             actions.push({ key: 'copy-text', label: '复制' });
             actions.push({ key: 'edit', label: '编辑' });
+            actions.push({ key: 'retract', label: '收回' });
             actions.push({ key: 'delete', label: '删除' });
         }
         this.contextMenu.innerHTML = '';

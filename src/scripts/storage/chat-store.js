@@ -196,6 +196,30 @@ export class ChatStore {
         this._persist();
     }
 
+    listVariables(id = this.currentId) {
+        this._ensureSession(id);
+        const vars = this.state.sessions[id].variables || {};
+        return { ...vars };
+    }
+
+    deleteVariable(key, id = this.currentId) {
+        const k = String(key || '').trim();
+        if (!k) return false;
+        this._ensureSession(id);
+        const vars = this.state.sessions[id].variables || {};
+        if (!Object.prototype.hasOwnProperty.call(vars, k)) return false;
+        delete vars[k];
+        this._persist();
+        return true;
+    }
+
+    clearVariables(id = this.currentId) {
+        this._ensureSession(id);
+        this.state.sessions[id].variables = {};
+        this._persist();
+        return true;
+    }
+
     getDraft(id = this.currentId) {
         return this.state.sessions[id]?.draft || '';
     }
