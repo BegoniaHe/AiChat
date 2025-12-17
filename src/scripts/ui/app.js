@@ -59,7 +59,7 @@ const initApp = async () => {
             const id = chatStore.getCurrent();
             const c = contactsStore.getContact(id);
             const titleEl = document.getElementById('current-chat-title');
-            if (titleEl) titleEl.textContent = c?.name || id;
+            if (titleEl) titleEl.textContent = formatSessionName(id, c);
             if (forceRefresh) {
                 const msgs = chatStore.getMessages(id);
                 ui.clearMessages();
@@ -441,6 +441,16 @@ ${listPart || '-（无）'}
         }
     };
 
+    const formatSessionName = (sessionId, contact) => {
+        const id = String(sessionId || '');
+        const c = contact || contactsStore.getContact(id);
+        const base = c?.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
+        const isGroup = Boolean(c?.isGroup) || id.startsWith('group:');
+        if (!isGroup) return base;
+        const count = Array.isArray(c?.members) ? c.members.length : 0;
+        return `${base}(${count})`;
+    };
+
     const renderChatList = () => {
         const el = document.getElementById('chat-list');
         if (!el) return;
@@ -457,7 +467,7 @@ ${listPart || '-（无）'}
         }
         ids.forEach((id) => {
             const contact = contactsStore.getContact(id);
-            const displayName = contact?.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
+            const displayName = formatSessionName(id, contact);
             const avatar = contact?.avatar || avatars.assistant;
             const last = getLastVisibleMessage(id);
             const preview = snippetFromMessage(last);
@@ -491,7 +501,7 @@ ${listPart || '-（无）'}
             const last = getLastVisibleMessage(id);
             const preview = snippetFromMessage(last);
             const time = last?.timestamp ? formatTime(last.timestamp) : '';
-            const name = contact.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
+            const name = formatSessionName(id, contact);
             const avatar = contact.avatar || avatars.assistant;
 
             const item = document.createElement('div');
@@ -543,7 +553,7 @@ ${listPart || '-（无）'}
             const last = getLastVisibleMessage(id);
             const preview = snippetFromMessage(last);
             const time = last?.timestamp ? formatTime(last.timestamp) : '';
-            const name = g.name || (id.startsWith('group:') ? id.replace(/^group:/, '') : id);
+            const name = formatSessionName(id, g);
             const avatar = g.avatar || avatars.assistant;
             const count = Array.isArray(g.members) ? g.members.length : 0;
 
@@ -1295,7 +1305,7 @@ ${listPart || '-（无）'}
         if (bottomNav) bottomNav.style.display = 'none';
 
         const contact = contactsStore.getContact(sessionId);
-        if (currentChatTitle) currentChatTitle.textContent = sessionName || contact?.name || sessionId;
+        if (currentChatTitle) currentChatTitle.textContent = sessionName || formatSessionName(sessionId, contact) || sessionId;
         // 切换会话
         chatStore.switchSession(sessionId);
         window.appBridge.setActiveSession(sessionId);
@@ -1737,15 +1747,16 @@ ${listPart || '-（无）'}
                     // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
                     ui.showTyping(assistantAvatar);
                     const parser = new DialogueStreamParser({ userName });
-                    const stream = await window.appBridge.generate(text, llmContext(text));
-                    let fullRaw = '';
-                    let didAnything = false;
-                    let mutatedMoments = false;
-                    for await (const chunk of stream) {
-                        if (activeGeneration?.cancelled) break;
-                        fullRaw += chunk;
-                        const events = parser.push(chunk);
-                        for (const ev of events) {
+	                    const stream = await window.appBridge.generate(text, llmContext(text));
+	                    let fullRaw = '';
+	                    let didAnything = false;
+	                    let mutatedMoments = false;
+	                    const summarySessionIds = new Set([sessionId]);
+	                    for await (const chunk of stream) {
+	                        if (activeGeneration?.cancelled) break;
+	                        fullRaw += chunk;
+	                        const events = parser.push(chunk);
+	                        for (const ev of events) {
                             if (ev.type === 'moments') {
                                 try {
                                     momentsStore.addMany(ingestMoments(ev.moments || []));
@@ -1764,14 +1775,15 @@ ${listPart || '-（无）'}
                                 } catch {}
                                 continue;
                             }
-                            if (ev.type === 'group_chat') {
-                                ui.hideTyping();
-                                const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
-                                if (!targetGroupId) {
-                                    window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
-                                    continue;
-                                }
-                                (ev.messages || []).forEach((m) => {
+	                            if (ev.type === 'group_chat') {
+	                                ui.hideTyping();
+	                                const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+	                                if (!targetGroupId) {
+	                                    window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
+	                                    continue;
+	                                }
+	                                summarySessionIds.add(targetGroupId);
+	                                (ev.messages || []).forEach((m) => {
                                     const speaker = normalizeName(m?.speaker);
                                     const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
                                     const isMe = speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
@@ -1794,15 +1806,16 @@ ${listPart || '-（无）'}
                                 ui.showTyping(assistantAvatar);
                                 continue;
                             }
-                            if (ev.type !== 'private_chat') continue;
-                            ui.hideTyping();
+	                            if (ev.type !== 'private_chat') continue;
+	                            ui.hideTyping();
 
                             // 默认路由到当前 session；若标签指向其他私聊，则创建/写入对应会话（后续群聊/动态会扩展）
-                            const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
-                            if (!targetSessionId) {
-                                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
-                                continue;
-                            }
+	                            const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+	                            if (!targetSessionId) {
+	                                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
+	                                continue;
+	                            }
+	                            summarySessionIds.add(targetSessionId);
 
                             ev.messages.forEach((msgText) => {
                                 const parsed = {
@@ -1826,12 +1839,14 @@ ${listPart || '-（无）'}
                         }
                     }
                     if (activeGeneration?.cancelled) return;
-                    ui.hideTyping();
-                    chatStore.setLastRawResponse(fullRaw, sessionId);
-                    const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
-                    if (protocolSummary) {
-                        try { chatStore.addSummary(protocolSummary, sessionId); } catch {}
-                    }
+	                    ui.hideTyping();
+	                    chatStore.setLastRawResponse(fullRaw, sessionId);
+	                    const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
+	                    if (protocolSummary) {
+	                        try {
+	                            for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+	                        } catch {}
+	                    }
                     if (mutatedMoments) {
                         try { await momentsStore.flush(); } catch {}
                     }
@@ -1866,6 +1881,7 @@ ${listPart || '-（无）'}
 	                                    if (ev?.type === 'group_chat') {
 	                                        const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
 	                                        if (!targetGroupId) return;
+	                                        summarySessionIds.add(targetGroupId);
 	                                        (ev.messages || []).forEach((m) => {
 	                                            const speaker = normalizeName(m?.speaker);
 	                                            const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
@@ -1891,6 +1907,7 @@ ${listPart || '-（无）'}
 	                                    if (ev?.type === 'private_chat') {
 	                                        const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
 	                                        if (!targetSessionId) return;
+	                                        summarySessionIds.add(targetSessionId);
 	                                        (ev.messages || []).forEach((msgText) => {
 	                                            const parsed = {
 	                                                role: 'assistant',
@@ -1967,19 +1984,17 @@ ${listPart || '-（无）'}
                 disableSummaryForThis = false;
 
                 ui.showTyping(assistantAvatar);
-                const resultRaw = await window.appBridge.generate(text, llmContext(text));
-                ui.hideTyping();
-                chatStore.setLastRawResponse(resultRaw, sessionId);
-                const { summary: protocolSummary } = extractSummaryBlock(resultRaw);
-                if (protocolSummary) {
-                    try { chatStore.addSummary(protocolSummary, sessionId); } catch {}
-                }
-                if (protocolEnabled) {
-                    const parser = new DialogueStreamParser({ userName });
-                    const events = parser.push(resultRaw);
-                    let didAnything = false;
-                    let mutatedMoments = false;
-                    events.forEach((ev) => {
+	                const resultRaw = await window.appBridge.generate(text, llmContext(text));
+	                ui.hideTyping();
+	                chatStore.setLastRawResponse(resultRaw, sessionId);
+	                const { summary: protocolSummary } = extractSummaryBlock(resultRaw);
+	                const summarySessionIds = new Set([sessionId]);
+	                if (protocolEnabled) {
+	                    const parser = new DialogueStreamParser({ userName });
+	                    const events = parser.push(resultRaw);
+	                    let didAnything = false;
+	                    let mutatedMoments = false;
+	                    events.forEach((ev) => {
                         if (ev?.type === 'moments') {
                             momentsStore.addMany(ingestMoments(ev.moments || []));
                             didAnything = true;
@@ -1992,13 +2007,14 @@ ${listPart || '-（无）'}
                             mutatedMoments = true;
                             return;
                         }
-                        if (ev?.type === 'group_chat') {
-                            const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
-                            if (!targetGroupId) {
-                                window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
-                                return;
-                            }
-                            (ev.messages || []).forEach((m) => {
+	                        if (ev?.type === 'group_chat') {
+	                            const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+	                            if (!targetGroupId) {
+	                                window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
+	                                return;
+	                            }
+	                            summarySessionIds.add(targetGroupId);
+	                            (ev.messages || []).forEach((m) => {
                                 const speaker = normalizeName(m?.speaker);
                                 const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
                                 const isMe = speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
@@ -2018,13 +2034,14 @@ ${listPart || '-（无）'}
                             });
                             return;
                         }
-                        if (ev?.type === 'private_chat') {
-                            const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
-                            if (!targetSessionId) {
-                                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
-                                return;
-                            }
-                            (ev.messages || []).forEach((msgText) => {
+	                        if (ev?.type === 'private_chat') {
+	                            const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+	                            if (!targetSessionId) {
+	                                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
+	                                return;
+	                            }
+	                            summarySessionIds.add(targetSessionId);
+	                            (ev.messages || []).forEach((msgText) => {
                                 const parsed = {
                                     role: 'assistant',
                                     ...parseSpecialMessage(String(msgText || '')),
@@ -2039,6 +2056,11 @@ ${listPart || '-（无）'}
                         }
                     });
 	                    if (didAnything) {
+	                        if (protocolSummary) {
+	                            try {
+	                                for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+	                            } catch {}
+	                        }
 	                        refreshChatAndContacts();
 	                        if (activePage === 'moments') momentsPanel.render();
 	                        if (mutatedMoments) {
@@ -2068,6 +2090,7 @@ ${listPart || '-（无）'}
 	                                if (ev?.type === 'group_chat') {
 	                                    const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
 	                                    if (!targetGroupId) return;
+	                                    summarySessionIds.add(targetGroupId);
 	                                    (ev.messages || []).forEach((m) => {
 	                                        const speaker = normalizeName(m?.speaker);
 	                                        const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
@@ -2091,6 +2114,7 @@ ${listPart || '-（无）'}
 	                                if (ev?.type === 'private_chat') {
 	                                    const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
 	                                    if (!targetSessionId) return;
+	                                    summarySessionIds.add(targetSessionId);
 	                                    (ev.messages || []).forEach((msgText) => {
 	                                        const parsed = {
 	                                            role: 'assistant',
@@ -2108,6 +2132,11 @@ ${listPart || '-（无）'}
 	                        }
 	                    } catch {}
 	                    if (didAnything) {
+	                        if (protocolSummary) {
+	                            try {
+	                                for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+	                            } catch {}
+	                        }
 	                        refreshChatAndContacts();
 	                        if (activePage === 'moments') momentsPanel.render();
 	                        if (mutatedMoments) {
@@ -2117,6 +2146,11 @@ ${listPart || '-（无）'}
 	                    }
 	                    // 如果对话模式未解析到有效标签，回退显示原文，便于调试
 	                    window.toastr?.warning?.('未解析到有效对话标签，已回退显示原文');
+	                }
+	                if (protocolSummary) {
+	                    try {
+	                        for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+	                    } catch {}
 	                }
                 // === 创意写作模式（暂时停用）===
                 // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);

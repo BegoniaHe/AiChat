@@ -213,7 +213,8 @@
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
-  z-index: 12000;
+  /* Must sit above WorldPanel (20000/21000) */
+  z-index: 23010;
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
@@ -223,7 +224,8 @@
 
 /* 覆蓋 qq-legacy 的 .popup-overlay 層級，避免被世界書列表彈窗壓住 */
 #world-editor-overlay {
-  z-index: 11000;
+  /* Must sit above WorldPanel overlay (20000) */
+  z-index: 23000;
 }
 
 .world-editor-header {

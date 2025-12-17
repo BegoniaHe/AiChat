@@ -69,9 +69,11 @@ export class SessionPanel {
             const snippet = last ? (last.content || '').slice(0, 32) : '新會話';
             const time = last && last.timestamp ? this.formatTime(last.timestamp) : '';
             const isGroup = Boolean(c.isGroup) || id.startsWith('group:');
+            const membersCount = isGroup && Array.isArray(c.members) ? c.members.length : 0;
             const badge = isGroup ? `<span style="padding:2px 6px; border-radius:8px; background:#e0f2fe; color:#0369a1; font-size:11px; margin-left:4px;">群</span>` : '';
             const currentTag = id === currentId ? `<span style="color:#059669; font-size:11px; margin-left:6px;">當前</span>` : '';
-            const displayName = c.name || id;
+            const baseName = c.name || id;
+            const displayName = isGroup ? `${baseName}(${membersCount})` : baseName;
             name.innerHTML = `<strong>${displayName}${badge}${currentTag}</strong><br><span style="color:#888;font-size:12px;">${snippet}</span> ${time ? `<span style="color:#9ca3af;font-size:11px;">${time}</span>` : ''}`;
             if (id === currentId) {
                 name.style.fontWeight = '700';

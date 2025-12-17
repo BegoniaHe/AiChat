@@ -269,6 +269,7 @@ export class GroupSettingsPanel {
         this.groupId = '';
         this.avatar = '';
         this.members = [];
+        this.summariesList = null;
 
         this.addOverlay = null;
         this.addPanel = null;
@@ -281,6 +282,7 @@ export class GroupSettingsPanel {
         if (!this.panel) this.createUI();
         this.groupId = id;
         this.populate();
+        this.renderSummaries();
         this.overlay.style.display = 'block';
         this.panel.style.display = 'flex';
     }
@@ -331,14 +333,23 @@ export class GroupSettingsPanel {
                     </div>
                 </div>
 
-                <div style="margin-top:14px;">
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                        <div style="font-weight:800; color:#0f172a;">成员</div>
-                        <button id="group-settings-add" style="border:1px solid #e2e8f0; background:#fff; padding:6px 10px; border-radius:10px; cursor:pointer;">＋ 添加</button>
+	                <div style="margin-top:14px;">
+	                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+	                        <div style="font-weight:800; color:#0f172a;">成员</div>
+	                        <button id="group-settings-add" style="border:1px solid #e2e8f0; background:#fff; padding:6px 10px; border-radius:10px; cursor:pointer;">＋ 添加</button>
+	                    </div>
+	                    <div id="group-settings-members" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+	                </div>
+
+                    <div style="margin-top:18px; border-top:1px solid rgba(0,0,0,0.06); padding-top:14px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
+                            <div style="font-weight:800; color:#0f172a;">摘要</div>
+                            <button id="group-summaries-clear" type="button" style="padding:6px 10px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#ef4444;">清空</button>
+                        </div>
+                        <div style="font-size:12px; color:#64748b; margin-bottom:8px;">该群聊每次互动保存一条摘要（与聊天存档绑定）</div>
+                        <div id="group-summaries-list" style="max-height:180px; overflow-y:auto; border:1px solid #eee; border-radius:10px; background:#fff; padding:0;"></div>
                     </div>
-                    <div id="group-settings-members" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
-                </div>
-            </div>
+	            </div>
 
             <div style="padding:14px 16px; border-top:1px solid rgba(0,0,0,0.06); background:rgba(248,250,252,0.92); display:flex; gap:10px;">
                 <button id="group-settings-cancel" style="flex:1; padding:10px 14px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer;">取消</button>
@@ -365,6 +376,7 @@ export class GroupSettingsPanel {
         document.body.appendChild(this.overlay);
         document.body.appendChild(this.panel);
         document.body.appendChild(this.fileInput);
+        this.summariesList = this.panel.querySelector('#group-summaries-list');
 
         this.panel.querySelector('#group-settings-close').onclick = () => this.hide();
         this.panel.querySelector('#group-settings-cancel').onclick = () => this.hide();
@@ -374,6 +386,13 @@ export class GroupSettingsPanel {
         };
         this.panel.querySelector('#group-settings-add').onclick = () => this.openAddMembers();
         this.panel.querySelector('#group-settings-save').onclick = () => this.save();
+        this.panel.querySelector('#group-summaries-clear').onclick = () => {
+            const sid = this.groupId;
+            if (!sid) return;
+            if (!confirm('确定要清空该群聊当前存档/聊天的所有摘要吗？')) return;
+            try { this.chatStore?.clearSummaries?.(sid); } catch {}
+            this.renderSummaries();
+        };
     }
 
     populate() {
@@ -387,6 +406,37 @@ export class GroupSettingsPanel {
         if (nameEl) nameEl.value = g.name || '';
         this.updateAvatarPreview();
         this.renderMembers();
+    }
+
+    renderSummaries() {
+        if (!this.summariesList || !this.chatStore) return;
+        const sid = this.groupId;
+        const list = this.chatStore.getSummaries(sid) || [];
+        const summaries = Array.isArray(list) ? list.slice().reverse() : [];
+        this.summariesList.innerHTML = '';
+        if (!summaries.length) {
+            this.summariesList.innerHTML = '<div style="padding:12px; color:#94a3b8; text-align:center; font-size:12px;">暂无摘要</div>';
+            return;
+        }
+        summaries.slice(0, 50).forEach((it) => {
+            const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+            if (!text) return;
+            const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+            const time = at ? new Date(at).toLocaleString() : '';
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:10px 10px; border-bottom:1px solid rgba(0,0,0,0.06); cursor:pointer;';
+            row.innerHTML = `
+                <div style="color:#0f172a; font-size:13px; line-height:1.35; white-space:pre-wrap;">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                ${time ? `<div style="color:#94a3b8; font-size:11px; margin-top:6px;">${time}</div>` : ''}
+            `;
+            row.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard?.writeText?.(text);
+                    window.toastr?.success?.('已复制摘要');
+                } catch {}
+            });
+            this.summariesList.appendChild(row);
+        });
     }
 
     updateAvatarPreview() {
