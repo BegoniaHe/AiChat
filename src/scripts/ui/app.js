@@ -1645,10 +1645,17 @@ ${listPart || '-（无）'}
         };
         const sanitizeThinkingForProtocolParse = (text) => {
             const raw = String(text ?? '');
-            // Remove complete <thinking>/<think> blocks; helps when models echo <content> inside thinking before real wrapper.
-            return raw
-                .replace(/<thinking\b[\s\S]*?>[\s\S]*?<\/thinking>/gi, '')
-                .replace(/<think\b[\s\S]*?>[\s\S]*?<\/think>/gi, '');
+            // More tolerant fallback: if model echoed "<content>" inside (possibly unclosed) thinking,
+            // we drop everything before the last </thinking> or </think> then parse the remaining tail once.
+            const lower = raw.toLowerCase();
+            const closeThinking = '</thinking>';
+            const closeThink = '</think>';
+            const i1 = lower.lastIndexOf(closeThinking);
+            const i2 = lower.lastIndexOf(closeThink);
+            const idx = Math.max(i1, i2);
+            if (idx === -1) return raw;
+            const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
+            return raw.slice(cut);
         };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
