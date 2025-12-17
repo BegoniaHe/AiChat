@@ -4,6 +4,20 @@
 
 import { logger } from '../utils/logger.js';
 
+const isQuotaError = (err) => {
+    try {
+        const name = String(err?.name || '');
+        const msg = String(err?.message || '');
+        // WebKit: code 22; Firefox: NS_ERROR_DOM_QUOTA_REACHED; Chrome: QuotaExceededError
+        return name === 'QuotaExceededError'
+            || name === 'NS_ERROR_DOM_QUOTA_REACHED'
+            || Number(err?.code) === 22
+            || /quota/i.test(msg);
+    } catch {
+        return false;
+    }
+};
+
 const safeInvoke = async (cmd, args) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
     const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
@@ -31,6 +45,20 @@ export class ChatStore {
         this.state = this._load();
         this.currentId = this.state.currentId || 'default';
         this.ready = this._hydrateFromDisk();
+        this._lsDisabled = false;
+        this._lsQuotaWarned = false;
+    }
+
+    _ensureSession(id) {
+        if (!this.state.sessions[id]) {
+            this.state.sessions[id] = { messages: [], draft: '', variables: {}, settings: {} };
+            return;
+        }
+        const s = this.state.sessions[id];
+        if (!s.messages) s.messages = [];
+        if (typeof s.draft !== 'string') s.draft = '';
+        if (!s.variables) s.variables = {};
+        if (!s.settings) s.settings = {};
     }
 
     _load() {
@@ -52,7 +80,16 @@ export class ChatStore {
                 try {
                     localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
                 } catch (err) {
-                    logger.warn('chat store hydrate -> localStorage failed (quota?)', err);
+                    if (isQuotaError(err)) {
+                        this._lsDisabled = true;
+                        if (!this._lsQuotaWarned) {
+                            this._lsQuotaWarned = true;
+                            logger.warn('chat store: localStorage quota exceeded; will rely on Tauri KV (data should remain after restart).', err);
+                        }
+                        try { localStorage.removeItem(STORE_KEY); } catch {}
+                    } else {
+                        logger.warn('chat store hydrate -> localStorage failed', err);
+                    }
                 }
                 logger.info('chat store hydrated from disk');
             }
@@ -65,10 +102,20 @@ export class ChatStore {
         // 1. Fast path: Schedule localStorage shortly (50ms debounce) to skip current frame
         if (this._lsTimer) clearTimeout(this._lsTimer);
         this._lsTimer = setTimeout(() => {
+            if (this._lsDisabled) return;
             try {
                 localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
             } catch (err) {
-                logger.warn('chat store persist -> localStorage failed (quota?)', err);
+                if (isQuotaError(err)) {
+                    this._lsDisabled = true;
+                    if (!this._lsQuotaWarned) {
+                        this._lsQuotaWarned = true;
+                        logger.warn('chat store: localStorage quota exceeded; disabling localStorage writes and relying on Tauri KV.', err);
+                    }
+                    try { localStorage.removeItem(STORE_KEY); } catch {}
+                } else {
+                    logger.warn('chat store persist -> localStorage failed', err);
+                }
             }
         }, 50);
 
@@ -110,11 +157,7 @@ export class ChatStore {
     }
 
     appendMessage(message, id = this.currentId) {
-        if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', variables: {} };
-        } else if (!this.state.sessions[id].variables) {
-            this.state.sessions[id].variables = {};
-        }
+        this._ensureSession(id);
         const msg = ensureId({ ...message });
         this.state.sessions[id].messages.push(msg);
         this._persist();
@@ -122,9 +165,7 @@ export class ChatStore {
     }
 
     setDraft(text, id = this.currentId) {
-        if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', variables: {} };
-        }
+        this._ensureSession(id);
         this.state.sessions[id].draft = text;
         this._persist();
     }
@@ -135,12 +176,7 @@ export class ChatStore {
     }
 
     setVariable(key, value, id = this.currentId) {
-        if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', variables: {} };
-        }
-        if (!this.state.sessions[id].variables) {
-            this.state.sessions[id].variables = {};
-        }
+        this._ensureSession(id);
         this.state.sessions[id].variables[key] = value;
         this._persist();
     }
@@ -185,9 +221,7 @@ export class ChatStore {
     }
 
     setSessionSettings(id = this.currentId, settings) {
-        if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', settings: {} };
-        }
+        this._ensureSession(id);
         this.state.sessions[id].settings = settings;
         this._persist();
     }
@@ -226,16 +260,12 @@ export class ChatStore {
 
     switchSession(id) {
         this.setCurrent(id);
-        if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', settings: {} };
-            this._persist();
-        }
+        this._ensureSession(id);
+        this._persist();
     }
 
     setLastRawResponse(text, id = this.currentId) {
-        if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', settings: {} };
-        }
+        this._ensureSession(id);
         const raw = String(text ?? '');
         // keep bounded to reduce quota risks
         const maxLen = 220_000;
@@ -243,6 +273,36 @@ export class ChatStore {
         this.state.sessions[id].lastRawResponse = trimmed;
         this.state.sessions[id].lastRawAt = Date.now();
         this._persist();
+    }
+
+    getPersonaLock(id = this.currentId) {
+        try {
+            const s = this.state.sessions[id];
+            const pid = s?.settings?.personaLockId;
+            return pid ? String(pid) : '';
+        } catch {
+            return '';
+        }
+    }
+
+    setPersonaLock(id = this.currentId, personaId) {
+        const sid = String(id || '').trim();
+        const pid = String(personaId || '').trim();
+        if (!sid) return false;
+        if (!pid) return false;
+        this._ensureSession(sid);
+        this.state.sessions[sid].settings.personaLockId = pid;
+        this._persist();
+        return true;
+    }
+
+    clearPersonaLock(id = this.currentId) {
+        const sid = String(id || '').trim();
+        if (!sid) return false;
+        this._ensureSession(sid);
+        delete this.state.sessions[sid].settings.personaLockId;
+        this._persist();
+        return true;
     }
 
     getLastRawResponse(id = this.currentId) {

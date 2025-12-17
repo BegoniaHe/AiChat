@@ -1077,3 +1077,16 @@
     - 在终端运行 `npm run dev` 并在手机上打开 APP，观察终端输出的 [save_kv] 和 [load_kv] 日志
     - 保存配置时记录 activeProfileId，关闭 APP 后重新打开，确认加载的 activeProfileId 是否一致
   - **预期结果**：fsync() 确保数据立即写入磁盘，解决 Android 文件系统缓存导致的数据丢失问题。
+
+- 2025-12-17 11：01（用户角色 Persona 完善 - 位置/宏/注入行为对齐 ST）
+  - **Persona 数据结构增强**：`PersonaStore` 为每个 persona 增加 `position/depth/role`，对齐 ST 的 `persona_description_positions`（子集：IN_PROMPT=0 / AT_DEPTH=4 / NONE=9），并在加载时自动补齐旧数据字段。
+  - **UI 补齐**：`PersonaPanel` 新增「注入设置」：插入位置（IN_PROMPT/AT_DEPTH/NONE）+（AT_DEPTH 下）深度与注入角色；并提示支持的宏（`{{user}}/{{char}}/{{time}}/{{date}}/{{getvar::}}` 等）。
+  - **Prompt 生成对齐**：`AppBridge.buildMessages()` 仅在 persona 位置为 IN_PROMPT 时填充 `personaDescription` marker / `{{persona}}`；当为 AT_DEPTH 时按深度与角色插入到聊天历史（与 ST 行为一致）。
+  - **宏替换增强**：`MacroEngine` 允许 `processTextMacros(text, { scenario/personality/... })` 这类传参直接生效（不必塞进 extraMacros），并兼容 `{ name: ... }` 结构（便于 user/char 传对象）。
+  - **显示一致性**：用户发送消息的显示名从固定「我」改为当前 persona 名称，并将 persona 的 position/depth/role 一并传入生成上下文。
+  - **修复“用户角色菜单无反应”**：`PersonaPanel` overlay 补齐 `position:fixed; inset:0` 遮罩样式（此前仅追加到 body 末尾，手机上看起来像没弹窗）。
+  - **Persona 锁定（会话级）**：参考 ST “persona lock” 的最小子集，新增按会话锁定 persona：
+    - `ChatStore` 增加 `personaLockId` 存储与 `get/set/clearPersonaLock()`。
+    - `PersonaPanel` 顶部显示当前会话锁定状态，并支持一键解除；列表中新增 🔒 按钮可将某 persona 锁定到当前会话（再次点击可解除）。
+  - **手机适配修复**：`PersonaPanel` 设为 `position: relative`，避免编辑视图 `position:absolute` 锚定到 viewport 导致返回按钮靠边难点/点不到；同时缩小弹窗尺寸并扩大返回按钮点击热区。
+  - **localStorage 超额降级**：对 `ChatStore/ContactsStore/MomentsStore` 增加 QuotaExceededError 探测；一旦触发则停止写 localStorage（仅提示一次），继续使用 Tauri KV 持久化（解释“看到 storage 失败但重启没丢数据”的原因）。

@@ -34,6 +34,10 @@ export class MomentsPanel {
         this.render();
     }
 
+    setUserAvatar(url) {
+        this.userAvatar = url;
+    }
+
     getAvatarByName(name) {
         const raw = String(name || '').trim();
         if (!raw) return this.defaultAvatar;

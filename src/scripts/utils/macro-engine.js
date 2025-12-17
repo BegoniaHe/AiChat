@@ -10,6 +10,16 @@ export class MacroEngine {
         this.chatStore = chatStore;
     }
 
+    normalizeMacroValue(value) {
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number') return String(value);
+        if (typeof value === 'boolean') return value ? 'true' : 'false';
+        // Support { name: '...' } pattern (user/char objects)
+        if (typeof value === 'object' && typeof value.name === 'string') return value.name;
+        return '';
+    }
+
     /**
      * 处理文本中的宏
      * @param {string} text - 原始文本
@@ -24,12 +34,29 @@ export class MacroEngine {
         const maxPasses = 5; // 防止死循环
         let pass = 0;
 
-        // 基础变量字典（用于快速替换无参数宏 {{user}} 等）
-        const baseVars = {
-            user: context.user || 'User',
-            char: context.char || 'Assistant',
-            ...context.extraMacros
-        };
+        const baseVars = {};
+        // 基础变量（兼容 ST 常用 {{user}} / {{char}}）
+        baseVars.user = this.normalizeMacroValue(context.user) || 'User';
+        baseVars.char = this.normalizeMacroValue(context.char) || 'Assistant';
+
+        // 允许直接传入其它简单变量：processTextMacros(text, { scenario: '...', personality: '...' })
+        // （避免必须塞到 extraMacros 才能替换）
+        try {
+            for (const [k, v] of Object.entries(context || {})) {
+                if (!k || k === 'sessionId' || k === 'user' || k === 'char' || k === 'extraMacros') continue;
+                const normalized = this.normalizeMacroValue(v);
+                if (normalized !== '') baseVars[k] = normalized;
+            }
+        } catch {}
+
+        // 兼容旧调用：context.extraMacros
+        if (context?.extraMacros && typeof context.extraMacros === 'object') {
+            for (const [k, v] of Object.entries(context.extraMacros)) {
+                if (!k) continue;
+                const normalized = this.normalizeMacroValue(v);
+                if (normalized !== '') baseVars[k] = normalized;
+            }
+        }
 
         // 匹配 {{...}}
         const macroRegex = /\{\{(.*?)\}\}/g;

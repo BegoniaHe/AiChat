@@ -12,16 +12,7 @@ import { BUILTIN_PHONE_FORMAT_WORLDBOOK, BUILTIN_PHONE_FORMAT_WORLDBOOK_ID } fro
 import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
 import { MacroEngine } from '../utils/macro-engine.js';
-
-// 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
-const safeInvoke = async (cmd, args) => {
-    const g = typeof globalThis !== 'undefined' ? globalThis : window;
-    const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoker !== 'function') {
-        throw new Error('Tauri invoke not available');
-    }
-    return invoker(cmd, args);
-};
+import { safeInvoke } from '../utils/tauri.js';
 
 const canInitClient = (cfg) => {
     const c = cfg || {};
@@ -466,6 +457,12 @@ class AppBridge {
 
         const name1 = context?.user?.name || 'user';
         const name2 = context?.character?.name || 'assistant';
+        // SillyTavern-like persona settings (subset)
+        const personaRaw = String(context?.user?.persona || '');
+        const personaPosition = Number.isFinite(Number(context?.user?.personaPosition)) ? Number(context.user.personaPosition) : 0; // IN_PROMPT
+        const personaDepth = Number.isFinite(Number(context?.user?.personaDepth)) ? Math.max(0, Math.trunc(Number(context.user.personaDepth))) : 2;
+        const personaRole = Number.isFinite(Number(context?.user?.personaRole)) ? Math.max(0, Math.min(2, Math.trunc(Number(context.user.personaRole)))) : 0; // 0=system
+        const personaText = personaRaw ? this.processTextMacros(personaRaw, { user: name1, char: name2 }) : '';
         const historyForMatch = Array.isArray(context.history) ? context.history : [];
         const matchText = [
             String(userMessage ?? ''),
@@ -617,6 +614,14 @@ class AppBridge {
                     messages.push({ role, content: momentCreateRules });
                 }
             }
+
+            // Persona Description (SillyTavern-like): AT_DEPTH=4 injects into chat history
+            if (personaText && personaPosition === 4) {
+                const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+                const role = roleMap[personaRole] || 'system';
+                const idx = Math.max(0, history.length - personaDepth);
+                history.splice(idx, 0, { role, content: personaText });
+            }
             const prompts = Array.isArray(openp.prompts) ? openp.prompts : [];
             const byId = new Map();
             prompts.forEach(p => { if (p?.identifier) byId.set(p.identifier, p); });
@@ -648,7 +653,7 @@ class AppBridge {
                     case 'scenario':
                         return formatScenario || '';
                     case 'personaDescription':
-                        return context?.user?.persona || '';
+                        return personaPosition === 0 ? personaText : '';
                     // dialogueExamples/chatHistory are markers without content here
                     default:
                         return '';
@@ -713,7 +718,7 @@ class AppBridge {
             description: context?.character?.description || '',
             personality: this.processTextMacros(personalityFormat, { personality: (context?.character?.personality || '') }),
             scenario: this.processTextMacros(scenarioFormat, { scenario: (context?.character?.scenario || '') }),
-            persona: context?.user?.persona || '',
+            persona: personaPosition === 0 ? personaText : '',
             wiBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
             wiAfter: '',
             loreBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
@@ -793,6 +798,14 @@ class AppBridge {
 
         // 3) History
         const history = Array.isArray(context.history) ? context.history.slice() : [];
+
+        // Persona Description (SillyTavern-like): AT_DEPTH=4 injects into chat history
+        if (personaText && personaPosition === 4) {
+            const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+            const role = roleMap[personaRole] || 'system';
+            const idx = Math.max(0, history.length - personaDepth);
+            history.splice(idx, 0, { role, content: personaText });
+        }
 
         // IN_CHAT: inject story string into history (depth + role)
         if (combinedStoryString && position === 1) {

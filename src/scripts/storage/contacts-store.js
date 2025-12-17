@@ -6,6 +6,19 @@
 
 import { logger } from '../utils/logger.js';
 
+const isQuotaError = (err) => {
+    try {
+        const name = String(err?.name || '');
+        const msg = String(err?.message || '');
+        return name === 'QuotaExceededError'
+            || name === 'NS_ERROR_DOM_QUOTA_REACHED'
+            || Number(err?.code) === 22
+            || /quota/i.test(msg);
+    } catch {
+        return false;
+    }
+};
+
 const safeInvoke = async (cmd, args) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
     const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
@@ -27,6 +40,8 @@ export class ContactsStore {
     constructor() {
         this.state = this._load();
         this.ready = this._hydrateFromDisk();
+        this._lsDisabled = false;
+        this._lsQuotaWarned = false;
     }
 
     _load() {
@@ -47,7 +62,16 @@ export class ContactsStore {
                 try {
                     localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
                 } catch (err) {
-                    logger.warn('contacts store hydrate -> localStorage failed (quota?)', err);
+                    if (isQuotaError(err)) {
+                        this._lsDisabled = true;
+                        if (!this._lsQuotaWarned) {
+                            this._lsQuotaWarned = true;
+                            logger.warn('contacts store: localStorage quota exceeded; will rely on Tauri KV (data should remain after restart).', err);
+                        }
+                        try { localStorage.removeItem(STORE_KEY); } catch {}
+                    } else {
+                        logger.warn('contacts store hydrate -> localStorage failed', err);
+                    }
                 }
                 logger.info('contacts store hydrated from disk');
             }
@@ -61,10 +85,20 @@ export class ContactsStore {
         safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
             logger.debug('contacts store save_kv failed (可能非 Tauri)', err);
         });
+        if (this._lsDisabled) return;
         try {
             localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
         } catch (err) {
-            logger.warn('contacts store persist -> localStorage failed (quota?)', err);
+            if (isQuotaError(err)) {
+                this._lsDisabled = true;
+                if (!this._lsQuotaWarned) {
+                    this._lsQuotaWarned = true;
+                    logger.warn('contacts store: localStorage quota exceeded; disabling localStorage writes and relying on Tauri KV.', err);
+                }
+                try { localStorage.removeItem(STORE_KEY); } catch {}
+            } else {
+                logger.warn('contacts store persist -> localStorage failed', err);
+            }
         }
     }
 

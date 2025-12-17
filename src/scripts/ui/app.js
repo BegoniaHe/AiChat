@@ -23,6 +23,8 @@ import { GroupCreatePanel, GroupSettingsPanel } from './group-chat-panels.js';
 import { GroupPanel } from './group-panel.js';
 import { ContactGroupRenderer } from './contact-group-renderer.js';
 import { ContactDragManager } from './contact-drag-manager.js';
+import { PersonaStore } from '../storage/persona-store.js';
+import { PersonaPanel } from './persona-panel.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -34,11 +36,13 @@ const initApp = async () => {
     const contactsStore = new ContactsStore();
     const groupStore = new GroupStore();
     const momentsStore = new MomentsStore();
+    const personaStore = new PersonaStore();
     const worldPanel = new WorldPanel({ contactsStore, getSessionId: () => chatStore.getCurrent() });
     await chatStore.ready;
     await contactsStore.ready;
     await groupStore.ready;
     await momentsStore.ready;
+    await personaStore.ready;
     await window.appBridge?.regex?.ready;
     await window.appBridge?.presets?.ready;
     window.appBridge.setActiveSession(chatStore.getCurrent());
@@ -118,6 +122,40 @@ const initApp = async () => {
         assistant: './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp'
     };
 
+    const getEffectivePersona = (sessionId = chatStore.getCurrent()) => {
+        const sid = String(sessionId || '').trim() || 'default';
+        const lockedId = chatStore.getPersonaLock?.(sid) || '';
+        if (lockedId) {
+            const locked = personaStore.get(lockedId);
+            if (locked) return locked;
+            // Lock refers to missing persona; clean it up.
+            try { chatStore.clearPersonaLock?.(sid); } catch {}
+        }
+        return personaStore.getActive();
+    };
+
+    const syncUserPersonaUI = (sessionId = chatStore.getCurrent()) => {
+        const p = getEffectivePersona(sessionId);
+        const url = p.avatar || './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png';
+        const name = p.name || '我';
+        avatars.user = url;
+        document.querySelectorAll('.user-avatar-btn img').forEach(img => img.src = url);
+        document.querySelectorAll('.user-nickname').forEach(el => el.textContent = name);
+        try { momentsPanel?.setUserAvatar?.(url); } catch {}
+    };
+
+    const personaPanel = new PersonaPanel({
+        personaStore,
+        chatStore,
+        getSessionId: () => chatStore.getCurrent(),
+        onPersonaChanged: () => {
+            syncUserPersonaUI(chatStore.getCurrent());
+            refreshChatAndContacts();
+        }
+    });
+    // Initial sync
+    syncUserPersonaUI(chatStore.getCurrent());
+
     const getContactCountN = () => {
         try {
             const list = contactsStore.listContacts?.() || [];
@@ -175,7 +213,7 @@ const initApp = async () => {
         momentsStore,
         contactsStore,
         defaultAvatar: avatars.assistant,
-        userAvatar: avatars.user,
+        userAvatar: personaStore.getActive()?.avatar || avatars.user,
         onUserComment: async (momentId, commentText) => {
             const id = String(momentId || '').trim();
             const userComment = String(commentText || '').trim();
@@ -298,7 +336,10 @@ ${listPart || '-（无）'}
                 const parser = new DialogueStreamParser({ userName: '我' });
                 let sawMomentReply = false;
 
-                const ctx = { user: { name: '我' }, character: { name: authorName }, history: [], task: { type: 'moment_comment' }, session: { id: originSessionId, isGroup: false } };
+                const p = personaStore.getActive?.() || {};
+                const persona = getEffectivePersona(originSessionId);
+                const uName = String(persona?.name || '').trim() || '我';
+                const ctx = { user: { name: uName, persona: String(persona?.description || ''), personaPosition: persona?.position, personaDepth: persona?.depth, personaRole: persona?.role }, character: { name: authorName }, history: [], task: { type: 'moment_comment' }, session: { id: originSessionId, isGroup: false } };
                 if (config.stream) {
                     const stream = await window.appBridge.generate(prompt, ctx);
                     for await (const chunk of stream) {
@@ -969,6 +1010,7 @@ ${listPart || '-（无）'}
     settingsMenu?.querySelectorAll('button').forEach(btn => {
         btn.addEventListener('click', () => {
             const action = btn.dataset.action;
+            if (action === 'persona') personaPanel.show();
             if (action === 'session') sessionPanel.show();
             if (action === 'preset') presetPanel.show();
             if (action === 'world-global') worldPanel.show({ scope: 'global' });
@@ -1142,6 +1184,7 @@ ${listPart || '-（无）'}
         // 切换会话
         chatStore.switchSession(sessionId);
         window.appBridge.setActiveSession(sessionId);
+        syncUserPersonaUI(sessionId);
         // 加载历史
         const history = chatStore.getMessages(sessionId);
         ui.clearMessages();
@@ -1235,7 +1278,7 @@ ${listPart || '-（无）'}
                     type: 'music',
                     content: title,
                     meta: { artist, url: audioUrl },
-                    name: '我',
+                    name: (getEffectivePersona(chatStore.getCurrent())?.name || '我'),
                     avatar: avatars.user,
                     time: formatNowTime()
                 };
@@ -1250,7 +1293,7 @@ ${listPart || '-（无）'}
                 role: 'user',
                 type: 'transfer',
                 content: amount,
-                name: '我',
+                name: (getEffectivePersona(chatStore.getCurrent())?.name || '我'),
                 avatar: avatars.user,
                 time: formatNowTime()
             };
@@ -1320,7 +1363,8 @@ ${listPart || '-（无）'}
         const sessionId = chatStore.getCurrent();
         const contact = contactsStore.getContact(sessionId);
         const characterName = contact?.name || (sessionId.startsWith('group:') ? sessionId.replace(/^group:/, '') : sessionId) || 'assistant';
-        const userName = '我';
+        const activePersona = getEffectivePersona(sessionId);
+        const userName = activePersona.name || '我';
         const isGroupChat = Boolean(contact?.isGroup) || sessionId.startsWith('group:');
         const groupMembers = isGroupChat ? (Array.isArray(contact?.members) ? contact.members : []) : [];
         const normalizeName = (s) => String(s || '').trim();
@@ -1451,7 +1495,13 @@ ${listPart || '-（无）'}
             return history;
         };
         const llmContext = (pendingUserText) => ({
-            user: { name: userName },
+            user: {
+                name: userName,
+                persona: activePersona.description || '',
+                personaPosition: activePersona.position,
+                personaDepth: activePersona.depth,
+                personaRole: activePersona.role,
+            },
             character: { name: characterName },
             session: { id: sessionId, isGroup: isGroupChat },
             group: isGroupChat ? {
@@ -1491,7 +1541,7 @@ ${listPart || '-（无）'}
             type: 'text',
             content: displayUser,
             raw: storedUser,
-            name: '我',
+            name: userName,
             avatar: avatars.user,
             time: formatNowTime()
         };
@@ -1799,7 +1849,7 @@ ${listPart || '-（无）'}
             const display = window.appBridge.applyInputDisplayRegex(stored, { isEdit: true, depth: 0 });
             const updated = chatStore.updateMessage(message.id, { content: display, raw: stored, time: formatNowTime() }, sessionId);
             if (updated) {
-                ui.updateMessage(message.id, { ...updated, role: 'user', type: 'text', avatar: avatars.user, name: '我' });
+                ui.updateMessage(message.id, { ...updated, role: 'user', type: 'text', avatar: avatars.user, name: (getEffectivePersona(sessionId)?.name || '我') });
                 refreshChatAndContacts();
             }
             return;
@@ -1907,6 +1957,7 @@ ${listPart || '-（无）'}
             window.appBridge.setActiveSession(id);
             const c = contactsStore.getContact(id);
             if (currentChatTitle) currentChatTitle.textContent = c?.name || id;
+            syncUserPersonaUI(id);
             const msgs = chatStore.getMessages(id);
             const draft = chatStore.getDraft(id);
             ui.clearMessages();
@@ -1926,7 +1977,7 @@ ${listPart || '-（无）'}
             role: 'user',
             type: 'sticker',
             content: tag,
-            name: '我',
+            name: (getEffectivePersona(sessionId)?.name || '我'),
             avatar: avatars.user,
             time: formatNowTime()
         };
@@ -1940,7 +1991,7 @@ ${listPart || '-（无）'}
             role: 'user',
             type: 'image',
             content: url,
-            name: '我',
+            name: (getEffectivePersona(sessionId)?.name || '我'),
             avatar: avatars.user,
             time: formatNowTime()
         };
@@ -1955,7 +2006,7 @@ ${listPart || '-（无）'}
             type: 'music',
             content: name,
             meta: { artist: '本地', url: dataUrl },
-            name: '我',
+            name: (getEffectivePersona(sessionId)?.name || '我'),
             avatar: avatars.user,
             time: formatNowTime()
         };

@@ -5,15 +5,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-
-const safeInvoke = async (cmd, args) => {
-    const g = typeof globalThis !== 'undefined' ? globalThis : window;
-    const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoker !== 'function') {
-        throw new Error('Tauri invoke not available');
-    }
-    return invoker(cmd, args);
-};
+import { safeInvoke } from '../utils/tauri.js';
 
 const STORAGE_KEY = 'worldinfo_store';
 
