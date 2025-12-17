@@ -67,7 +67,7 @@ export class ChatStore {
 
     _ensureSession(id) {
         if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', variables: {}, settings: {} };
+            this.state.sessions[id] = { messages: [], draft: '', variables: {}, settings: {}, detachedSummaries: [] };
             return;
         }
         const s = this.state.sessions[id];
@@ -75,6 +75,18 @@ export class ChatStore {
         if (typeof s.draft !== 'string') s.draft = '';
         if (!s.variables) s.variables = {};
         if (!s.settings) s.settings = {};
+        if (!Array.isArray(s.detachedSummaries)) s.detachedSummaries = [];
+        // Normalize legacy summaries (string[]) into objects
+        try {
+            s.detachedSummaries = (s.detachedSummaries || []).map((it) => {
+                if (!it) return null;
+                if (typeof it === 'string') return { at: 0, text: it };
+                const text = String(it.text || '').trim();
+                if (!text) return null;
+                const at = Number(it.at || 0) || 0;
+                return { at, text };
+            }).filter(Boolean);
+        } catch {}
     }
 
     _load() {
@@ -397,6 +409,11 @@ export class ChatStore {
             if (idx !== -1) {
                 this.state.sessions[id].archives[idx].messages = [...messages];
                 this.state.sessions[id].archives[idx].timestamp = timestamp;
+                // Snapshot summaries into archive (for attached mode, it's the source of truth)
+                try {
+                    const list = this.state.sessions[id].archives[idx].summaries;
+                    if (!Array.isArray(list)) this.state.sessions[id].archives[idx].summaries = [];
+                } catch {}
                 if (name) {
                     const clean = name.trim();
                     // Append suffix only if no timestamp looks present
@@ -414,11 +431,42 @@ export class ChatStore {
             baseName += suffix;
         }
 
+        const getCurrentSummariesSnapshot = () => {
+            try {
+                const session = this.state.sessions[id];
+                const curAid = session.currentArchiveId;
+                if (curAid && Array.isArray(session.archives)) {
+                    const arc = session.archives.find(a => a.id === curAid);
+                    const list = arc?.summaries;
+                    return Array.isArray(list) ? list.map((it) => {
+                        if (!it) return null;
+                        if (typeof it === 'string') return { at: 0, text: String(it) };
+                        const text = String(it.text || '').trim();
+                        if (!text) return null;
+                        const at = Number(it.at || 0) || 0;
+                        return { at, text };
+                    }).filter(Boolean) : [];
+                }
+                const src = session.detachedSummaries;
+                return Array.isArray(src) ? src.map((it) => {
+                    if (!it) return null;
+                    if (typeof it === 'string') return { at: 0, text: String(it) };
+                    const text = String(it.text || '').trim();
+                    if (!text) return null;
+                    const at = Number(it.at || 0) || 0;
+                    return { at, text };
+                }).filter(Boolean) : [];
+            } catch {
+                return [];
+            }
+        };
+
         this.state.sessions[id].archives.push({
             id: archiveId,
             name: baseName,
             timestamp,
-            messages: [...messages]
+            messages: [...messages],
+            summaries: getCurrentSummariesSnapshot(),
         });
         
         this._persist();
@@ -436,6 +484,7 @@ export class ChatStore {
 
         session.messages = [];
         session.currentArchiveId = null;
+        session.detachedSummaries = [];
         session.draft = '';
         session.lastRawResponse = '';
         this._persist();
@@ -472,6 +521,72 @@ export class ChatStore {
         if (session.currentArchiveId === archiveId) {
             session.currentArchiveId = null;
         }
+        this._persist();
+        return true;
+    }
+
+    getCurrentArchiveId(id = this.currentId) {
+        try {
+            const sid = String(id || '').trim();
+            if (!sid) return null;
+            return this.state.sessions[sid]?.currentArchiveId || null;
+        } catch {
+            return null;
+        }
+    }
+
+    getSummaries(id = this.currentId) {
+        const sid = String(id || '').trim();
+        if (!sid) return [];
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            const list = arc?.summaries;
+            return Array.isArray(list) ? list : [];
+        }
+        return Array.isArray(session.detachedSummaries) ? session.detachedSummaries : [];
+    }
+
+    addSummary(summaryText, id = this.currentId) {
+        const sid = String(id || '').trim();
+        const text = String(summaryText || '').trim();
+        if (!sid || !text) return false;
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const item = { at: Date.now(), text };
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            if (arc) {
+                if (!Array.isArray(arc.summaries)) arc.summaries = [];
+                arc.summaries.push(item);
+                this._persist();
+                return true;
+            }
+        }
+        if (!Array.isArray(session.detachedSummaries)) session.detachedSummaries = [];
+        session.detachedSummaries.push(item);
+        this._persist();
+        return true;
+    }
+
+    clearSummaries(id = this.currentId) {
+        const sid = String(id || '').trim();
+        if (!sid) return false;
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            if (arc) {
+                arc.summaries = [];
+                this._persist();
+                return true;
+            }
+        }
+        session.detachedSummaries = [];
         this._persist();
         return true;
     }

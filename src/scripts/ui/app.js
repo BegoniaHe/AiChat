@@ -1613,6 +1613,26 @@ ${listPart || '-（无）'}
                 return { ...(m || {}), ...stats, author, authorId, authorAvatar, originSessionId: sessionId };
             });
         };
+        const extractSummaryBlock = (text) => {
+            const raw = String(text ?? '');
+            const re = /<details>\s*<summary>\s*摘要\s*<\/summary>\s*([\s\S]*?)<\/details>/gi;
+            let m;
+            let last = null;
+            while ((m = re.exec(raw))) last = { index: m.index, full: m[0], inner: m[1] };
+            if (!last) return { text: raw, summary: '' };
+            const inner = String(last.inner || '');
+            const plain = inner.replace(/<[^>]+>/g, ' ');
+            // Pure Chinese requirement: drop latin letters; keep digits/punctuation.
+            const summary = plain
+                .trim()
+                .replace(/\s+/g, ' ')
+                .replace(/[A-Za-z]+/g, '')
+                .trim();
+            const stripped = (raw.slice(0, last.index) + raw.slice(last.index + last.full.length))
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+            return { text: stripped, summary };
+        };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
             const history = all
@@ -1622,8 +1642,13 @@ ${listPart || '-（无）'}
             if (pendingUserText && last?.role === 'user' && String(last.content || '').trim() === String(pendingUserText).trim()) {
                 history.pop();
             }
+            // Limit outgoing history to the latest 50 messages to reduce distraction/tokens.
+            if (history.length > 50) {
+                history.splice(0, history.length - 50);
+            }
             return history;
         };
+        let disableSummaryForThis = false;
         const llmContext = (pendingUserText) => ({
             user: {
                 name: userName,
@@ -1634,6 +1659,10 @@ ${listPart || '-（无）'}
             },
             character: { name: characterName },
             session: { id: sessionId, isGroup: isGroupChat },
+            meta: {
+                // Avoid breaking protocol/dialogue parsing modes; only enable summary for normal chat replies.
+                disableSummary: Boolean(disableSummaryForThis),
+            },
             group: isGroupChat ? {
                 id: sessionId,
                 name: characterName,
@@ -1694,6 +1723,8 @@ ${listPart || '-（无）'}
                 const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
                 const momentCreateEnabled = Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
                 const protocolEnabled = momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+                // Always include summary request prompt; summary (if present) will be extracted from raw response.
+                disableSummaryForThis = false;
 
                 if (protocolEnabled) {
                     // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
@@ -1790,6 +1821,10 @@ ${listPart || '-（无）'}
                     if (activeGeneration?.cancelled) return;
                     ui.hideTyping();
                     chatStore.setLastRawResponse(fullRaw, sessionId);
+                    const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
+                    if (protocolSummary) {
+                        try { chatStore.addSummary(protocolSummary, sessionId); } catch {}
+                    }
                     if (mutatedMoments) {
                         try { await momentsStore.flush(); } catch {}
                     }
@@ -1810,8 +1845,12 @@ ${listPart || '-（无）'}
                     }
                     if (activeGeneration?.cancelled) return;
                     chatStore.setLastRawResponse(full, sessionId);
-                    let stored = full;
-                    let display = full;
+                    const { text: stripped, summary } = extractSummaryBlock(full);
+                    if (summary) {
+                        try { chatStore.addSummary(summary, sessionId); } catch {}
+                    }
+                    let stored = stripped;
+                    let display = stripped;
                     // === 创意写作模式（暂时停用）===
                     // try {
                     //     stored = window.appBridge.applyOutputStoredRegex(full);
@@ -1834,15 +1873,22 @@ ${listPart || '-（无）'}
                 }
             } else {
                 const assistantAvatar = getAssistantAvatarForSession(sessionId);
-                ui.showTyping(assistantAvatar);
-                const resultRaw = await window.appBridge.generate(text, llmContext(text));
-                ui.hideTyping();
-                chatStore.setLastRawResponse(resultRaw, sessionId);
                 const sysp = window.appBridge?.presets?.getActive?.('sysprompt') || {};
                 const privateEnabled = Boolean(sysp?.dialogue_enabled) && String(sysp?.dialogue_rules || '').trim().length > 0;
                 const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
                 const momentCreateEnabled = Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
                 const protocolEnabled = momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+                // Always include summary request prompt; summary (if present) will be extracted from raw response.
+                disableSummaryForThis = false;
+
+                ui.showTyping(assistantAvatar);
+                const resultRaw = await window.appBridge.generate(text, llmContext(text));
+                ui.hideTyping();
+                chatStore.setLastRawResponse(resultRaw, sessionId);
+                const { summary: protocolSummary } = extractSummaryBlock(resultRaw);
+                if (protocolSummary) {
+                    try { chatStore.addSummary(protocolSummary, sessionId); } catch {}
+                }
                 if (protocolEnabled) {
                     const parser = new DialogueStreamParser({ userName });
                     const events = parser.push(resultRaw);
@@ -1921,8 +1967,12 @@ ${listPart || '-（无）'}
                 // === 创意写作模式（暂时停用）===
                 // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
                 // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-                const stored = resultRaw;
-                const display = resultRaw;
+                const { text: stripped, summary } = extractSummaryBlock(resultRaw);
+                if (summary) {
+                    try { chatStore.addSummary(summary, sessionId); } catch {}
+                }
+                const stored = stripped;
+                const display = stripped;
                 const parsed = {
                     role: 'assistant',
                     name: '助手',

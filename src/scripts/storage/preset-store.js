@@ -223,7 +223,8 @@ export class PresetStore {
             for (const p of Object.values(state.presets.sysprompt || {})) {
                 if (!p || typeof p !== 'object') continue;
                 if (typeof p.dialogue_enabled !== 'boolean') p.dialogue_enabled = true;
-                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 0;
+                // 聊天提示词：默认不放在 prompt 开头，改为类似世界书的 system 深度=1 注入（IN_CHAT）
+                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 1;
                 if (typeof p.dialogue_depth !== 'number') p.dialogue_depth = 1;
                 if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0;
                 if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim()) {
@@ -255,7 +256,8 @@ export class PresetStore {
                 }
 
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
-                if (typeof p.group_position !== 'number') p.group_position = 0;
+                // 群聊提示词：同上（IN_CHAT, system 深度=1）
+                if (typeof p.group_position !== 'number') p.group_position = 1;
                 if (typeof p.group_depth !== 'number') p.group_depth = 1;
                 if (typeof p.group_role !== 'number') p.group_role = 0;
                 if (typeof p.group_rules !== 'string' || !p.group_rules.trim()) {
@@ -287,7 +289,7 @@ export class PresetStore {
             for (const p of Object.values(state.presets.sysprompt || {})) {
                 if (!p || typeof p !== 'object') continue;
                 if (typeof p.dialogue_enabled !== 'boolean') p.dialogue_enabled = true; // 聊天室自动启用
-                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 0; // IN_PROMPT
+                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 1; // IN_CHAT
                 if (typeof p.dialogue_depth !== 'number') p.dialogue_depth = 1;
                 if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0; // SYSTEM
                 const rules = (typeof p.dialogue_rules === 'string') ? p.dialogue_rules : '';
@@ -333,7 +335,7 @@ export class PresetStore {
                 }
 
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
-                if (typeof p.group_position !== 'number') p.group_position = 0; // IN_PROMPT
+                if (typeof p.group_position !== 'number') p.group_position = 1; // IN_CHAT
                 if (typeof p.group_depth !== 'number') p.group_depth = 1;
                 if (typeof p.group_role !== 'number') p.group_role = 0;
                 const gr = (typeof p.group_rules === 'string') ? p.group_rules : '';

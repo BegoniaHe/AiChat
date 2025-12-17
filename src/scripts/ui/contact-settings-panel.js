@@ -17,6 +17,7 @@ export class ContactSettingsPanel {
         this.avatarPreview = null;
         this.nameInput = null;
         this.archivesList = null;
+        this.summariesList = null;
         this.currentAvatar = '';
     }
 
@@ -24,6 +25,7 @@ export class ContactSettingsPanel {
         if (!this.panel) this.createUI();
         this.populate();
         this.renderArchives();
+        this.renderSummaries();
         this.overlay.style.display = 'block';
         this.panel.style.display = 'block';
     }
@@ -97,6 +99,14 @@ export class ContactSettingsPanel {
                     </button>
                     <div style="font-size:12px; color:#64748b; margin-bottom:6px;">历史存档（点击加载）</div>
                     <div id="contact-archives-list" style="max-height:160px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#f9f9f9; padding:0;"></div>
+
+                    <div style="margin-top:14px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
+                            <div style="font-size:12px; color:#64748b;">摘要（每次对话保存一条）</div>
+                            <button id="contact-summaries-clear" type="button" style="padding:6px 10px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#ef4444;">清空</button>
+                        </div>
+                        <div id="contact-summaries-list" style="max-height:160px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#fff; padding:0;"></div>
+                    </div>
                 </div>
 
                 <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
@@ -114,6 +124,7 @@ export class ContactSettingsPanel {
         this.avatarPreview = this.panel.querySelector('#contact-avatar-preview');
         this.nameInput = this.panel.querySelector('#contact-name-input');
         this.archivesList = this.panel.querySelector('#contact-archives-list');
+        this.summariesList = this.panel.querySelector('#contact-summaries-list');
 
         this.panel.querySelector('#contact-settings-close').onclick = () => this.hide();
         this.panel.querySelector('#contact-settings-cancel').onclick = () => this.hide();
@@ -127,6 +138,13 @@ export class ContactSettingsPanel {
         };
         this.panel.querySelector('#contact-settings-save').onclick = () => this.save();
         this.panel.querySelector('#contact-new-chat').onclick = () => this.startNewChat();
+        this.panel.querySelector('#contact-summaries-clear').onclick = () => {
+            const sid = this.getSessionId();
+            if (!sid) return;
+            if (!confirm('确定要清空当前存档/聊天的所有摘要吗？')) return;
+            try { this.chatStore?.clearSummaries?.(sid); } catch {}
+            this.renderSummaries();
+        };
     }
 
     renderArchives() {
@@ -178,6 +196,37 @@ export class ContactSettingsPanel {
             row.appendChild(info);
             row.appendChild(delBtn);
             this.archivesList.appendChild(row);
+        });
+    }
+
+    renderSummaries() {
+        if (!this.summariesList || !this.chatStore) return;
+        const sid = this.getSessionId();
+        const list = this.chatStore.getSummaries(sid) || [];
+        const summaries = Array.isArray(list) ? list.slice().reverse() : [];
+        this.summariesList.innerHTML = '';
+        if (!summaries.length) {
+            this.summariesList.innerHTML = '<div style="padding:12px; color:#94a3b8; text-align:center; font-size:12px;">暂无摘要</div>';
+            return;
+        }
+        summaries.slice(0, 50).forEach((it) => {
+            const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+            if (!text) return;
+            const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+            const time = at ? new Date(at).toLocaleString() : '';
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:10px 10px; border-bottom:1px solid rgba(0,0,0,0.06);';
+            row.innerHTML = `
+                <div style="color:#0f172a; font-size:13px; line-height:1.35; white-space:pre-wrap;">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                ${time ? `<div style="color:#94a3b8; font-size:11px; margin-top:6px;">${time}</div>` : ''}
+            `;
+            row.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard?.writeText?.(text);
+                    window.toastr?.success?.('已复制摘要');
+                } catch {}
+            });
+            this.summariesList.appendChild(row);
         });
     }
 
