@@ -1106,3 +1106,7 @@
   - **避免 `{{lastUserMessage}}` 重复**：`AppBridge.buildMessages()` 检测 prompt blocks 是否已通过 `{{lastUserMessage}}` 注入当前输入，若已注入则不再额外追加末尾 user message。
   - **消息“收回”**：长按用户消息菜单新增「收回」，若该消息仍在等待 AI 回覆则会中断生成并撤回该消息；若已回覆则仅撤回该用户消息（不删除 AI 回覆）。
   - **可取消请求**：`AppBridge` 增加 `cancelCurrentGeneration()`，并将 `AbortSignal` 贯通到各 provider（OpenAI/Custom/Anthropic/Gemini/Makersuite/Vertex）；Tauri 原生 `http_request` 路径无法真正中断时至少停止 UI 处理与输出。
+
+- 2025-12-17 12:38（世界书/预设占位符替换修复）
+  - **根因**：世界书内容（`formatWorldPrompt()`）与 context preset 的 `story_string`（`renderStTemplate()`）之前未经过 `processTextMacros()`，且 `renderStTemplate` 对 `{{USER}}` 这类大小写不匹配会直接变成空字符串。
+  - **修复**：`buildMessages()` 现在会对世界书拼接结果与 `story_string` 渲染结果再跑一次 `processTextMacros()`，并让 `renderStTemplate` 支持大小写不敏感变量、保留未知 `{{...}}` 以便交给 MacroEngine 继续替换。

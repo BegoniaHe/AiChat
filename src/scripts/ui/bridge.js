@@ -30,12 +30,25 @@ const truthy = (v) => {
 
 const renderStTemplate = (template, vars) => {
     let out = String(template || '');
+    const varsLower = (() => {
+        try {
+            const m = Object.create(null);
+            for (const [k, v] of Object.entries(vars || {})) {
+                if (!k) continue;
+                m[String(k).toLowerCase()] = v;
+            }
+            return m;
+        } catch {
+            return Object.create(null);
+        }
+    })();
     // {{#if var}}...{{else}}...{{/if}} (SillyTavern preset format)
     const ifRe = /{{#if\s+([a-zA-Z0-9_]+)\s*}}([\s\S]*?)({{else}}([\s\S]*?))?{{\/if}}/g;
     // Loop to handle multiple blocks (no nesting expected in presets)
     for (let i = 0; i < 100; i++) {
         const next = out.replace(ifRe, (_m, key, ifTrue, _elseBlock, ifFalse) => {
-            return truthy(vars?.[key]) ? ifTrue : (ifFalse || '');
+            const v = (vars && Object.prototype.hasOwnProperty.call(vars, key)) ? vars[key] : varsLower[String(key).toLowerCase()];
+            return truthy(v) ? ifTrue : (ifFalse || '');
         });
         if (next === out) break;
         out = next;
@@ -43,8 +56,11 @@ const renderStTemplate = (template, vars) => {
     // Replace variables {{var}} and {{trim}}
     out = out.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, key) => {
         if (key === 'trim') return '';
-        const v = vars?.[key];
-        return (v === null || v === undefined) ? '' : String(v);
+        const hasDirect = vars && Object.prototype.hasOwnProperty.call(vars, key);
+        const v = hasDirect ? vars[key] : varsLower[String(key).toLowerCase()];
+        // Preserve unknown keys for MacroEngine (e.g. {{USER}}, {{lastUserMessage}}, {{getvar::...}})
+        if (v === null || v === undefined) return `{{${key}}}`;
+        return String(v);
     });
     // Cleanup any leftover trim token and trim surrounding whitespace
     out = out.replace(/{{\s*trim\s*}}/g, '');
@@ -525,7 +541,8 @@ class AppBridge {
         const groupName = String(context?.group?.name || '').trim();
         const groupMemberIds = Array.isArray(context?.group?.members) ? context.group.members.map(String) : [];
         const groupMemberNames = Array.isArray(context?.group?.memberNames) ? context.group.memberNames.map(String) : [];
-        const worldPrompt = isMomentCommentTask ? '' : (() => {
+        const membersText = groupMemberNames.filter(Boolean).join(',');
+        const worldPromptRaw = isMomentCommentTask ? '' : (() => {
             const builtinPart = this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText });
             const globalPart = (this.globalWorldId && String(this.globalWorldId) !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID)
                 ? this.formatWorldPrompt(this.globalWorldId, { matchText })
@@ -544,6 +561,10 @@ class AppBridge {
             const mergedMembers = parts.join('\n\n');
             return [builtinPart, globalPart, mergedMembers].filter(Boolean).join('\n\n');
         })();
+        // Apply MacroEngine to worldbook text too (worldbook entries may include {{user}}/{{char}} etc.)
+        const worldPrompt = worldPromptRaw
+            ? processTextMacrosWithPendingFlag(worldPromptRaw, { user: name1, char: name2, group: groupName || name2, members: membersText })
+            : '';
 
         const presetState = this.presets?.getState?.() || null;
         const useSysprompt = Boolean(presetState?.enabled?.sysprompt);
@@ -582,14 +603,14 @@ class AppBridge {
         // 群聊模式：群聊协议提示词（保存于 sysprompt 预设）
         const groupEnabled = Boolean(syspActive?.group_enabled);
         const groupRulesRaw = (typeof syspActive?.group_rules === 'string') ? syspActive.group_rules : '';
-        const membersText = groupMemberNames.filter(Boolean).join(',');
         const groupRules = processTextMacrosWithPendingFlag(groupRulesRaw, { user: name1, char: name2, group: groupName || name2, members: membersText });
         const groupPosition = Number.isFinite(Number(syspActive?.group_position)) ? Number(syspActive.group_position) : 0;
         const groupDepth = Number.isFinite(Number(syspActive?.group_depth)) ? Math.max(0, Math.trunc(Number(syspActive.group_depth))) : 1;
         const groupRole = Number.isFinite(Number(syspActive?.group_role)) ? Math.trunc(Number(syspActive.group_role)) : 0;
 
         // Formatting helpers from OpenAI preset (optional)
-        const wiFormat = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
+        const wiFormatRaw = (typeof openp?.wi_format === 'string' && openp.wi_format.includes('{0}')) ? openp.wi_format : '{0}';
+        const wiFormat = processTextMacrosWithPendingFlag(wiFormatRaw, { user: name1, char: name2, group: groupName || name2, members: membersText }) || '{0}';
         const scenarioFormat = typeof openp?.scenario_format === 'string' ? openp.scenario_format : '{{scenario}}';
         const personalityFormat = typeof openp?.personality_format === 'string' ? openp.personality_format : '{{personality}}';
 
@@ -786,7 +807,7 @@ class AppBridge {
 
         // 1) Context preset: render story_string as ST-like template
         const combinedStoryString = (ctxp?.story_string && useContext)
-            ? renderStTemplate(ctxp.story_string, vars)
+            ? processTextMacrosWithPendingFlag(renderStTemplate(ctxp.story_string, vars), { user: name1, char: name2, group: groupName || name2, members: membersText })
             : '';
 
         // 2) Place story string according to story_string_position
