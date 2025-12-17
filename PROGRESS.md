@@ -1064,6 +1064,10 @@
     - 存档命名自动追加时间戳后缀（防止混淆）。
     - 切换存档时自动保存当前编辑进度（更新现有存档或新建自动存档）。
     - 历史列表中高亮显示当前正在编辑的存档。
+- 2025-12-17 01:15（核心逻辑 - 变量与宏引擎）
+  - **Macro Engine**：实现 `src/scripts/utils/macro-engine.js`，支持多轮解析与常用指令（`setvar`、`getvar`、`incvar`、`random`、`dice` 等）。
+  - **后端集成**：`ChatStore` 增加变量存储支持；`AppBridge` 集成宏引擎，并在构建 Prompt 时自动处理所有文本（规则、世界书、Prompt Blocks）。
+  - **功能落地**：现在 Prompt 中的 `{{...}}` 将会被动态替换，支持类似 SillyTavern 的高级逻辑与状态记忆。
     - 为 `save_kv` 和 `load_kv` 命令添加详细的终端日志（eprintln），显示文件路径、数据大小、activeProfileId 和 profiles 数量。
   - **修改文件**：
     - `src-tauri/src/commands.rs` (save_kv 函数)：添加 fsync() 调用和日志输出

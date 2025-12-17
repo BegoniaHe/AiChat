@@ -11,6 +11,8 @@ import { RegexStore, regex_placement } from '../storage/regex-store.js';
 import { BUILTIN_PHONE_FORMAT_WORLDBOOK, BUILTIN_PHONE_FORMAT_WORLDBOOK_ID } from '../storage/builtin-worldbooks.js';
 import { logger } from '../utils/logger.js';
 import { retryWithBackoff, isRetryableError } from '../utils/retry.js';
+import { MacroEngine } from '../utils/macro-engine.js';
+
 // 在瀏覽器（開發模式）與 Tauri 環境下兼容的 invoke
 const safeInvoke = async (cmd, args) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
@@ -58,15 +60,6 @@ const renderStTemplate = (template, vars) => {
     return out.trim();
 };
 
-const applyMacros = (text, vars) => {
-    const raw = String(text || '');
-    if (!raw) return '';
-    return raw.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_m, key) => {
-        const v = vars?.[key];
-        return (v === null || v === undefined) ? '' : String(v);
-    });
-};
-
 class AppBridge {
     constructor() {
         this.config = new ConfigManager();
@@ -82,8 +75,24 @@ class AppBridge {
         this.activeSessionId = 'default';
         this.worldSessionMap = this.loadWorldSessionMap();
         this.isGenerating = false;
+        this.chatStore = null; // Injected
+        this.macroEngine = null; // Initialized on setChatStore
         this.hydrateWorldSessionMap();
         this.hydrateGlobalWorldId();
+    }
+
+    setChatStore(store) {
+        this.chatStore = store;
+        this.macroEngine = new MacroEngine(store);
+    }
+
+    processTextMacros(text, extraContext = {}) {
+        if (!this.macroEngine) return text || '';
+        const ctx = {
+            sessionId: this.activeSessionId,
+            ...extraContext
+        };
+        return this.macroEngine.process(text, ctx);
     }
 
     async ensureBuiltinWorldbooks() {
@@ -500,7 +509,7 @@ class AppBridge {
         // ST extension prompt types => IN_PROMPT:0, IN_CHAT:1, BEFORE_PROMPT:2, NONE:-1
         const dialogueEnabled = Boolean(syspActive?.dialogue_enabled);
         const dialogueRulesRaw = (typeof syspActive?.dialogue_rules === 'string') ? syspActive.dialogue_rules : '';
-        const dialogueRules = applyMacros(dialogueRulesRaw, { user: name1, char: name2 });
+        const dialogueRules = this.processTextMacros(dialogueRulesRaw, { user: name1, char: name2 });
         const dialoguePosition = Number.isFinite(Number(syspActive?.dialogue_position)) ? Number(syspActive.dialogue_position) : 0;
         const dialogueDepth = Number.isFinite(Number(syspActive?.dialogue_depth)) ? Math.max(0, Math.trunc(Number(syspActive.dialogue_depth))) : 1;
         const dialogueRole = Number.isFinite(Number(syspActive?.dialogue_role)) ? Math.trunc(Number(syspActive.dialogue_role)) : 0;
@@ -508,7 +517,7 @@ class AppBridge {
         // 动态发布决策提示词（用于私聊/群聊场景）
         const momentCreateEnabled = Boolean(syspActive?.moment_create_enabled);
         const momentCreateRulesRaw = (typeof syspActive?.moment_create_rules === 'string') ? syspActive.moment_create_rules : '';
-        const momentCreateRules = applyMacros(momentCreateRulesRaw, { user: name1, char: name2 });
+        const momentCreateRules = this.processTextMacros(momentCreateRulesRaw, { user: name1, char: name2 });
         const momentCreatePosition = Number.isFinite(Number(syspActive?.moment_create_position)) ? Number(syspActive.moment_create_position) : 0;
         const momentCreateDepth = Number.isFinite(Number(syspActive?.moment_create_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_create_depth))) : 1;
         const momentCreateRole = Number.isFinite(Number(syspActive?.moment_create_role)) ? Math.trunc(Number(syspActive.moment_create_role)) : 0;
@@ -516,7 +525,7 @@ class AppBridge {
         // 动态评论回复提示词（仅用于“动态评论”场景）
         const momentCommentEnabled = Boolean(syspActive?.moment_comment_enabled);
         const momentCommentRulesRaw = (typeof syspActive?.moment_comment_rules === 'string') ? syspActive.moment_comment_rules : '';
-        const momentCommentRules = applyMacros(momentCommentRulesRaw, { user: name1, char: name2 });
+        const momentCommentRules = this.processTextMacros(momentCommentRulesRaw, { user: name1, char: name2 });
         const momentCommentPosition = Number.isFinite(Number(syspActive?.moment_comment_position)) ? Number(syspActive.moment_comment_position) : 0;
         const momentCommentDepth = Number.isFinite(Number(syspActive?.moment_comment_depth)) ? Math.max(0, Math.trunc(Number(syspActive.moment_comment_depth))) : 0;
         const momentCommentRole = Number.isFinite(Number(syspActive?.moment_comment_role)) ? Math.trunc(Number(syspActive.moment_comment_role)) : 0;
@@ -525,7 +534,7 @@ class AppBridge {
         const groupEnabled = Boolean(syspActive?.group_enabled);
         const groupRulesRaw = (typeof syspActive?.group_rules === 'string') ? syspActive.group_rules : '';
         const membersText = groupMemberNames.filter(Boolean).join(',');
-        const groupRules = applyMacros(groupRulesRaw, { user: name1, char: name2, group: groupName || name2, members: membersText });
+        const groupRules = this.processTextMacros(groupRulesRaw, { user: name1, char: name2, group: groupName || name2, members: membersText });
         const groupPosition = Number.isFinite(Number(syspActive?.group_position)) ? Number(syspActive.group_position) : 0;
         const groupDepth = Number.isFinite(Number(syspActive?.group_depth)) ? Math.max(0, Math.trunc(Number(syspActive.group_depth))) : 1;
         const groupRole = Number.isFinite(Number(syspActive?.group_role)) ? Math.trunc(Number(syspActive.group_role)) : 0;
@@ -613,8 +622,8 @@ class AppBridge {
             prompts.forEach(p => { if (p?.identifier) byId.set(p.identifier, p); });
 
             const macroVars = { user: name1, char: name2, scenario: context?.character?.scenario || '', personality: context?.character?.personality || '' };
-            const formatScenario = applyMacros(scenarioFormat, { scenario: macroVars.scenario });
-            const formatPersonality = applyMacros(personalityFormat, { personality: macroVars.personality });
+            const formatScenario = this.processTextMacros(scenarioFormat, { scenario: macroVars.scenario });
+            const formatPersonality = this.processTextMacros(personalityFormat, { personality: macroVars.personality });
             // WORLD_INFO placement for prompt stage (supports promptOnly scripts)
             let worldForPrompt = worldPrompt || '';
             if (worldForPrompt) {
@@ -677,7 +686,7 @@ class AppBridge {
                     if (useSysprompt && sysp?.content) content = sysp.content;
                     else if (context.systemPrompt) content = context.systemPrompt;
                 }
-                content = applyMacros(content, { user: name1, char: name2 });
+                content = this.processTextMacros(content, { user: name1, char: name2 });
                 if (!content) continue;
 
                 const role = String(pr?.role || 'system').toLowerCase();
@@ -698,12 +707,12 @@ class AppBridge {
             user: name1,
             char: name2,
             system: (() => {
-                if (useSysprompt && sysp?.content) return applyMacros(sysp.content, { user: name1, char: name2 });
+                if (useSysprompt && sysp?.content) return this.processTextMacros(sysp.content, { user: name1, char: name2 });
                 return (context.systemPrompt || '');
             })(),
             description: context?.character?.description || '',
-            personality: applyMacros(personalityFormat, { personality: (context?.character?.personality || '') }),
-            scenario: applyMacros(scenarioFormat, { scenario: (context?.character?.scenario || '') }),
+            personality: this.processTextMacros(personalityFormat, { personality: (context?.character?.personality || '') }),
+            scenario: this.processTextMacros(scenarioFormat, { scenario: (context?.character?.scenario || '') }),
             persona: context?.user?.persona || '',
             wiBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
             wiAfter: '',
@@ -828,7 +837,7 @@ class AppBridge {
         // 4) Post-history instructions (sysprompt.post_history)
         const postHistory = useSysprompt ? (sysp?.post_history || '') : '';
         if (postHistory) {
-            const phi = applyMacros(postHistory, { user: name1, char: name2 });
+            const phi = this.processTextMacros(postHistory, { user: name1, char: name2 });
             if (phi) {
                 messages.push({ role: 'user', content: phi });
             }

@@ -62,15 +62,23 @@ export class ChatStore {
     }
 
     _persist() {
-        try {
-            localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
-        } catch (err) {
-            logger.warn('chat store persist -> localStorage failed (quota?)', err);
-        }
-        // 持久化到磁碟（忽略錯誤，以免阻塞 UI）
-        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
-            logger.debug('chat store save_kv failed (可能非 Tauri)', err);
-        });
+        // 1. Fast path: Schedule localStorage shortly (50ms debounce) to skip current frame
+        if (this._lsTimer) clearTimeout(this._lsTimer);
+        this._lsTimer = setTimeout(() => {
+            try {
+                localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+            } catch (err) {
+                logger.warn('chat store persist -> localStorage failed (quota?)', err);
+            }
+        }, 50);
+
+        // 2. Slow path: Schedule disk save (2000ms debounce) to avoid frequent fsync on Android
+        if (this._diskTimer) clearTimeout(this._diskTimer);
+        this._diskTimer = setTimeout(() => {
+            safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+                logger.debug('chat store save_kv failed (可能非 Tauri)', err);
+            });
+        }, 2000);
     }
 
     listSessions() {
@@ -103,7 +111,9 @@ export class ChatStore {
 
     appendMessage(message, id = this.currentId) {
         if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '' };
+            this.state.sessions[id] = { messages: [], draft: '', variables: {} };
+        } else if (!this.state.sessions[id].variables) {
+            this.state.sessions[id].variables = {};
         }
         const msg = ensureId({ ...message });
         this.state.sessions[id].messages.push(msg);
@@ -113,9 +123,25 @@ export class ChatStore {
 
     setDraft(text, id = this.currentId) {
         if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '' };
+            this.state.sessions[id] = { messages: [], draft: '', variables: {} };
         }
         this.state.sessions[id].draft = text;
+        this._persist();
+    }
+
+    getVariable(key, id = this.currentId) {
+        const session = this.state.sessions[id];
+        return session?.variables?.[key];
+    }
+
+    setVariable(key, value, id = this.currentId) {
+        if (!this.state.sessions[id]) {
+            this.state.sessions[id] = { messages: [], draft: '', variables: {} };
+        }
+        if (!this.state.sessions[id].variables) {
+            this.state.sessions[id].variables = {};
+        }
+        this.state.sessions[id].variables[key] = value;
         this._persist();
     }
 

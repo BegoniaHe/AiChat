@@ -30,6 +30,7 @@ const initApp = async () => {
     const presetPanel = new PresetPanel();
     const regexPanel = new RegexPanel();
     const chatStore = new ChatStore();
+    window.appBridge.setChatStore(chatStore);
     const contactsStore = new ContactsStore();
     const groupStore = new GroupStore();
     const momentsStore = new MomentsStore();
