@@ -1090,3 +1090,8 @@
     - `PersonaPanel` 顶部显示当前会话锁定状态，并支持一键解除；列表中新增 🔒 按钮可将某 persona 锁定到当前会话（再次点击可解除）。
   - **手机适配修复**：`PersonaPanel` 设为 `position: relative`，避免编辑视图 `position:absolute` 锚定到 viewport 导致返回按钮靠边难点/点不到；同时缩小弹窗尺寸并扩大返回按钮点击热区。
   - **localStorage 超额降级**：对 `ChatStore/ContactsStore/MomentsStore` 增加 QuotaExceededError 探测；一旦触发则停止写 localStorage（仅提示一次），继续使用 Tauri KV 持久化（解释“看到 storage 失败但重启没丢数据”的原因）。
+  - **批量 Persona 锁定**：点击 Persona 列表的 🔒 打开“联系人/群组”选择弹窗，支持搜索、全选/全不选，统一保存绑定状态（批量绑定/解绑）。
+  - **缓解断网/更新跳回默认**：
+    - UI 状态保存/恢复：用 `sessionStorage` 记住当前页签/是否在聊天室/当前会话，页面重载后自动恢复。
+    - 草稿保护：输入框实时镜像到 `sessionStorage`，避免热更新/意外重载丢最后几次输入。
+    - invoke 延迟等待：`ChatStore/ContactsStore/MomentsStore` 在检测到 `__TAURI__` 存在但 invoke 尚未就绪时短暂等待，减少“只剩默认会话”的概率。

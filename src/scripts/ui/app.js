@@ -147,6 +147,7 @@ const initApp = async () => {
     const personaPanel = new PersonaPanel({
         personaStore,
         chatStore,
+        contactsStore,
         getSessionId: () => chatStore.getCurrent(),
         onPersonaChanged: () => {
             syncUserPersonaUI(chatStore.getCurrent());
@@ -681,7 +682,52 @@ ${listPart || '-（无）'}
         contacts: document.getElementById('contacts-page'),
         moments: document.getElementById('moments-page')
     };
+    const chatList = document.getElementById('chat-list');
+    const chatRoom = document.getElementById('chat-room');
     let activePage = 'chat';
+    const UI_STATE_KEY = 'phone_ui_state_v1';
+    let uiStateArmed = false;
+    const saveUiState = () => {
+        try {
+            const state = {
+                activePage,
+                inChatRoom: chatRoom ? !chatRoom.classList.contains('hidden') : false,
+                sessionId: chatStore.getCurrent(),
+                at: Date.now(),
+            };
+            sessionStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+        } catch {}
+    };
+    const restoreUiState = () => {
+        try {
+            const raw = sessionStorage.getItem(UI_STATE_KEY);
+            if (!raw) return false;
+            const s = JSON.parse(raw);
+            const page = String(s?.activePage || '').trim();
+            const sid = String(s?.sessionId || '').trim();
+            const inChatRoom = Boolean(s?.inChatRoom);
+            if (page && pages[page]) switchPage(page);
+            if (sid) {
+                // ensure session exists
+                chatStore.switchSession(sid);
+                window.appBridge.setActiveSession(sid);
+                syncUserPersonaUI(sid);
+                const msgs = chatStore.getMessages(sid);
+                const draft = chatStore.getDraft(sid);
+                ui.clearMessages();
+                ui.preloadHistory(decorateMessagesForDisplay(msgs));
+                ui.setInputText(draft || '');
+                ui.setSessionLabel(sid);
+            }
+            if (inChatRoom && sid) {
+                const c = contactsStore.getContact(sid);
+                enterChatRoom(sid, c?.name || sid, page || 'chat');
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    };
     const switchPage = (name) => {
         activePage = name;
         navBtns.forEach(t => t.classList.toggle('active', t.dataset.page === name));
@@ -696,12 +742,28 @@ ${listPart || '-（无）'}
         if (name === 'moments') {
             try { momentsPanel.render(); } catch {}
         }
+        if (uiStateArmed) saveUiState();
     };
     navBtns.forEach(btn => btn.addEventListener('click', () => switchPage(btn.dataset.page)));
     switchPage('chat');
 
     // 搜索框初始化（仅联系人页）
     initContactSearch();
+
+    // Mirror composer draft to sessionStorage to avoid losing the last few keystrokes on reload/update.
+    try {
+        const el = document.getElementById('composer-input');
+        if (el && !el.hasAttribute('data-draft-mirror')) {
+            el.setAttribute('data-draft-mirror', 'true');
+            el.addEventListener('input', () => {
+                const sid = chatStore.getCurrent();
+                const text = String(el.value || '');
+                const maxLen = 20_000;
+                const trimmed = text.length > maxLen ? text.slice(-maxLen) : text;
+                try { sessionStorage.setItem(`phone_draft_${sid}`, trimmed); } catch {}
+            });
+        }
+    } catch {}
 
     /* ---------------- 原始回复面板（调试） ---------------- */
     const rawReplyModal = (() => {
@@ -913,8 +975,6 @@ ${listPart || '-（无）'}
     const plusBtns = document.querySelectorAll('.qq-message-topbar .icon-button');
     const chatMenuBtn = document.getElementById('chat-menu-btn');
     const chatroomMenu = document.getElementById('chatroom-menu');
-    const chatList = document.getElementById('chat-list');
-    const chatRoom = document.getElementById('chat-room');
 
     // Chat settings modal elements
     const chatSettingsModal = document.getElementById('chat-settings-modal');
@@ -1190,8 +1250,17 @@ ${listPart || '-（无）'}
         ui.clearMessages();
         history.forEach(msg => ui.addMessage(msg));
         const draft = chatStore.getDraft(sessionId);
-        ui.setInputText(draft || '');
+        if (draft) {
+            ui.setInputText(draft);
+        } else {
+            // Fallback: sessionStorage draft mirror (survives hot reload)
+            try {
+                const tmp = sessionStorage.getItem(`phone_draft_${sessionId}`) || '';
+                if (tmp) ui.setInputText(tmp);
+            } catch {}
+        }
         ui.setSessionLabel(sessionId);
+        if (uiStateArmed) saveUiState();
     };
 
     const exitChatRoom = () => {
@@ -1208,6 +1277,7 @@ ${listPart || '-（无）'}
             switchPage(chatOriginPage);
         }
         chatOriginPage = 'chat';
+        if (uiStateArmed) saveUiState();
     };
 
     backToListBtn?.addEventListener('click', exitChatRoom);
@@ -1970,6 +2040,9 @@ ${listPart || '-（无）'}
 
     updateWorldIndicator();
     refreshChatAndContacts();
+    try { restoreUiState(); } catch {}
+    uiStateArmed = true;
+    try { saveUiState(); } catch {}
 
     function handleSticker(tag) {
         const sessionId = chatStore.getCurrent();

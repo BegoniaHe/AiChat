@@ -2,9 +2,10 @@
 import { MediaPicker } from './media-picker.js';
 
 export class PersonaPanel {
-    constructor({ personaStore, chatStore = null, getSessionId = null, onPersonaChanged }) {
+    constructor({ personaStore, chatStore = null, contactsStore = null, getSessionId = null, onPersonaChanged }) {
         this.store = personaStore;
         this.chatStore = chatStore;
+        this.contactsStore = contactsStore;
         this.getSessionId = typeof getSessionId === 'function' ? getSessionId : null;
         this.onPersonaChanged = onPersonaChanged;
         this.overlay = null;
@@ -14,6 +15,8 @@ export class PersonaPanel {
             onFile: (dataUrl) => this.updateAvatarPreview(dataUrl)
         });
         this.editingId = null;
+        this.bulkModal = null;
+        this.bulkState = null;
     }
 
     ensureUI() {
@@ -155,6 +158,266 @@ export class PersonaPanel {
         this.panel.querySelector('#edit-position').addEventListener('change', () => this.updateInjectionUi());
     }
 
+    ensureBulkModal() {
+        if (this.bulkModal) return;
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            display:none; position:fixed; inset:0;
+            background: rgba(0,0,0,0.38);
+            z-index: 22050;
+            padding: calc(10px + env(safe-area-inset-top, 0px)) 10px calc(10px + env(safe-area-inset-bottom, 0px)) 10px;
+            box-sizing: border-box;
+        `;
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) this.hideBulkModal();
+        });
+
+        const panel = document.createElement('div');
+        panel.style.cssText = `
+            width: min(96vw, 520px);
+            height: min(86vh, 720px);
+            background: #fff;
+            border-radius: 14px;
+            overflow: hidden;
+            display:flex;
+            flex-direction:column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.18);
+        `;
+        panel.addEventListener('click', (e) => e.stopPropagation());
+
+        panel.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px; padding:12px; background:#f3f4f6; border-bottom:1px solid #e5e7eb;">
+                <button id="persona-bulk-back" style="width:44px; height:44px; border:none; background:transparent; border-radius:12px; font-size:22px; display:flex; align-items:center; justify-content:center; cursor:pointer;">←</button>
+                <div style="font-weight:900;">批量绑定/解绑</div>
+                <div id="persona-bulk-meta" style="margin-left:auto; font-size:12px; color:#64748b; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+            </div>
+
+            <div style="padding:10px 12px; border-bottom:1px solid rgba(0,0,0,0.06);">
+                <div id="persona-bulk-search-box" style="display:flex; align-items:center; gap:8px; padding:10px 12px; border:1px solid rgba(0,0,0,0.10); border-radius:14px; background:#fff;">
+                    <input id="persona-bulk-search" type="text" placeholder="搜索联系人/群组..." style="flex:1; border:none; outline:none; font-size:14px; background:transparent;">
+                    <button id="persona-bulk-clear" type="button" aria-label="清除搜索" style="display:none; width:32px; height:32px; border:none; border-radius:10px; background:#f1f5f9; cursor:pointer;">×</button>
+                </div>
+                <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+                    <button id="persona-bulk-select-all" style="border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:8px 10px; font-size:13px; cursor:pointer;">全选</button>
+                    <button id="persona-bulk-select-none" style="border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:8px 10px; font-size:13px; cursor:pointer;">全不选</button>
+                    <div id="persona-bulk-count" style="margin-left:auto; color:#64748b; font-size:12px;"></div>
+                </div>
+            </div>
+
+            <div id="persona-bulk-list" style="flex:1; min-height:0; overflow:auto; -webkit-overflow-scrolling:touch; padding:10px 12px;"></div>
+
+            <div style="padding:12px; border-top:1px solid rgba(0,0,0,0.08); display:flex; gap:10px;">
+                <button id="persona-bulk-cancel" style="flex:1; border:1px solid #e2e8f0; background:#fff; border-radius:12px; padding:12px; font-weight:700; cursor:pointer;">取消</button>
+                <button id="persona-bulk-save" style="flex:2; border:none; background:#2563eb; color:#fff; border-radius:12px; padding:12px; font-weight:900; cursor:pointer;">保存绑定</button>
+            </div>
+        `;
+
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        const q = (sel) => panel.querySelector(sel);
+        q('#persona-bulk-back')?.addEventListener('click', () => this.hideBulkModal());
+        q('#persona-bulk-cancel')?.addEventListener('click', () => this.hideBulkModal());
+        q('#persona-bulk-save')?.addEventListener('click', () => this.applyBulkModal());
+
+        const searchEl = q('#persona-bulk-search');
+        const clearEl = q('#persona-bulk-clear');
+        const updateSearch = (val) => {
+            if (!this.bulkState) return;
+            this.bulkState.term = String(val || '');
+            const has = this.bulkState.term.trim().length > 0;
+            if (clearEl) clearEl.style.display = has ? 'block' : 'none';
+            this.renderBulkList();
+        };
+        searchEl?.addEventListener('input', (e) => updateSearch(e.target.value));
+        searchEl?.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (searchEl) searchEl.value = '';
+                updateSearch('');
+            }
+        });
+        clearEl?.addEventListener('click', () => {
+            if (searchEl) searchEl.value = '';
+            updateSearch('');
+            searchEl?.focus?.();
+        });
+        q('#persona-bulk-select-all')?.addEventListener('click', () => this.bulkSelectAll(true));
+        q('#persona-bulk-select-none')?.addEventListener('click', () => this.bulkSelectAll(false));
+
+        this.bulkModal = { overlay, panel };
+    }
+
+    hideBulkModal() {
+        if (!this.bulkModal) return;
+        this.bulkModal.overlay.style.display = 'none';
+        this.bulkState = null;
+    }
+
+    getBulkSessions() {
+        const ids = new Set();
+        try {
+            (this.contactsStore?.listContacts?.() || []).forEach((c) => {
+                if (c?.id) ids.add(String(c.id));
+            });
+        } catch {}
+        try {
+            (this.chatStore?.listSessions?.() || []).forEach((id) => ids.add(String(id)));
+        } catch {}
+        return [...ids].filter(Boolean);
+    }
+
+    openBulkModal(personaId) {
+        if (!this.chatStore) {
+            window.toastr?.warning?.('当前环境不支持会话绑定（缺少 chatStore）');
+            return;
+        }
+        this.ensureBulkModal();
+        const p = this.store.get(personaId);
+        if (!p) return;
+
+        // Ensure contacts include all sessions (best-effort)
+        try { this.contactsStore?.ensureFromSessions?.(this.chatStore.listSessions?.() || [], { defaultAvatar: '' }); } catch {}
+
+        const sessionIds = this.getBulkSessions();
+        const bound = new Set();
+        sessionIds.forEach((sid) => {
+            const lock = this.chatStore.getPersonaLock?.(sid);
+            if (lock && String(lock) === String(personaId)) bound.add(String(sid));
+        });
+
+        this.bulkState = {
+            personaId: String(personaId),
+            personaName: String(p.name || '').trim() || personaId,
+            term: '',
+            sessionIds,
+            selected: new Set(bound),
+        };
+
+        const metaEl = this.bulkModal.panel.querySelector('#persona-bulk-meta');
+        if (metaEl) metaEl.textContent = `Persona：${this.bulkState.personaName}`;
+
+        this.renderBulkList();
+        this.bulkModal.overlay.style.display = 'block';
+        this.bulkModal.panel.querySelector('#persona-bulk-search')?.focus?.();
+    }
+
+    bulkSelectAll(next) {
+        if (!this.bulkState) return;
+        const want = Boolean(next);
+        if (want) this.bulkState.sessionIds.forEach((id) => this.bulkState.selected.add(String(id)));
+        else this.bulkState.selected.clear();
+        this.renderBulkList();
+    }
+
+    renderBulkList() {
+        if (!this.bulkModal || !this.bulkState) return;
+        const listEl = this.bulkModal.panel.querySelector('#persona-bulk-list');
+        const countEl = this.bulkModal.panel.querySelector('#persona-bulk-count');
+        if (!listEl) return;
+
+        const term = String(this.bulkState.term || '').trim().toLowerCase();
+        const items = this.bulkState.sessionIds
+            .map((id) => {
+                const c = this.contactsStore?.getContact?.(id) || null;
+                const name = String(c?.name || id).trim();
+                const avatar = String(c?.avatar || '').trim();
+                const isGroup = Boolean(c?.isGroup) || String(id).startsWith('group:');
+                return { id: String(id), name, avatar, isGroup };
+            })
+            .filter((it) => {
+                if (!term) return true;
+                const hay = `${it.name} ${it.id}`.toLowerCase();
+                return hay.includes(term);
+            })
+            .sort((a, b) => {
+                // Prefer groups first, then name
+                const ga = a.isGroup ? 0 : 1;
+                const gb = b.isGroup ? 0 : 1;
+                if (ga !== gb) return ga - gb;
+                return a.name.localeCompare(b.name);
+            });
+
+        listEl.innerHTML = '';
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'padding:18px 10px; color:#94a3b8; text-align:center;';
+            empty.textContent = '未找到匹配的联系人/群组';
+            listEl.appendChild(empty);
+        } else {
+            items.forEach((it) => {
+                const checked = this.bulkState.selected.has(it.id);
+                const row = document.createElement('div');
+                row.style.cssText = `
+                    display:flex; align-items:center; gap:10px;
+                    padding:10px 10px;
+                    border: 1px solid rgba(0,0,0,0.06);
+                    border-radius: 12px;
+                    margin-bottom: 8px;
+                    background: ${checked ? 'rgba(37,99,235,0.06)' : '#fff'};
+                `;
+                const avatarUrl = it.avatar || (it.isGroup ? './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp' : './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png');
+                row.innerHTML = `
+                    <input class="persona-bulk-check" type="checkbox" ${checked ? 'checked' : ''} style="width:18px; height:18px;">
+                    <img src="${avatarUrl}" alt="" style="width:36px; height:36px; border-radius:12px; object-fit:cover; background:#eee;">
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:800; color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                            ${it.name}${it.isGroup ? ' · 群组' : ''}
+                        </div>
+                        <div style="color:#64748b; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${it.id}</div>
+                    </div>
+                `;
+                const checkbox = row.querySelector('.persona-bulk-check');
+                const toggle = () => {
+                    const next = !this.bulkState.selected.has(it.id);
+                    if (next) this.bulkState.selected.add(it.id);
+                    else this.bulkState.selected.delete(it.id);
+                    this.renderBulkList();
+                };
+                row.addEventListener('click', (e) => {
+                    if (e.target === checkbox) return;
+                    toggle();
+                });
+                checkbox?.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggle();
+                });
+                listEl.appendChild(row);
+            });
+        }
+        if (countEl) countEl.textContent = `已选 ${this.bulkState.selected.size} / ${this.bulkState.sessionIds.length}`;
+    }
+
+    applyBulkModal() {
+        if (!this.bulkState || !this.chatStore) return;
+        const personaId = this.bulkState.personaId;
+        const selected = this.bulkState.selected;
+        const ids = this.bulkState.sessionIds;
+
+        let changed = 0;
+        ids.forEach((sid) => {
+            const id = String(sid);
+            const want = selected.has(id);
+            const cur = String(this.chatStore.getPersonaLock?.(id) || '');
+            if (want) {
+                if (cur !== personaId) {
+                    this.chatStore.setPersonaLock?.(id, personaId);
+                    changed++;
+                }
+            } else {
+                if (cur === personaId) {
+                    this.chatStore.clearPersonaLock?.(id);
+                    changed++;
+                }
+            }
+        });
+
+        window.toastr?.success?.(`已应用 ${changed} 项绑定变更`);
+        this.hideBulkModal();
+        this.renderList();
+        if (this.onPersonaChanged) this.onPersonaChanged();
+    }
+
     updateInjectionUi() {
         const posEl = this.panel?.querySelector?.('#edit-position');
         const wrap = this.panel?.querySelector?.('#edit-depth-wrap');
@@ -284,7 +547,7 @@ export class PersonaPanel {
                     <div style="font-weight: bold; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${p.name}</div>
                     <div style="font-size: 12px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${p.description || '暂无描述'}</div>
                 </div>
-                ${sessionId ? `<button class="lock-btn" title="锁定到当前会话" style="padding: 8px; border: none; background: transparent; color: ${isLockedForSession ? '#0f172a' : '#999'}; cursor: pointer; font-size: 16px;">🔒</button>` : ''}
+                ${this.chatStore ? `<button class="bulk-lock-btn" title="批量绑定/解绑联系人（含群组）" style="padding: 8px; border: none; background: transparent; color: ${isLockedForSession ? '#0f172a' : '#999'}; cursor: pointer; font-size: 16px;">🔒</button>` : ''}
                 <button class="edit-btn" style="
                     padding: 8px; border: none; background: transparent; color: #999; cursor: pointer;
                     font-size: 16px;
@@ -294,25 +557,16 @@ export class PersonaPanel {
             // Click item to switch
             item.addEventListener('click', async (e) => {
                 // Ignore if clicked edit button
-                if (e.target.closest('.edit-btn') || e.target.closest('.lock-btn')) return;
+                if (e.target.closest('.edit-btn') || e.target.closest('.bulk-lock-btn')) return;
                 await this.store.setActive(p.id);
                 this.renderList();
                 if (this.onPersonaChanged) this.onPersonaChanged();
             });
 
-            // Lock to current session
-            item.querySelector('.lock-btn')?.addEventListener('click', (e) => {
+            // Bulk lock/unlock to sessions
+            item.querySelector('.bulk-lock-btn')?.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const sid = this.getCurrentSessionId();
-                if (!sid) return;
-                const curLock = this.getSessionLockPersonaId(sid);
-                if (curLock && curLock === p.id) {
-                    this.clearSessionLockPersonaId(sid);
-                } else {
-                    this.setSessionLockPersonaId(sid, p.id);
-                }
-                this.renderList();
-                if (this.onPersonaChanged) this.onPersonaChanged();
+                this.openBulkModal(p.id);
             });
 
             // Click edit button

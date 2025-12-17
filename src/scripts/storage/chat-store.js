@@ -18,12 +18,27 @@ const isQuotaError = (err) => {
     }
 };
 
-const safeInvoke = async (cmd, args) => {
+const getInvoker = () => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
-    const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
-    if (typeof invoker !== 'function') {
-        throw new Error('Tauri invoke not available');
+    return g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
+};
+
+const waitForInvoker = async (timeoutMs = 1200) => {
+    const g = typeof globalThis !== 'undefined' ? globalThis : window;
+    // In plain browser dev mode, don't wait.
+    if (!g?.__TAURI__) return null;
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        const inv = getInvoker();
+        if (typeof inv === 'function') return inv;
+        await new Promise(r => setTimeout(r, 50));
     }
+    return null;
+};
+
+const safeInvoke = async (cmd, args) => {
+    const invoker = getInvoker() || await waitForInvoker();
+    if (typeof invoker !== 'function') throw new Error('Tauri invoke not available');
     return invoker(cmd, args);
 };
 
