@@ -112,6 +112,19 @@ const DEFAULT_MOMENT_COMMENT_RULES = `
 - 本场景不要输出私聊/群聊标签块（只输出评论回复）。
 `.trim();
 
+// 摘要提示词：每次回覆末尾输出 <details><summary>摘要</summary>...</details>（纯中文）
+const DEFAULT_SUMMARY_RULES = [
+    '每次输出结束后，**紧跟着**以一句话概括本次互动的摘要，确保<details><summary>摘要</summary>',
+    '<内容>',
+    '</details>标签顺序正确，摘要**纯中文输出**，不得夹杂其它语言',
+    '[summary_format]',
+    '摘要格式示例：',
+    '',
+    '<details><summary>摘要</summary>',
+    '',
+    '用一句话概括本条回复的内容，禁止不必要的总结和升华',
+].join('\n').trim();
+
 const clone = (v) => {
     try {
         return structuredClone(v);
@@ -223,8 +236,8 @@ export class PresetStore {
             for (const p of Object.values(state.presets.sysprompt || {})) {
                 if (!p || typeof p !== 'object') continue;
                 if (typeof p.dialogue_enabled !== 'boolean') p.dialogue_enabled = true;
-                // 聊天提示词：默认不放在 prompt 开头，改为类似世界书的 system 深度=1 注入（IN_CHAT）
-                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 1;
+                // 聊天提示词：固定注入到系统深度=1（历史前），避免混入 <history>
+                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 3;
                 if (typeof p.dialogue_depth !== 'number') p.dialogue_depth = 1;
                 if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0;
                 if (typeof p.dialogue_rules !== 'string' || !p.dialogue_rules.trim()) {
@@ -256,12 +269,18 @@ export class PresetStore {
                 }
 
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
-                // 群聊提示词：同上（IN_CHAT, system 深度=1）
-                if (typeof p.group_position !== 'number') p.group_position = 1;
+                // 群聊提示词：同上（系统深度=1）
+                if (typeof p.group_position !== 'number') p.group_position = 3;
                 if (typeof p.group_depth !== 'number') p.group_depth = 1;
                 if (typeof p.group_role !== 'number') p.group_role = 0;
                 if (typeof p.group_rules !== 'string' || !p.group_rules.trim()) {
                     p.group_rules = DEFAULT_GROUP_RULES;
+                }
+
+                if (typeof p.summary_enabled !== 'boolean') p.summary_enabled = true;
+                if (typeof p.summary_position !== 'number') p.summary_position = 3;
+                if (typeof p.summary_rules !== 'string' || !p.summary_rules.trim()) {
+                    p.summary_rules = DEFAULT_SUMMARY_RULES;
                 }
             }
             await this.persist(state);
@@ -289,7 +308,9 @@ export class PresetStore {
             for (const p of Object.values(state.presets.sysprompt || {})) {
                 if (!p || typeof p !== 'object') continue;
                 if (typeof p.dialogue_enabled !== 'boolean') p.dialogue_enabled = true; // 聊天室自动启用
-                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 1; // IN_CHAT
+                // 私聊提示词：迁移为系统深度=1（历史前）
+                if (typeof p.dialogue_position !== 'number') p.dialogue_position = 3;
+                else if (p.dialogue_position === 0 || p.dialogue_position === 1 || p.dialogue_position === 2) p.dialogue_position = 3;
                 if (typeof p.dialogue_depth !== 'number') p.dialogue_depth = 1;
                 if (typeof p.dialogue_role !== 'number') p.dialogue_role = 0; // SYSTEM
                 const rules = (typeof p.dialogue_rules === 'string') ? p.dialogue_rules : '';
@@ -335,13 +356,22 @@ export class PresetStore {
                 }
 
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
-                if (typeof p.group_position !== 'number') p.group_position = 1; // IN_CHAT
+                // 群聊提示词：迁移为系统深度=1（历史前）
+                if (typeof p.group_position !== 'number') p.group_position = 3;
+                else if (p.group_position === 0 || p.group_position === 1 || p.group_position === 2) p.group_position = 3;
                 if (typeof p.group_depth !== 'number') p.group_depth = 1;
                 if (typeof p.group_role !== 'number') p.group_role = 0;
                 const gr = (typeof p.group_rules === 'string') ? p.group_rules : '';
                 const looksDupGroupDefault = gr.includes('<QQ聊天格式介绍>') || (gr.includes('格式示例如') && gr.includes('<群聊:'));
                 if (typeof p.group_rules !== 'string' || !p.group_rules.trim() || looksDupGroupDefault) {
                     p.group_rules = DEFAULT_GROUP_RULES;
+                }
+
+                if (typeof p.summary_enabled !== 'boolean') p.summary_enabled = true;
+                if (typeof p.summary_position !== 'number') p.summary_position = 3;
+                else if (p.summary_position === 0 || p.summary_position === 1 || p.summary_position === 2) p.summary_position = 3;
+                if (typeof p.summary_rules !== 'string' || !p.summary_rules.trim()) {
+                    p.summary_rules = DEFAULT_SUMMARY_RULES;
                 }
             }
             await this.persist(state);

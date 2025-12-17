@@ -33,6 +33,7 @@ const EXT_PROMPT_TYPES = {
     IN_PROMPT: 0,
     IN_CHAT: 1,
     BEFORE_PROMPT: 2,
+    SYSTEM_DEPTH_1: 3, // 固定：history 后（<chat_guide>）
 };
 
 const EXT_PROMPT_ROLES = {
@@ -748,7 +749,7 @@ export class PresetPanel {
     renderChatPromptsEditor(p) {
         const wrap = this.renderSection(
             '聊天提示词（对话模式）',
-            '私聊/动态提示词都放在这里，区块默认折叠；注入位置/深度语义与 ST 相同。'
+            '私聊/群聊/动态提示词都放在这里；其中“私聊/群聊/摘要”固定注入到系统深度=1（历史前，且摘要在聊天提示词下方），避免混入 <history>。'
         );
 
         const list = document.createElement('div');
@@ -766,6 +767,8 @@ export class PresetPanel {
             defaultDepth,
             enabledLabel,
             placeholder,
+            positionOptions = null,
+            showDepthRole = true,
         }) => {
             const card = document.createElement('div');
             card.style.cssText = `
@@ -809,13 +812,17 @@ export class PresetPanel {
             const pos = document.createElement('select');
             pos.id = `${idPrefix}-position`;
             pos.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-            pos.innerHTML = `
-                <option value="${EXT_PROMPT_TYPES.IN_PROMPT}">IN_PROMPT（系统开头）</option>
-                <option value="${EXT_PROMPT_TYPES.IN_CHAT}">IN_CHAT（按深度插入历史）</option>
-                <option value="${EXT_PROMPT_TYPES.BEFORE_PROMPT}">BEFORE_PROMPT（最前）</option>
-                <option value="${EXT_PROMPT_TYPES.NONE}">NONE（不注入）</option>
-            `;
-            pos.value = String(p[positionKey] ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            const opts = Array.isArray(positionOptions) && positionOptions.length
+                ? positionOptions
+                : [
+                    { v: EXT_PROMPT_TYPES.IN_PROMPT, t: 'IN_PROMPT（系统开头）' },
+                    { v: EXT_PROMPT_TYPES.IN_CHAT, t: 'IN_CHAT（按深度插入历史）' },
+                    { v: EXT_PROMPT_TYPES.BEFORE_PROMPT, t: 'BEFORE_PROMPT（最前）' },
+                    { v: EXT_PROMPT_TYPES.NONE, t: 'NONE（不注入）' },
+                ];
+            pos.innerHTML = opts.map(o => `<option value="${o.v}">${o.t}</option>`).join('');
+            const fallbackPos = opts.some(o => o.v === EXT_PROMPT_TYPES.SYSTEM_DEPTH_1) ? EXT_PROMPT_TYPES.SYSTEM_DEPTH_1 : EXT_PROMPT_TYPES.IN_PROMPT;
+            pos.value = String(p[positionKey] ?? fallbackPos);
 
             const depth = document.createElement('input');
             depth.id = `${idPrefix}-depth`;
@@ -835,11 +842,21 @@ export class PresetPanel {
             `;
             role.value = String(p[roleKey] ?? EXT_PROMPT_ROLES.SYSTEM);
 
-            body.appendChild(this.renderInputRow([
-                { label: '注入位置', el: pos },
-                { label: '深度（IN_CHAT）', el: depth },
-                { label: '角色（IN_CHAT）', el: role },
-            ]));
+            if (showDepthRole) {
+                body.appendChild(this.renderInputRow([
+                    { label: '注入位置', el: pos },
+                    { label: '深度（IN_CHAT）', el: depth },
+                    { label: '角色（IN_CHAT）', el: role },
+                ]));
+            } else {
+                depth.disabled = true;
+                role.disabled = true;
+                body.appendChild(this.renderInputRow([
+                    { label: '注入位置', el: pos },
+                    { label: '深度（固定）', el: depth },
+                    { label: '角色（固定）', el: role },
+                ]));
+            }
 
             const ta = this.renderTextarea('规则内容（纯文本）', `${idPrefix}-rules`, p[rulesKey] || '', placeholder);
             body.appendChild(ta);
@@ -885,6 +902,11 @@ export class PresetPanel {
             defaultDepth: 1,
             enabledLabel: '启用',
             placeholder: '私聊协议提示词（<content> + 私聊标签 + - 行）',
+            positionOptions: [
+                { v: EXT_PROMPT_TYPES.SYSTEM_DEPTH_1, t: 'SYSTEM_DEPTH_1（紧跟 chat history，<chat_guide>）' },
+                { v: EXT_PROMPT_TYPES.NONE, t: 'NONE（不注入）' },
+            ],
+            showDepthRole: false,
         }));
         list.appendChild(makePromptBlock({
             idPrefix: 'moment',
@@ -924,6 +946,30 @@ export class PresetPanel {
             defaultDepth: 1,
             enabledLabel: '启用',
             placeholder: '群聊协议提示词（<content> + <群聊:群名字> + 发言人--内容--HH:MM）',
+            positionOptions: [
+                { v: EXT_PROMPT_TYPES.SYSTEM_DEPTH_1, t: 'SYSTEM_DEPTH_1（紧跟 chat history，<chat_guide>）' },
+                { v: EXT_PROMPT_TYPES.NONE, t: 'NONE（不注入）' },
+            ],
+            showDepthRole: false,
+        }));
+
+        list.appendChild(makePromptBlock({
+            idPrefix: 'summary',
+            title: '摘要提示词',
+            subtitle: '固定注入到系统深度=1（位于聊天提示词下方）；用于要求模型在回覆末尾输出 <details><summary>摘要</summary>...</details>',
+            enabledKey: 'summary_enabled',
+            positionKey: 'summary_position',
+            depthKey: 'summary_depth',
+            roleKey: 'summary_role',
+            rulesKey: 'summary_rules',
+            defaultDepth: 1,
+            enabledLabel: '启用',
+            placeholder: '每次输出结束后，紧跟着输出纯中文摘要（details/summary 格式）',
+            positionOptions: [
+                { v: EXT_PROMPT_TYPES.SYSTEM_DEPTH_1, t: 'SYSTEM_DEPTH_1（紧跟 chat history，<chat_guide>）' },
+                { v: EXT_PROMPT_TYPES.NONE, t: 'NONE（不注入）' },
+            ],
+            showDepthRole: false,
         }));
 
         wrap.appendChild(list);
@@ -1446,7 +1492,7 @@ export class PresetPanel {
 
         if (this.activeType === 'chatprompts') {
             current.dialogue_enabled = Boolean(root.querySelector('#dialogue-enabled')?.checked);
-            current.dialogue_position = getInt(root.querySelector('#dialogue-position')?.value, current.dialogue_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            current.dialogue_position = getInt(root.querySelector('#dialogue-position')?.value, current.dialogue_position ?? EXT_PROMPT_TYPES.SYSTEM_DEPTH_1);
             current.dialogue_depth = getInt(root.querySelector('#dialogue-depth')?.value, current.dialogue_depth ?? 1);
             current.dialogue_role = getInt(root.querySelector('#dialogue-role')?.value, current.dialogue_role ?? EXT_PROMPT_ROLES.SYSTEM);
             current.dialogue_rules = root.querySelector('#dialogue-rules')?.value ?? '';
@@ -1464,10 +1510,14 @@ export class PresetPanel {
             current.moment_comment_rules = root.querySelector('#moment-comment-rules')?.value ?? '';
 
             current.group_enabled = Boolean(root.querySelector('#group-enabled')?.checked);
-            current.group_position = getInt(root.querySelector('#group-position')?.value, current.group_position ?? EXT_PROMPT_TYPES.IN_PROMPT);
+            current.group_position = getInt(root.querySelector('#group-position')?.value, current.group_position ?? EXT_PROMPT_TYPES.SYSTEM_DEPTH_1);
             current.group_depth = getInt(root.querySelector('#group-depth')?.value, current.group_depth ?? 1);
             current.group_role = getInt(root.querySelector('#group-role')?.value, current.group_role ?? EXT_PROMPT_ROLES.SYSTEM);
             current.group_rules = root.querySelector('#group-rules')?.value ?? '';
+
+            current.summary_enabled = Boolean(root.querySelector('#summary-enabled')?.checked);
+            current.summary_position = getInt(root.querySelector('#summary-position')?.value, current.summary_position ?? EXT_PROMPT_TYPES.SYSTEM_DEPTH_1);
+            current.summary_rules = root.querySelector('#summary-rules')?.value ?? '';
             return current;
         }
 

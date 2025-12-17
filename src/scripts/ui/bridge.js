@@ -690,9 +690,62 @@ class AppBridge {
     const personalityFormat =
       typeof openp?.personality_format === 'string' ? openp.personality_format : '{{personality}}';
 
-    // When OpenAI preset has prompt_order: use ST-like block ordering (drag & drop in UI)
-	    const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
-	    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
+	    // When OpenAI preset has prompt_order: use ST-like block ordering (drag & drop in UI)
+		    const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
+
+	    // 摘要提示词：移入“聊天提示词”区块管理，并固定在系统深度=1（历史前）的位置
+	    const summaryPosition = (() => {
+	      if (!useSysprompt) return 3;
+	      if (!syspActive || typeof syspActive !== 'object') return 3;
+	      const n = Number(syspActive.summary_position);
+	      return Number.isFinite(n) ? n : 3;
+	    })();
+	    const summaryEnabled = (() => {
+	      if (summaryPosition === -1) return false;
+	      if (!useSysprompt) return true;
+	      if (!syspActive || typeof syspActive !== 'object') return true;
+	      return syspActive.summary_enabled !== false;
+	    })();
+	    const summaryRulesRaw = (() => {
+	      if (!useSysprompt) return SUMMARY_REQUEST_NOTICE;
+	      if (!syspActive || typeof syspActive !== 'object') return SUMMARY_REQUEST_NOTICE;
+	      const raw = typeof syspActive.summary_rules === 'string' ? syspActive.summary_rules : '';
+	      return raw.trim() ? raw : SUMMARY_REQUEST_NOTICE;
+	    })();
+	    const summaryRules = summaryEnabled
+	      ? processTextMacrosWithPendingFlag(summaryRulesRaw, {
+	          user: name1,
+	          char: name2,
+	          group: groupName || name2,
+	          members: membersText,
+	        })
+	      : '';
+
+	    // 聊天提示词（私聊/群聊/动态/摘要）：统一作为 system 区块插入在 chat history 之后
+	    // - 不混入历史数组（不会落入 <history>）
+	    // - 用 <chat_guide> 包裹，便于模型区分“聊天指南”与历史回顾
+	    // - 保证摘要提示词在所有聊天提示词下方
+	    const buildChatPromptBlocks = () => {
+	      const parts = [];
+	      if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
+	        parts.push(dialogueRules);
+	      }
+	      if (!isMomentCommentTask && isGroupChat && groupEnabled && groupRules && groupPosition !== -1) {
+	        parts.push(groupRules);
+	      }
+	      if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition !== -1) {
+	        parts.push(momentCreateRules);
+	      }
+	      if (isMomentCommentTask && momentCommentEnabled && momentCommentRules && momentCommentPosition !== -1) {
+	        parts.push(momentCommentRules);
+	      }
+	      if (summaryRules) parts.push(summaryRules);
+	      const content = parts.map(t => String(t || '').trim()).filter(Boolean).join('\n\n').trim();
+	      if (!content) return [];
+	      return [{ role: 'system', content: `<chat_guide>\n${content}\n</chat_guide>` }];
+	    };
+
+		    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
 	      const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
       // ST promptOnly scripts: apply to outgoing prompt only
       const history = historyRaw.map((m, idx) => {
@@ -710,53 +763,8 @@ class AppBridge {
         return { role, content: withSpeakerPrefix(out, speaker) };
       });
 
-	      // 聊天提示词（预设）：移动到“世界书”风格，并固定为 system 深度=1 注入到历史中
-	      // - 避免占用 prompt 开头位置
-	      // - 保持与世界书一样的格式化（wi_format）
-	      if (!isMomentCommentTask) {
-	        const none = pos => typeof pos === 'number' && pos < 0;
-	        const fixedDepth = 1;
-	        const injectChatRules = raw => {
-	          const txt = String(raw || '').trim();
-	          if (!txt) return;
-	          const wrapped = wiFormat && wiFormat.includes('{0}') ? wiFormat.replace('{0}', txt) : txt;
-	          const idx = Math.max(0, history.length - fixedDepth);
-	          history.splice(idx, 0, { role: 'system', content: wrapped });
-	        };
-	        if (!isGroupChat && dialogueEnabled && !none(dialoguePosition)) injectChatRules(dialogueRules);
-	        if (isGroupChat && groupEnabled && !none(groupPosition)) injectChatRules(groupRules);
-	      }
-      // 动态提示词：按场景注入
-      // C) 动态评论：只注入评论回覆规则
-      if (isMomentCommentTask && momentCommentEnabled && momentCommentRules) {
-        if (momentCommentPosition === 1) {
-          // IN_CHAT
-          const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-          const role = roleMap[momentCommentRole] || 'system';
-          const idx = Math.max(0, history.length - momentCommentDepth);
-          history.splice(idx, 0, { role, content: momentCommentRules });
-        } else if (momentCommentPosition === 2 || momentCommentPosition === 0) {
-          // BEFORE_PROMPT or IN_PROMPT
-          const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-          const role = roleMap[momentCommentRole] || 'system';
-          messages.push({ role, content: momentCommentRules });
-        }
-      }
-      // A/B) 私聊/群聊：注入动态发布决策提示词
-      if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules) {
-        if (momentCreatePosition === 1) {
-          // IN_CHAT
-          const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-          const role = roleMap[momentCreateRole] || 'system';
-          const idx = Math.max(0, history.length - momentCreateDepth);
-          history.splice(idx, 0, { role, content: momentCreateRules });
-        } else if (momentCreatePosition === 2 || momentCreatePosition === 0) {
-          // BEFORE_PROMPT or IN_PROMPT
-          const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-          const role = roleMap[momentCreateRole] || 'system';
-          messages.push({ role, content: momentCreateRules });
-        }
-      }
+		      // 聊天提示词：已迁移到 system 深度=1（历史前）的独立 system 区块（见 buildChatPromptBlocks）
+	      // 动态提示词已迁移到 <chat_guide>（紧跟 chat history 之后），不再按 position/depth 混入历史或 prompt 开头。
 
       // Persona Description (SillyTavern-like): AT_DEPTH=4 injects into chat history
       if (personaText && personaPosition === 4) {
@@ -840,12 +848,13 @@ class AppBridge {
         const enabled = item?.enabled !== false;
         if (!identifier || !enabled) continue;
 
-        if (identifier === 'chatHistory') {
-          messages.push(...historyRecallBlocks);
-          if (history.length) messages.push(...history);
-          historyInserted = true;
-          continue;
-        }
+		        if (identifier === 'chatHistory') {
+		          messages.push(...historyRecallBlocks);
+		          if (history.length) messages.push(...history);
+		          messages.push(...buildChatPromptBlocks());
+		          historyInserted = true;
+		          continue;
+		        }
 
         const pr = byId.get(identifier);
         const isMarker =
@@ -884,15 +893,13 @@ class AppBridge {
         messages.push({ role: mappedRole, content });
       }
 
-      if (!historyInserted && history.length) {
-        messages.push(...historyRecallBlocks);
-        messages.push(...history);
-      }
+	      if (!historyInserted) {
+	        messages.push(...historyRecallBlocks);
+	        if (history.length) messages.push(...history);
+	        messages.push(...buildChatPromptBlocks());
+	      }
 
-      // Ask for <summary> output each turn (unless disabled by caller)
-      if (!context?.meta?.disableSummary) {
-        messages.push({ role: 'system', content: SUMMARY_REQUEST_NOTICE });
-      }
+	      // 摘要提示词已移入 buildChatPromptBlocks（系统深度=1），不在此处追加。
 
       // Append current user message (unless already injected via {{lastUserMessage}} in prompt blocks)
       if (!usedLastUserMessageForPendingInput) {
@@ -953,33 +960,13 @@ class AppBridge {
       messages.push({ role: 'system', content: combinedStoryString });
     }
 
-    // C) 动态评论：BEFORE_PROMPT / IN_PROMPT 仅注入评论回覆规则
-    if (
-      isMomentCommentTask &&
-      momentCommentEnabled &&
-      momentCommentRules &&
-      (momentCommentPosition === 2 || momentCommentPosition === 0)
-    ) {
-      const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-      const role = roleMap[momentCommentRole] || 'system';
-      messages.push({ role, content: momentCommentRules });
-    }
+	    // 动态评论提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
 
 	    // A) 私聊提示词：BEFORE_PROMPT / IN_PROMPT（仅非群聊/非动态评论）
 	    // （已迁移：统一放到世界书风格、system 深度=1 的历史注入）
 	    // 群聊提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入（仅群聊）
 	    // （已迁移：统一放到世界书风格、system 深度=1 的历史注入）
-    // A/B) 动态发布决策：BEFORE_PROMPT / IN_PROMPT（仅私聊/群聊）
-    if (
-      !isMomentCommentTask &&
-      momentCreateEnabled &&
-      momentCreateRules &&
-      (momentCreatePosition === 2 || momentCreatePosition === 0)
-    ) {
-      const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-      const role = roleMap[momentCreateRole] || 'system';
-      messages.push({ role, content: momentCreateRules });
-    }
+	    // 动态发布决策提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
 
     // If context preset disabled, fall back to legacy system prompt building
     if (!useContext) {
@@ -1027,36 +1014,11 @@ class AppBridge {
       const idx = Math.max(0, history.length - injectDepth);
       history.splice(idx, 0, { role, content: combinedStoryString });
     }
-    // C) 动态评论：IN_CHAT 仅注入评论回覆规则
-    if (isMomentCommentTask && momentCommentEnabled && momentCommentRules && momentCommentPosition === 1) {
-      const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-      const role = roleMap[momentCommentRole] || 'system';
-      const idx = Math.max(0, history.length - momentCommentDepth);
-      history.splice(idx, 0, { role, content: momentCommentRules });
-    }
-	    // 聊天提示词（预设）：移动到“世界书”风格，并固定为 system 深度=1 注入到历史中
-	    if (!isMomentCommentTask) {
-	      const none = pos => typeof pos === 'number' && pos < 0;
-	      const fixedDepth = 1;
-	      const injectChatRules = raw => {
-	        const txt = String(raw || '').trim();
-	        if (!txt) return;
-	        const wrapped = wiFormat && wiFormat.includes('{0}') ? wiFormat.replace('{0}', txt) : txt;
-	        const idx = Math.max(0, history.length - fixedDepth);
-	        history.splice(idx, 0, { role: 'system', content: wrapped });
-	      };
-	      if (!isGroupChat && dialogueEnabled && !none(dialoguePosition)) injectChatRules(dialogueRules);
-	      if (isGroupChat && groupEnabled && !none(groupPosition)) injectChatRules(groupRules);
-	    }
-    // A/B) 私聊/群聊：IN_CHAT 注入动态发布决策提示词（非动态评论）
-    if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition === 1) {
-      const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
-      const role = roleMap[momentCreateRole] || 'system';
-      const idx = Math.max(0, history.length - momentCreateDepth);
-      history.splice(idx, 0, { role, content: momentCreateRules });
-    }
+	    // 动态评论提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
+		    // 聊天提示词已迁移为独立 system 区块（系统深度=1），不再插入历史数组（避免落入 <history>）。
+	    // 动态发布决策提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
 
-    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
+		    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
     try {
       const list = this.chatStore?.getSummaries?.(sessionIdForSummary) || [];
       const summaries = Array.isArray(list) ? list.slice(-30) : [];
@@ -1070,13 +1032,12 @@ class AppBridge {
         });
       }
     } catch {}
-    if (history.length > 0) {
-      messages.push(...history);
-    }
+	    if (history.length > 0) {
+	      messages.push(...history);
+	    }
+		    messages.push(...buildChatPromptBlocks());
 
-    if (!context?.meta?.disableSummary) {
-      messages.push({ role: 'system', content: SUMMARY_REQUEST_NOTICE });
-    }
+	    // 摘要提示词已移入 buildChatPromptBlocks（系统深度=1），不在此处追加。
 
     // 4) Post-history instructions (sysprompt.post_history)
     const postHistory = useSysprompt ? sysp?.post_history || '' : '';
