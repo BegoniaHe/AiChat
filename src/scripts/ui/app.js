@@ -1633,6 +1633,13 @@ ${listPart || '-（无）'}
                 .trim();
             return { text: stripped, summary };
         };
+        const sanitizeThinkingForProtocolParse = (text) => {
+            const raw = String(text ?? '');
+            // Remove complete <thinking>/<think> blocks; helps when models echo <content> inside thinking before real wrapper.
+            return raw
+                .replace(/<thinking\b[\s\S]*?>[\s\S]*?<\/thinking>/gi, '')
+                .replace(/<think\b[\s\S]*?>[\s\S]*?<\/think>/gi, '');
+        };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
             const history = all
@@ -1828,11 +1835,89 @@ ${listPart || '-（无）'}
                     if (mutatedMoments) {
                         try { await momentsStore.flush(); } catch {}
                     }
-                    refreshChatAndContacts();
-                    if (!didAnything) {
-                        window.toastr?.warning?.('未解析到有效对话标签，已丢弃（可在“三 > 原始回复”查看）');
-                    }
-                } else {
+	                    refreshChatAndContacts();
+	                    if (!didAnything) {
+	                        // Fallback: if <thinking>/<think> contains literal "<content>", first-pass parsing may start too early.
+	                        // Retry once by stripping complete thinking blocks, then parsing again.
+	                        try {
+	                            const retryText = sanitizeThinkingForProtocolParse(fullRaw);
+	                            if (retryText && retryText !== fullRaw) {
+	                                const retryParser = new DialogueStreamParser({ userName });
+	                                const retryEvents = retryParser.push(retryText);
+	                                retryEvents.forEach((ev) => {
+	                                    if (ev?.type === 'moments') {
+	                                        try {
+	                                            momentsStore.addMany(ingestMoments(ev.moments || []));
+	                                            mutatedMoments = true;
+	                                            didAnything = true;
+	                                            if (activePage === 'moments') momentsPanel.render();
+	                                        } catch {}
+	                                        return;
+	                                    }
+	                                    if (ev?.type === 'moment_reply') {
+	                                        try {
+	                                            momentsStore.addComments(ev.momentId, ev.comments || []);
+	                                            mutatedMoments = true;
+	                                            didAnything = true;
+	                                            if (activePage === 'moments') momentsPanel.render();
+	                                        } catch {}
+	                                        return;
+	                                    }
+	                                    if (ev?.type === 'group_chat') {
+	                                        const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+	                                        if (!targetGroupId) return;
+	                                        (ev.messages || []).forEach((m) => {
+	                                            const speaker = normalizeName(m?.speaker);
+	                                            const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+	                                            const isMe = speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+	                                            const role = isMe ? 'user' : 'assistant';
+	                                            const c = isMe ? null : resolveContactByDisplayName(speaker);
+	                                            const parsed = {
+	                                                role,
+	                                                type: 'text',
+	                                                ...parseSpecialMessage(content),
+	                                                name: role === 'user' ? userName : (speaker || '成员'),
+	                                                avatar: role === 'user' ? avatars.user : (c?.avatar || avatars.assistant),
+	                                                time: m?.time || formatNowTime(),
+	                                                meta: role === 'assistant' ? { showName: true } : undefined,
+	                                            };
+	                                            if (targetGroupId === sessionId) ui.addMessage(parsed);
+	                                            chatStore.appendMessage(parsed, targetGroupId);
+	                                        });
+	                                        didAnything = true;
+	                                        refreshChatAndContacts();
+	                                        return;
+	                                    }
+	                                    if (ev?.type === 'private_chat') {
+	                                        const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+	                                        if (!targetSessionId) return;
+	                                        (ev.messages || []).forEach((msgText) => {
+	                                            const parsed = {
+	                                                role: 'assistant',
+	                                                type: 'text',
+	                                                ...parseSpecialMessage(String(msgText || '')),
+	                                                name: '助手',
+	                                                avatar: getAssistantAvatarForSession(targetSessionId),
+	                                                time: formatNowTime(),
+	                                            };
+	                                            if (targetSessionId === sessionId) ui.addMessage(parsed);
+	                                            chatStore.appendMessage(parsed, targetSessionId);
+	                                        });
+	                                        didAnything = true;
+	                                        refreshChatAndContacts();
+	                                    }
+	                                });
+	                                if (mutatedMoments) {
+	                                    try { await momentsStore.flush(); } catch {}
+	                                }
+	                                refreshChatAndContacts();
+	                            }
+	                        } catch {}
+	                        if (!didAnything) {
+	                            window.toastr?.warning?.('未解析到有效对话标签，已丢弃（可在“三 > 原始回复”查看）');
+	                        }
+	                    }
+	                } else {
                     // 兼容旧逻辑（流式逐字）
                     streamCtrl = ui.startAssistantStream({ avatar: assistantAvatar, name: '助手', time: formatNowTime(), typing: true });
                     if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
@@ -1953,17 +2038,86 @@ ${listPart || '-（无）'}
                             });
                         }
                     });
-                    if (didAnything) {
-                        refreshChatAndContacts();
-                        if (activePage === 'moments') momentsPanel.render();
-                        if (mutatedMoments) {
-                            try { await momentsStore.flush(); } catch {}
-                        }
-                        return;
-                    }
-                    // 如果对话模式未解析到有效标签，回退显示原文，便于调试
-                    window.toastr?.warning?.('未解析到有效对话标签，已回退显示原文');
-                }
+	                    if (didAnything) {
+	                        refreshChatAndContacts();
+	                        if (activePage === 'moments') momentsPanel.render();
+	                        if (mutatedMoments) {
+	                            try { await momentsStore.flush(); } catch {}
+	                        }
+	                        return;
+	                    }
+	                    // Fallback: strip complete <thinking>/<think> blocks then parse once more.
+	                    try {
+	                        const retryText = sanitizeThinkingForProtocolParse(resultRaw);
+	                        if (retryText && retryText !== resultRaw) {
+	                            const retryParser = new DialogueStreamParser({ userName });
+	                            const retryEvents = retryParser.push(retryText);
+	                            retryEvents.forEach((ev) => {
+	                                if (ev?.type === 'moments') {
+	                                    momentsStore.addMany(ingestMoments(ev.moments || []));
+	                                    didAnything = true;
+	                                    mutatedMoments = true;
+	                                    return;
+	                                }
+	                                if (ev?.type === 'moment_reply') {
+	                                    momentsStore.addComments(ev.momentId, ev.comments || []);
+	                                    didAnything = true;
+	                                    mutatedMoments = true;
+	                                    return;
+	                                }
+	                                if (ev?.type === 'group_chat') {
+	                                    const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+	                                    if (!targetGroupId) return;
+	                                    (ev.messages || []).forEach((m) => {
+	                                        const speaker = normalizeName(m?.speaker);
+	                                        const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+	                                        const isMe = speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+	                                        const role = isMe ? 'user' : 'assistant';
+	                                        const c = isMe ? null : resolveContactByDisplayName(speaker);
+	                                        const parsed = {
+	                                            role,
+	                                            ...parseSpecialMessage(content),
+	                                            name: role === 'user' ? userName : (speaker || '成员'),
+	                                            avatar: role === 'user' ? avatars.user : (c?.avatar || avatars.assistant),
+	                                            time: m?.time || formatNowTime(),
+	                                            meta: role === 'assistant' ? { showName: true } : undefined,
+	                                        };
+	                                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+	                                        chatStore.appendMessage(parsed, targetGroupId);
+	                                        didAnything = true;
+	                                    });
+	                                    return;
+	                                }
+	                                if (ev?.type === 'private_chat') {
+	                                    const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+	                                    if (!targetSessionId) return;
+	                                    (ev.messages || []).forEach((msgText) => {
+	                                        const parsed = {
+	                                            role: 'assistant',
+	                                            ...parseSpecialMessage(String(msgText || '')),
+	                                            name: '助手',
+	                                            avatar: getAssistantAvatarForSession(targetSessionId),
+	                                            time: formatNowTime(),
+	                                        };
+	                                        if (targetSessionId === sessionId) ui.addMessage(parsed);
+	                                        chatStore.appendMessage(parsed, targetSessionId);
+	                                        didAnything = true;
+	                                    });
+	                                }
+	                            });
+	                        }
+	                    } catch {}
+	                    if (didAnything) {
+	                        refreshChatAndContacts();
+	                        if (activePage === 'moments') momentsPanel.render();
+	                        if (mutatedMoments) {
+	                            try { await momentsStore.flush(); } catch {}
+	                        }
+	                        return;
+	                    }
+	                    // 如果对话模式未解析到有效标签，回退显示原文，便于调试
+	                    window.toastr?.warning?.('未解析到有效对话标签，已回退显示原文');
+	                }
                 // === 创意写作模式（暂时停用）===
                 // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
                 // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
