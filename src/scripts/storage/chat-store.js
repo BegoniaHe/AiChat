@@ -23,7 +23,7 @@ const getInvoker = () => {
     return g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
 };
 
-const waitForInvoker = async (timeoutMs = 1200) => {
+const waitForInvoker = async (timeoutMs = 5000) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
     // In plain browser dev mode, don't wait.
     if (!g?.__TAURI__) return null;
@@ -62,6 +62,7 @@ export class ChatStore {
         this.ready = this._hydrateFromDisk();
         this._lsDisabled = false;
         this._lsQuotaWarned = false;
+        this._hydrateRetryCount = 0;
     }
 
     _ensureSession(id) {
@@ -107,9 +108,23 @@ export class ChatStore {
                     }
                 }
                 logger.info('chat store hydrated from disk');
+                try {
+                    window.dispatchEvent(new CustomEvent('store-hydrated', { detail: { store: 'chat' } }));
+                } catch {}
             }
         } catch (err) {
             logger.debug('chat store disk load skipped (可能非 Tauri)', err);
+            // Retry later if Tauri is present but invoke isn't ready yet (common after hot reload / process restore)
+            try {
+                const g = typeof globalThis !== 'undefined' ? globalThis : window;
+                const msg = String(err?.message || '');
+                const canRetry = Boolean(g?.__TAURI__) && msg.includes('invoke not available');
+                if (canRetry && this._hydrateRetryCount < 3) {
+                    const attempt = ++this._hydrateRetryCount;
+                    logger.warn(`chat store hydrate retry scheduled (${attempt}/3)`);
+                    setTimeout(() => { this._hydrateFromDisk(); }, 800 * attempt);
+                }
+            } catch {}
         }
     }
 
@@ -150,6 +165,12 @@ export class ChatStore {
             const tb = this.getLastMessage(b)?.timestamp || 0;
             return tb - ta;
         });
+    }
+
+    hasSession(id) {
+        const sid = String(id || '').trim();
+        if (!sid) return false;
+        return Boolean(this.state?.sessions && Object.prototype.hasOwnProperty.call(this.state.sessions, sid));
     }
 
     setCurrent(id) {

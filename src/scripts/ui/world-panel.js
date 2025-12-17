@@ -325,7 +325,7 @@ export class WorldPanel {
             position: fixed;
             inset: 0;
             background: rgba(0,0,0,0.4);
-            z-index: 9000;
+            z-index: 20000;
         `;
         this.overlay.onclick = () => this.hide();
 
@@ -344,7 +344,7 @@ export class WorldPanel {
             width: min(520px, 92vw);
             max-height: 80vh;
             overflow: auto;
-            z-index: 10000;
+            z-index: 21000;
         `;
         this.panel.onclick = (e) => e.stopPropagation();
 

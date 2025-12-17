@@ -362,3 +362,32 @@ pub async fn http_request(
         body,
     })
 }
+
+/// JS -> Rust log bridge (prints to logcat via stderr on Android)
+#[tauri::command]
+pub async fn log_js(tag: String, level: Option<String>, message: String, data: Option<Value>) -> Result<(), String> {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return Ok(());
+    }
+    let lvl = level.unwrap_or_else(|| "info".to_string());
+    let mut msg = message;
+    // Avoid huge logcat entries (e.g. prompt blobs)
+    const MAX_LEN: usize = 2000;
+    if msg.len() > MAX_LEN {
+        msg.truncate(MAX_LEN);
+        msg.push_str("…");
+    }
+    if let Some(d) = data {
+        let dv = serde_json::to_string(&d).unwrap_or_else(|_| "\"<unserializable>\"".to_string());
+        let mut ds = dv;
+        if ds.len() > MAX_LEN {
+            ds.truncate(MAX_LEN);
+            ds.push_str("…");
+        }
+        eprintln!("[js][{}][{}] {} {}", tag, lvl, msg, ds);
+    } else {
+        eprintln!("[js][{}][{}] {}", tag, lvl, msg);
+    }
+    Ok(())
+}

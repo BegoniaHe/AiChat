@@ -1110,3 +1110,19 @@
 - 2025-12-17 12:38（世界书/预设占位符替换修复）
   - **根因**：世界书内容（`formatWorldPrompt()`）与 context preset 的 `story_string`（`renderStTemplate()`）之前未经过 `processTextMacros()`，且 `renderStTemplate` 对 `{{USER}}` 这类大小写不匹配会直接变成空字符串。
   - **修复**：`buildMessages()` 现在会对世界书拼接结果与 `story_string` 渲染结果再跑一次 `processTextMacros()`，并让 `renderStTemplate` 支持大小写不敏感变量、保留未知 `{{...}}` 以便交给 MacroEngine 继续替换。
+
+- 2025-12-17 14:53（断网/热更新不跳回默认）
+  - **UI 状态持久化**：`app.js` 的页面/会话/是否在聊天室状态从仅 `sessionStorage` 升级为 `sessionStorage + localStorage + Tauri KV`，并在首次渲染前优先恢复，避免闪回默认页/默认会话。
+  - **延迟 hydrate 兜底**：`ChatStore/ContactsStore/MomentsStore` 将 `waitForInvoker` 延长到 5s，并在 invoke 尚未就绪时做最多 3 次递增重试；hydrate 成功会派发 `store-hydrated` 事件供 UI 无跳转刷新。
+
+- 2025-12-17 15:54（诊断：跳回默认的日志）
+  - **可过滤 logcat 标记**：`app.js` 增加 `[CHATAPP_UI]` 关键路径日志（save/restore UI state、switchPage、enter/exit chat、store-hydrated、pageshow/pagehide/visibilitychange、error/unhandledrejection），用于定位是否 WebView 重载或状态恢复时序问题。
+  - **hydrate 重试可见**：`ChatStore/ContactsStore/MomentsStore` 在安排重试时输出 warn 日志（`* store hydrate retry scheduled (n/3)`）。
+
+- 2025-12-17 16:17（logcat：JS→Rust 日志桥）
+  - **原因**：Android 上 JS `console.log` 往往只在 WebView 远程调试里可见，不一定进入 logcat。
+  - **实现**：新增 Tauri 命令 `log_js`，前端 `uiLog()` 会在 Tauri 环境下把 `[CHATAPP_UI]` 日志同步打印到 `RustStdoutStderr`（logcat 可见），并做长度截断防止刷屏。
+
+- 2025-12-17 16:28（UI 层级 + Prompt 预览优化）
+  - **头像菜单弹窗层级**：将 `SessionPanel/WorldPanel` 的 overlay/panel `z-index` 提升到与「用户角色」一致，避免被顶栏/其他浮层遮挡导致“点了没反应”。
+  - **Prompt 预览**：移除 `--- #n role ---` 这种展示用分隔符，改为直接显示 `messages` JSON 数组（更贴近 ST 的调试视图，也避免误解为会占用 tokens 的真实请求内容）。

@@ -26,6 +26,7 @@ import { ContactDragManager } from './contact-drag-manager.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { PersonaPanel } from './persona-panel.js';
 import { VariablePanel } from './variable-panel.js';
+import { safeInvoke } from '../utils/tauri.js';
 
 const initApp = async () => {
     const ui = new ChatUI();
@@ -692,7 +693,28 @@ ${listPart || '-（无）'}
     const chatRoom = document.getElementById('chat-room');
     let activePage = 'chat';
     const UI_STATE_KEY = 'phone_ui_state_v1';
+    const UI_STATE_KV = 'phone_ui_state_v1';
     let uiStateArmed = false;
+    let uiStateDiskTimer = null;
+    const uiLog = (...args) => {
+        try { console.log('[CHATAPP_UI]', ...args); } catch {}
+        try { logger.info('[CHATAPP_UI]', ...args); } catch {}
+        try {
+            const g = typeof globalThis !== 'undefined' ? globalThis : window;
+            if (g?.__TAURI__) {
+                const msg = args.map((a) => {
+                    if (a == null) return '';
+                    if (typeof a === 'string') return a;
+                    try { return JSON.stringify(a); } catch { return String(a); }
+                }).filter(Boolean).join(' ');
+                safeInvoke('log_js', {
+                    tag: 'CHATAPP_UI',
+                    level: 'info',
+                    message: msg.slice(0, 2000),
+                }).catch(() => {});
+            }
+        } catch {}
+    };
     const saveUiState = () => {
         try {
             const state = {
@@ -701,19 +723,45 @@ ${listPart || '-（无）'}
                 sessionId: chatStore.getCurrent(),
                 at: Date.now(),
             };
-            sessionStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+            const raw = JSON.stringify(state);
+            try { sessionStorage.setItem(UI_STATE_KEY, raw); } catch {}
+            try { localStorage.setItem(UI_STATE_KEY, raw); } catch {}
+            if (uiStateDiskTimer) clearTimeout(uiStateDiskTimer);
+            uiStateDiskTimer = setTimeout(() => {
+                safeInvoke('save_kv', { name: UI_STATE_KV, data: state }).catch(() => {});
+            }, 400);
+            uiLog('saveUiState', state);
         } catch {}
     };
-    const restoreUiState = () => {
+    const restoreUiState = async () => {
         try {
-            const raw = sessionStorage.getItem(UI_STATE_KEY);
-            if (!raw) return false;
-            const s = JSON.parse(raw);
+            const pick = async () => {
+                try {
+                    const raw1 = sessionStorage.getItem(UI_STATE_KEY);
+                    if (raw1) return JSON.parse(raw1);
+                } catch {}
+                try {
+                    const raw2 = localStorage.getItem(UI_STATE_KEY);
+                    if (raw2) return JSON.parse(raw2);
+                } catch {}
+                try {
+                    const kv = await safeInvoke('load_kv', { name: UI_STATE_KV });
+                    if (kv && typeof kv === 'object') return kv;
+                } catch {}
+                return null;
+            };
+            const s = await pick();
+            if (!s) {
+                uiLog('restoreUiState: no saved state');
+                return false;
+            }
             const page = String(s?.activePage || '').trim();
             const sid = String(s?.sessionId || '').trim();
             const inChatRoom = Boolean(s?.inChatRoom);
+            uiLog('restoreUiState: picked', { page, sid, inChatRoom, at: s?.at || 0 });
             if (page && pages[page]) switchPage(page);
-            if (sid) {
+            const sidKnown = sid && (chatStore.hasSession?.(sid) || contactsStore.getContact(sid));
+            if (sidKnown) {
                 // ensure session exists
                 chatStore.switchSession(sid);
                 window.appBridge.setActiveSession(sid);
@@ -728,6 +776,9 @@ ${listPart || '-（无）'}
             if (inChatRoom && sid) {
                 const c = contactsStore.getContact(sid);
                 enterChatRoom(sid, c?.name || sid, page || 'chat');
+            }
+            if (sid && !sidKnown) {
+                uiLog('restoreUiState: sid not yet known (skip switchSession)', { sid });
             }
             return true;
         } catch {
@@ -749,9 +800,9 @@ ${listPart || '-（无）'}
             try { momentsPanel.render(); } catch {}
         }
         if (uiStateArmed) saveUiState();
+        uiLog('switchPage', { activePage });
     };
     navBtns.forEach(btn => btn.addEventListener('click', () => switchPage(btn.dataset.page)));
-    switchPage('chat');
 
     // 搜索框初始化（仅联系人页）
     initContactSearch();
@@ -1109,13 +1160,14 @@ ${listPart || '-（无）'}
                         `stream: ${req?.stream ? 'true' : 'false'}`,
                         req?.options ? `options: ${Object.entries(req.options).filter(([_, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(', ')}` : '',
                     ].filter(Boolean).join('\n');
-                    const body = msgs.map((m, i) => {
-                        const role = String(m?.role || 'unknown');
-                        const content = String(m?.content ?? '');
-                        return `\n--- #${i + 1} ${role} ---\n${content}`;
-                    }).join('');
+                    // Display only (not part of the real request): show the exact messages array to match ST behavior.
+                    const body = JSON.stringify(
+                        msgs.map((m) => ({ role: String(m?.role || 'unknown'), content: String(m?.content ?? '') })),
+                        null,
+                        2
+                    );
                     const meta = `${name}${at ? ` · ${at}` : ''}`;
-                    promptPreviewModal.show(`${head}\n${body}`.trim(), meta);
+                    promptPreviewModal.show(`${head}\n\nmessages:\n${body}`.trim(), meta);
                 }
             }
             if (action === 'raw-reply') {
@@ -1268,6 +1320,7 @@ ${listPart || '-（无）'}
         }
         ui.setSessionLabel(sessionId);
         if (uiStateArmed) saveUiState();
+        uiLog('enterChatRoom', { sessionId, originPage: chatOriginPage });
     };
 
     const exitChatRoom = () => {
@@ -1285,6 +1338,7 @@ ${listPart || '-（无）'}
         }
         chatOriginPage = 'chat';
         if (uiStateArmed) saveUiState();
+        uiLog('exitChatRoom', { activePage, sessionId: chatStore.getCurrent() });
     };
 
     backToListBtn?.addEventListener('click', exitChatRoom);
@@ -2074,11 +2128,49 @@ ${listPart || '-（无）'}
         }
     });
 
+    try { await restoreUiState(); } catch {}
+    if (!activePage) activePage = 'chat';
+    if (!pages[activePage]) activePage = 'chat';
+    if (!pages[activePage]?.classList.contains('active')) switchPage(activePage || 'chat');
+    uiLog('boot: after restore', { activePage, sessionId: chatStore.getCurrent(), inChatRoom: chatRoom ? !chatRoom.classList.contains('hidden') : false });
     updateWorldIndicator();
     refreshChatAndContacts();
-    try { restoreUiState(); } catch {}
     uiStateArmed = true;
     try { saveUiState(); } catch {}
+
+    // If stores hydrate later (e.g. after a WebView reload / offline resume), refresh UI without jumping to defaults.
+    window.addEventListener('store-hydrated', async (ev) => {
+        const store = String(ev?.detail?.store || '').trim();
+        if (!store) return;
+        if (store !== 'chat' && store !== 'contacts') return;
+        uiLog('store-hydrated', { store });
+        try { refreshChatAndContacts(); } catch {}
+        try {
+            // If we are stuck on an empty/default session due to early hydration miss, restore the last UI state again.
+            const cur = String(chatStore.getCurrent() || '').trim();
+            const raw = (() => {
+                try { return sessionStorage.getItem(UI_STATE_KEY); } catch {}
+                try { return localStorage.getItem(UI_STATE_KEY); } catch {}
+                return '';
+            })();
+            const want = raw ? String(JSON.parse(raw)?.sessionId || '').trim() : '';
+            uiLog('store-hydrated: check restore', { cur, want, curKnown: chatStore.hasSession?.(cur) });
+            if (want && want !== cur && (cur === 'default' || !chatStore.hasSession?.(cur))) {
+                await restoreUiState();
+            }
+        } catch {}
+    });
+
+    // Lifecycle diagnostics (helps confirm whether this is a real WebView reload/process restart)
+    try {
+        window.addEventListener('pageshow', (e) => uiLog('pageshow', { persisted: Boolean(e?.persisted) }));
+        window.addEventListener('pagehide', (e) => uiLog('pagehide', { persisted: Boolean(e?.persisted) }));
+        document.addEventListener('visibilitychange', () => uiLog('visibilitychange', { state: document.visibilityState }));
+        window.addEventListener('beforeunload', () => uiLog('beforeunload'));
+        window.addEventListener('unload', () => uiLog('unload'));
+        window.addEventListener('error', (e) => uiLog('window.error', { msg: e?.message, file: e?.filename, line: e?.lineno, col: e?.colno }));
+        window.addEventListener('unhandledrejection', (e) => uiLog('unhandledrejection', { reason: String(e?.reason?.message || e?.reason || '') }));
+    } catch {}
 
     function handleSticker(tag) {
         const sessionId = chatStore.getCurrent();

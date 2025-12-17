@@ -172,7 +172,7 @@ export class SessionPanel {
     createUI() {
         this.overlay = document.createElement('div');
         this.overlay.style.cssText = `
-            display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:9000;
+            display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:20000;
         `;
         this.overlay.onclick = () => this.hide();
 
@@ -180,7 +180,7 @@ export class SessionPanel {
         this.panel.style.cssText = `
             display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
             width:min(460px,90vw); background:#fff; border-radius:12px; box-shadow:0 10px 40px rgba(0,0,0,0.2);
-            padding:16px; z-index:10000; max-height:80vh; overflow:auto;
+            padding:16px; z-index:21000; max-height:80vh; overflow:auto;
         `;
         this.panel.onclick = (e) => e.stopPropagation();
 

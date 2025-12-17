@@ -19,6 +19,7 @@ pub fn run() {
             commands::save_kv,
             commands::load_kv,
             commands::http_request,
+            commands::log_js,
         ])
         .setup(|_app| {
             #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
