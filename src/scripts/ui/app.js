@@ -1160,14 +1160,10 @@ ${listPart || '-（无）'}
                         `stream: ${req?.stream ? 'true' : 'false'}`,
                         req?.options ? `options: ${Object.entries(req.options).filter(([_, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(', ')}` : '',
                     ].filter(Boolean).join('\n');
-                    // Display only (not part of the real request): show the exact messages array to match ST behavior.
-                    const body = JSON.stringify(
-                        msgs.map((m) => ({ role: String(m?.role || 'unknown'), content: String(m?.content ?? '') })),
-                        null,
-                        2
-                    );
+                    // Display only: show prompt text content for easier reading (no JSON, no numbering).
+                    const body = msgs.map((m) => String(m?.content ?? '')).filter((t) => t.trim().length > 0).join('\n\n');
                     const meta = `${name}${at ? ` · ${at}` : ''}`;
-                    promptPreviewModal.show(`${head}\n\nmessages:\n${body}`.trim(), meta);
+                    promptPreviewModal.show(`${head}\n\n${body}`.trim(), meta);
                 }
             }
             if (action === 'raw-reply') {
@@ -1963,6 +1959,16 @@ ${listPart || '-（无）'}
     ui.onInputChange((text) => chatStore.setDraft(text, chatStore.getCurrent()));
     ui.onMessageAction(async (action, message, payload) => {
         const sessionId = chatStore.getCurrent();
+        if (action === 'delete-selected') {
+            const ids = Array.isArray(payload?.ids) ? payload.ids.map(String).filter(Boolean) : [];
+            if (!ids.length) return;
+            ids.forEach((id) => {
+                chatStore.deleteMessage(id, sessionId);
+                ui.removeMessage(id);
+            });
+            refreshChatAndContacts();
+            return;
+        }
         if (action === 'retract' && message.role === 'user') {
             const pending = activeGeneration && activeGeneration.sessionId === sessionId && activeGeneration.userMsgId === message.id;
             if (pending) {

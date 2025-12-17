@@ -67,6 +67,16 @@ const renderStTemplate = (template, vars) => {
     return out.trim();
 };
 
+const withSpeakerPrefix = (content, speaker) => {
+    const text = String(content ?? '');
+    const name = String(speaker || '').trim();
+    if (!text.trim() || !name) return text;
+    const firstLine = text.split(/\r?\n/, 1)[0] || '';
+    // Avoid double prefix
+    if (firstLine.startsWith(`${name}:`) || firstLine.startsWith(`${name}：`)) return text;
+    return `${name}: ${text}`;
+};
+
 class AppBridge {
     constructor() {
         this.config = new ConfigManager();
@@ -630,7 +640,8 @@ class AppBridge {
                     isEdit: false,
                     depth,
                 });
-                return { role, content: out };
+                const speaker = role === 'user' ? name1 : name2;
+                return { role, content: withSpeakerPrefix(out, speaker) };
             });
 
             // 私聊提示词：仅在私聊且非“动态评论”场景注入
@@ -873,6 +884,15 @@ class AppBridge {
 
         // 3) History
         const history = Array.isArray(context.history) ? context.history.slice() : [];
+        // Prefix speaker names to reduce model confusion (role is still preserved)
+        try {
+            for (const m of history) {
+                if (!m || typeof m !== 'object') continue;
+                if (m.role !== 'user' && m.role !== 'assistant') continue;
+                const speaker = m.role === 'user' ? name1 : name2;
+                m.content = withSpeakerPrefix(m.content, speaker);
+            }
+        } catch {}
 
         // Persona Description (SillyTavern-like): AT_DEPTH=4 injects into chat history
         if (personaText && personaPosition === 4) {

@@ -23,6 +23,9 @@ export class ChatUI {
         this.contextMenu = this.createContextMenu();
         this.longPressTimer = null;
         this.actionHandler = null;
+        this.selectionMode = false;
+        this.selectedMessageIds = new Set();
+        this.selectionBar = null;
 
         setupIframeResizeListener();
         this.bindIframeLongPressForwarding();
@@ -472,6 +475,17 @@ export class ChatUI {
             this.showContextMenu(e, message);
         }, { passive: false });
 
+        // If we're in selection mode, make new messages selectable too.
+        if (this.selectionMode && message?.id) {
+            setTimeout(() => {
+                try {
+                    const w = this.scrollEl?.querySelector?.(`[data-msg-id="${message.id}"]`);
+                    if (w) this.markWrapperSelectable(w, message.id);
+                    this.setSelectionBarVisible(true);
+                } catch {}
+            }, 0);
+        }
+
         return wrapper;
     }
 
@@ -613,6 +627,7 @@ export class ChatUI {
     }
 
     startLongPress(event, message) {
+        if (this.selectionMode) return;
         this.clearLongPress();
         const p = this.getPoint(event);
         this.longPressStart = p;
@@ -627,6 +642,169 @@ export class ChatUI {
             this.longPressTimer = null;
         }
         this.longPressStart = null;
+    }
+
+    ensureSelectionBar() {
+        if (this.selectionBar) return;
+        const bar = document.createElement('div');
+        bar.id = 'chat-batch-delete-bar';
+        bar.style.cssText = `
+            display:none;
+            position: fixed;
+            left: 12px;
+            right: 12px;
+            top: calc(56px + env(safe-area-inset-top, 0px) + 8px);
+            z-index: 22000;
+            background: rgba(255,255,255,0.96);
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+            padding: 10px;
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            box-sizing: border-box;
+        `;
+        bar.innerHTML = `
+            <button data-role="cancel" style="border:1px solid rgba(0,0,0,0.10); background:#fff; border-radius:12px; padding:8px 12px;">取消</button>
+            <div data-role="count" style="flex:1; font-weight:800; color:#0f172a;">已选择 0 条</div>
+            <button data-role="delete" style="border:none; background:#ef4444; color:#fff; border-radius:12px; padding:8px 14px; font-weight:800;">删除</button>
+        `;
+        bar.querySelector('[data-role="cancel"]')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.exitSelectionMode();
+        });
+        bar.querySelector('[data-role="delete"]')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const ids = [...this.selectedMessageIds];
+            if (!ids.length) {
+                window.toastr?.info?.('请选择要删除的消息');
+                return;
+            }
+            this.actionHandler?.('delete-selected', null, { ids });
+            this.exitSelectionMode();
+        });
+        document.body.appendChild(bar);
+        this.selectionBar = bar;
+    }
+
+    setSelectionBarVisible(visible) {
+        this.ensureSelectionBar();
+        if (!this.selectionBar) return;
+        this.selectionBar.style.display = visible ? 'flex' : 'none';
+        if (!visible) return;
+        const countEl = this.selectionBar.querySelector('[data-role="count"]');
+        const delBtn = this.selectionBar.querySelector('[data-role="delete"]');
+        const n = this.selectedMessageIds.size;
+        if (countEl) countEl.textContent = `已选择 ${n} 条`;
+        if (delBtn) delBtn.disabled = n === 0;
+        if (delBtn) delBtn.style.opacity = n === 0 ? '0.6' : '1';
+    }
+
+    updateWrapperSelectionState(wrapper, msgId) {
+        const selected = this.selectedMessageIds.has(msgId);
+        const dot = wrapper?.__chatappSelectDot;
+        if (!dot) return;
+        if (selected) {
+            dot.style.background = '#2563eb';
+            dot.style.borderColor = '#2563eb';
+            dot.textContent = '✓';
+        } else {
+            dot.style.background = 'rgba(255,255,255,0.92)';
+            dot.style.borderColor = 'rgba(0,0,0,0.22)';
+            dot.textContent = '';
+        }
+        wrapper.style.paddingLeft = '30px';
+    }
+
+    markWrapperSelectable(wrapper, msgId) {
+        if (!wrapper || !msgId) return;
+        const role = String(wrapper.dataset?.role || '');
+        if (role === 'system') return;
+        wrapper.style.position = 'relative';
+        wrapper.classList.add('chat-selectable');
+
+        if (!wrapper.__chatappSelectDot) {
+            const dot = document.createElement('div');
+            dot.className = 'chat-select-dot';
+            dot.style.cssText = `
+                position:absolute;
+                left: 6px;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 22px;
+                height: 22px;
+                border-radius: 999px;
+                border: 2px solid rgba(0,0,0,0.22);
+                background: rgba(255,255,255,0.92);
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                font-size: 14px;
+                color: #fff;
+                pointer-events: none;
+                box-sizing: border-box;
+            `;
+            wrapper.appendChild(dot);
+            wrapper.__chatappSelectDot = dot;
+        }
+
+        if (!wrapper.__chatappSelectClick) {
+            const handler = (e) => {
+                if (!this.selectionMode) return;
+                try { e.preventDefault(); } catch {}
+                try { e.stopPropagation(); } catch {}
+                this.toggleMessageSelection(msgId);
+            };
+            wrapper.__chatappSelectClick = handler;
+            wrapper.addEventListener('click', handler, true);
+        }
+
+        this.updateWrapperSelectionState(wrapper, msgId);
+    }
+
+    enterSelectionMode(initialMsgId) {
+        this.selectionMode = true;
+        this.selectedMessageIds = new Set();
+        if (initialMsgId) this.selectedMessageIds.add(String(initialMsgId));
+        this.setSelectionBarVisible(true);
+
+        const wrappers = this.scrollEl?.querySelectorAll?.('[data-msg-id]') || [];
+        wrappers.forEach((w) => {
+            const id = String(w.dataset?.msgId || '');
+            if (!id) return;
+            this.markWrapperSelectable(w, id);
+        });
+        this.setSelectionBarVisible(true);
+    }
+
+    exitSelectionMode() {
+        this.selectionMode = false;
+        this.selectedMessageIds = new Set();
+        this.setSelectionBarVisible(false);
+        const wrappers = this.scrollEl?.querySelectorAll?.('[data-msg-id].chat-selectable') || [];
+        wrappers.forEach((w) => {
+            try { w.classList.remove('chat-selectable'); } catch {}
+            try { w.style.paddingLeft = ''; } catch {}
+            try {
+                if (w.__chatappSelectClick) {
+                    w.removeEventListener('click', w.__chatappSelectClick, true);
+                }
+            } catch {}
+            w.__chatappSelectClick = null;
+            try { w.__chatappSelectDot?.remove?.(); } catch {}
+            w.__chatappSelectDot = null;
+        });
+    }
+
+    toggleMessageSelection(msgId) {
+        const id = String(msgId || '');
+        if (!id) return;
+        if (this.selectedMessageIds.has(id)) this.selectedMessageIds.delete(id);
+        else this.selectedMessageIds.add(id);
+        const w = this.scrollEl?.querySelector?.(`[data-msg-id="${id}"]`);
+        if (w) this.updateWrapperSelectionState(w, id);
+        this.setSelectionBarVisible(true);
     }
 
     createContextMenu() {
@@ -832,6 +1010,7 @@ export class ChatUI {
     }
 
     showContextMenu(evt, message) {
+        if (this.selectionMode) return;
         if (!this.contextMenu) return;
         const actions = [];
         const target = evt?.target;
@@ -889,6 +1068,10 @@ export class ChatUI {
                 }
                 if (act.key === 'edit') {
                     this.startInlineEdit(message);
+                    return;
+                }
+                if (act.key === 'delete' && message.role === 'assistant') {
+                    this.enterSelectionMode(message.id);
                     return;
                 }
                 this.actionHandler?.(act.key, message);
