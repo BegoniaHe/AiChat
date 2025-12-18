@@ -653,12 +653,44 @@ ${listPart || '-（无）'}
 	        });
 	    };
 
-    const refreshChatAndContacts = () => {
+    const refreshChatAndContactsNow = () => {
         contactsStore.ensureFromSessions(chatStore.listSessions(), { defaultAvatar: avatars.assistant });
         renderChatList();
         renderGroupsList();
         renderContactsUngrouped();
-        try { applyContactsSearchFilter(); } catch {}
+        if (contactsSearch.term && String(contactsSearch.term).trim()) {
+            try { applyContactsSearchFilter(); } catch {}
+        }
+    };
+
+    // Coalesce multiple refresh requests into a single paint cycle to reduce redundant re-renders.
+    let refreshChatAndContactsQueued = false;
+    let refreshChatAndContactsHandle = null;
+    const refreshChatAndContacts = ({ immediate = false } = {}) => {
+        if (immediate) {
+            refreshChatAndContactsQueued = false;
+            if (refreshChatAndContactsHandle != null) {
+                try {
+                    if (typeof window !== 'undefined' && window.cancelAnimationFrame) window.cancelAnimationFrame(refreshChatAndContactsHandle);
+                    else clearTimeout(refreshChatAndContactsHandle);
+                } catch {}
+                refreshChatAndContactsHandle = null;
+            }
+            return refreshChatAndContactsNow();
+        }
+        if (refreshChatAndContactsQueued) return;
+        refreshChatAndContactsQueued = true;
+        const schedule = (cb) => {
+            try {
+                if (typeof window !== 'undefined' && window.requestAnimationFrame) return window.requestAnimationFrame(cb);
+            } catch {}
+            return setTimeout(cb, 16);
+        };
+        refreshChatAndContactsHandle = schedule(() => {
+            refreshChatAndContactsQueued = false;
+            refreshChatAndContactsHandle = null;
+            refreshChatAndContactsNow();
+        });
     };
     sessionPanel.onUpdated = refreshChatAndContacts;
 

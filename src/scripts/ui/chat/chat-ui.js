@@ -581,18 +581,44 @@ export class ChatUI {
                 </div>
             `;
         }
+        const raf = (cb) => {
+            try {
+                if (typeof window !== 'undefined' && window.requestAnimationFrame) return window.requestAnimationFrame(cb);
+            } catch {}
+            return setTimeout(cb, 16);
+        };
+        const caf = (id) => {
+            try {
+                if (typeof window !== 'undefined' && window.cancelAnimationFrame) return window.cancelAnimationFrame(id);
+            } catch {}
+            clearTimeout(id);
+        };
+        let updateHandle = null;
+        let pendingText = '';
         const bufferIndex = this.messageBuffer.push({ role: 'assistant', type: 'text', content: '' }) - 1;
         this.isStreaming = true;
         return {
             id: msgId,
             update: (text) => {
                 // Keep streaming lightweight (avoid re-parsing markdown/code each token)
-                messageEl.textContent = this.normalizeAssistantLineBreaks(text);
-                this.scrollToBottom();
-                this.messageBuffer[bufferIndex].content = text;
+                pendingText = String(text ?? '');
+                this.messageBuffer[bufferIndex].content = pendingText;
+                if (updateHandle != null) return;
+                updateHandle = raf(() => {
+                    const next = pendingText;
+                    updateHandle = null;
+                    if (!messageEl || !messageEl.isConnected) return;
+                    messageEl.textContent = this.normalizeAssistantLineBreaks(next);
+                    messageEl.style.whiteSpace = 'pre-wrap';
+                    this.scrollToBottom();
+                });
             },
             finish: (finalMessage) => {
                 this.isStreaming = false;
+                if (updateHandle != null) {
+                    caf(updateHandle);
+                    updateHandle = null;
+                }
                 if (finalMessage && finalMessage.type && finalMessage.type !== 'text') {
                     // Replace with structured render
                     const parent = messageEl.parentElement?.parentElement || messageEl.parentElement;
@@ -618,6 +644,10 @@ export class ChatUI {
             },
             cancel: () => {
                 this.isStreaming = false;
+                if (updateHandle != null) {
+                    caf(updateHandle);
+                    updateHandle = null;
+                }
                 try { wrapperEl?.remove?.(); } catch {}
                 try { this.messageBuffer.splice(bufferIndex, 1); } catch {}
             },
@@ -625,20 +655,25 @@ export class ChatUI {
     }
 
     preloadHistory(messages = []) {
-        messages.forEach(msg => this.addMessage({
-            role: msg.role === 'user' ? 'user' : 'assistant',
-            type: msg.type || 'text',
-            content: msg.content,
-            name: msg.name,
-            avatar: msg.avatar,
-            time: msg.time,
-            meta: msg.meta,
-            badge: msg.badge,
-            id: msg.id
-        }));
-        if (messages.length) {
-            this.scrollToBottom();
+        const list = Array.isArray(messages) ? messages : [];
+        if (!list.length || !this.scrollEl) return;
+        const fragment = document.createDocumentFragment();
+        for (const msg of list) {
+            const el = this.buildMessageElement({
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                type: msg.type || 'text',
+                content: msg.content,
+                name: msg.name,
+                avatar: msg.avatar,
+                time: msg.time,
+                meta: msg.meta,
+                badge: msg.badge,
+                id: msg.id
+            });
+            if (el) fragment.appendChild(el);
         }
+        this.scrollEl.appendChild(fragment);
+        this.scrollToBottom();
     }
 
     removeMessage(msgId) {

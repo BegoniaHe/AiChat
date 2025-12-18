@@ -1213,3 +1213,8 @@
 
 - 2025-12-18 13:43（动态评论：默认折叠为 3 条）
   - **折叠策略**：动态卡片默认只显示最近 3 条评论，其余折叠；点击“展开查看更多评论”后再显示全部。
+
+- 2025-12-18 13:55（性能优化：减少重复渲染与滚动抖动）
+  - **列表刷新节流**：`refreshChatAndContacts` 合并到下一帧执行，多次调用只刷新一次；无联系人搜索词时不再触发搜索过滤。
+  - **历史预载批量渲染**：`ChatUI.preloadHistory` 使用 `DocumentFragment` 一次性 append，并只滚动一次，减少 layout thrash。
+  - **流式回覆节流**：`startAssistantStream.update` 改为每帧更新一次 DOM+滚动，减少频繁 `scrollToBottom()` 引起的卡顿。
