@@ -47,6 +47,9 @@ const initApp = async () => {
   await personaStore.ready;
   await window.appBridge?.regex?.ready;
   await window.appBridge?.presets?.ready;
+  try {
+    await window.appBridge?.syncPresetRegexBindings?.();
+  } catch {}
   window.appBridge.setActiveSession(chatStore.getCurrent());
   const sessionPanel = new SessionPanel(chatStore, contactsStore, ui);
   const regexSessionPanel = new RegexSessionPanel(() => chatStore.getCurrent());
@@ -326,15 +329,11 @@ const initApp = async () => {
         const tail = list.slice(-12);
         return tail
           .map(c => {
-            const cid = String(c?.id || '').trim();
             const a = String(c?.author || '').trim();
             const content = String(c?.content || '').replace(/\n/g, '<br>');
-            const rto = String(c?.replyTo || '').trim();
             const rta = String(c?.replyToAuthor || '').trim();
             const parts = [
-              cid ? `comment_id::${cid}` : '',
               a ? `author::${a}` : '',
-              rto ? `reply_to::${rto}` : '',
               rta ? `reply_to_author::${rta}` : '',
               content ? `content::${content}` : '',
             ].filter(Boolean);
@@ -351,19 +350,16 @@ const initApp = async () => {
       // 场景 C：动态评论（提示词规则由「预设 → 聊天提示词 → 动态评论回复提示词」注入；评论数据作为 system 注入，用户内容通过 {{lastUserMessage}} 填入）
       const promptData = `
 【QQ空间动态评论回复（数据）】
-moment_id: ${id}
 发布者: ${authorName}
 动态内容: ${String(m.content || '').trim()}
 动态时间: ${String(m.time || '').trim() || '（未知）'}
 
 【用户评论】
-user_comment_id: ${userCommentId || '（未知）'}
 ${userLine}
 
 ${
   isReplyToComment
     ? `【回复上下文】
-reply_to_comment_id: ${replyTo.id}
 reply_to_author: ${replyTo.author}
 reply_to_content: ${String(replyTo.content || '').trim()}
 `
@@ -372,7 +368,7 @@ reply_to_content: ${String(replyTo.content || '').trim()}
 
 ${
   recentComments
-    ? `【当前评论列表（最近12条，含 comment_id，可用于 reply_to）】
+    ? `【当前评论列表（最近12条）】
 ${recentComments}
 `
     : ''
@@ -398,7 +394,22 @@ ${listPart || '-（无）'}
           }
           if (ev.type === 'moment_reply') {
             const mid = String(ev.momentId || '').trim() || id;
-            momentsStore.addComments(mid, ev.comments || []);
+            const incoming = Array.isArray(ev.comments) ? ev.comments : [];
+            const patched = (() => {
+              if (!isReplyToComment || !replyTo?.id) return incoming;
+              return incoming.map(c => {
+                if (!c || typeof c !== 'object') return c;
+                // If model didn't provide reply_to (because we no longer expose comment_id), attach it for the primary replier.
+                const author = String(c.author || '').trim();
+                const hasReplyTo = String(c.replyTo || '').trim().length > 0;
+                const isPrimaryReplier =
+                  author &&
+                  (author === normalizeName(replyTo?.author) || author === normalizeName(target?.name));
+                if (hasReplyTo || !isPrimaryReplier) return c;
+                return { ...c, replyTo: String(replyTo.id || ''), replyToAuthor: String(replyTo.author || '') };
+              });
+            })();
+            momentsStore.addComments(mid, patched);
             try {
               bumpMomentEngagement(mid, n);
             } catch {}
@@ -2206,7 +2217,9 @@ ${listPart || '-（无）'}
               }
               if (ev.type === 'moment_reply') {
                 try {
-                  momentsStore.addComments(ev.momentId, ev.comments || []);
+                  const mid = String(ev.momentId || '').trim();
+                  if (!mid) return;
+                  momentsStore.addComments(mid, ev.comments || []);
                   mutatedMoments = true;
                   didAnything = true;
                   if (activePage === 'moments') momentsPanel.render();
@@ -2317,7 +2330,9 @@ ${listPart || '-（无）'}
                   }
                   if (ev?.type === 'moment_reply') {
                     try {
-                      momentsStore.addComments(ev.momentId, ev.comments || []);
+                      const mid = String(ev.momentId || '').trim();
+                      if (!mid) return;
+                      momentsStore.addComments(mid, ev.comments || []);
                       mutatedMoments = true;
                       didAnything = true;
                       if (activePage === 'moments') momentsPanel.render();
@@ -2466,7 +2481,9 @@ ${listPart || '-（无）'}
               return;
             }
             if (ev?.type === 'moment_reply') {
-              momentsStore.addComments(ev.momentId, ev.comments || []);
+              const mid = String(ev.momentId || '').trim();
+              if (!mid) return;
+              momentsStore.addComments(mid, ev.comments || []);
               didAnything = true;
               mutatedMoments = true;
               return;
@@ -2554,7 +2571,9 @@ ${listPart || '-（无）'}
                   return;
                 }
                 if (ev?.type === 'moment_reply') {
-                  momentsStore.addComments(ev.momentId, ev.comments || []);
+                  const mid = String(ev.momentId || '').trim();
+                  if (!mid) return;
+                  momentsStore.addComments(mid, ev.comments || []);
                   didAnything = true;
                   mutatedMoments = true;
                   return;
@@ -2879,7 +2898,12 @@ ${listPart || '-（无）'}
     updateWorldIndicator();
     rerenderCurrentSession();
   });
-  window.addEventListener('preset-changed', () => rerenderCurrentSession());
+  window.addEventListener('preset-changed', async () => {
+    try {
+      await window.appBridge?.syncPresetRegexBindings?.();
+    } catch {}
+    rerenderCurrentSession();
+  });
   window.addEventListener('regex-changed', () => {
     rerenderCurrentSession();
   });

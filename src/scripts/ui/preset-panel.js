@@ -1723,6 +1723,33 @@ export class PresetPanel {
         if (!id) return;
         if (!confirm('删除该预设？此操作不可恢复。')) return;
         this.captureDraft();
+
+        // If preset has bound regex sets, offer to delete them together.
+        try {
+            await window.appBridge?.regex?.ready;
+            const presetType = this.getStoreType();
+            const sets = window.appBridge?.regex?.listLocalSets?.() || [];
+            const bound = sets.filter(s =>
+                s &&
+                s.bind &&
+                typeof s.bind === 'object' &&
+                s.bind.type === 'preset' &&
+                String(s.bind.presetType || '') === String(presetType) &&
+                String(s.bind.presetId || '') === String(id)
+            );
+            if (bound.length) {
+                const ok = confirm(`检测到该预设绑定了 ${bound.length} 组正则。是否一并删除这些正则？\n取消：仅删除预设，保留正则。`);
+                if (ok) {
+                    for (const s of bound) {
+                        const sid = String(s?.id || '').trim();
+                        if (!sid) continue;
+                        await window.appBridge.regex.removeLocalSet(sid);
+                    }
+                    window.dispatchEvent(new CustomEvent('regex-changed'));
+                }
+            }
+        } catch {}
+
         await this.store.remove(this.getStoreType(), id);
         const key = this.getDraftKey(this.getStoreType(), id);
         if (key) this.drafts.delete(key);

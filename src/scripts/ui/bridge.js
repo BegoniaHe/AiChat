@@ -345,6 +345,21 @@ class AppBridge {
     };
   }
 
+  async syncPresetRegexBindings() {
+    try {
+      await this.presets?.ready;
+      await this.regex?.ready;
+      const active = this.presets?.getState?.()?.active || {};
+      const changed = await this.regex.syncPresetBindings?.(active);
+      if (changed) {
+        window.dispatchEvent(new CustomEvent('regex-changed'));
+      }
+      return Boolean(changed);
+    } catch {
+      return false;
+    }
+  }
+
   applyInputRegex(text, { isEdit = false, depth } = {}) {
     try {
       return this.regex.apply(text, this.getRegexContext(), regex_placement.USER_INPUT, {
@@ -457,7 +472,9 @@ class AppBridge {
         depth: 0,
       });
       const promptInput = this.regex.apply(directInput, ctx, regex_placement.USER_INPUT, {
-        isMarkdown: false,
+        // Product requirement: as long as enabled, input regex should apply to outgoing prompt.
+        // So, include markdownOnly scripts too when building outgoing prompt.
+        isMarkdown: true,
         isPrompt: true,
         isEdit: false,
         depth: 0,
@@ -616,14 +633,9 @@ class AppBridge {
     let usedLastUserMessageForPendingInput = false;
     const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
       const raw = String(rawText ?? '');
-      const out = raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: effectiveLastUserMessage }) : '';
-      if (!usedLastUserMessageForPendingInput && effectiveLastUserMessage && lastUserMessageRe.test(raw)) {
-        const rendered = String(out ?? '').trim();
-        if (rendered && rendered.includes(effectiveLastUserMessage)) {
-          usedLastUserMessageForPendingInput = true;
-        }
-      }
-      return out;
+      // NOTE: do not infer "lastUserMessage used" here; it must be tied to a USER-role block,
+      // otherwise some presets rely on USER_INPUT regex to wrap the latest user message.
+      return raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: effectiveLastUserMessage }) : '';
     };
     // SillyTavern-like persona settings (subset)
     const personaRaw = String(context?.user?.persona || '');
@@ -1065,11 +1077,15 @@ class AppBridge {
           if (useSysprompt && sysp?.content) content = sysp.content;
           else if (context.systemPrompt) content = context.systemPrompt;
         }
+        const rawHadLastUser = lastUserMessageRe.test(String(content || ''));
         content = processTextMacrosWithPendingFlag(content, { user: name1, char: name2 });
         if (!content) continue;
 
         const role = String(pr?.role || 'system').toLowerCase();
         const mappedRole = role === 'user' || role === 'assistant' || role === 'system' ? role : 'system';
+        if (!usedLastUserMessageForPendingInput && mappedRole === 'user' && rawHadLastUser) {
+          usedLastUserMessageForPendingInput = true;
+        }
         messages.push({ role: mappedRole, content });
       }
 
@@ -1257,6 +1273,9 @@ class AppBridge {
         if (!raw) continue;
         const roleRaw = String(b.role || 'system').toLowerCase();
         const role = (roleRaw === 'user' || roleRaw === 'assistant' || roleRaw === 'system') ? roleRaw : 'system';
+        if (!usedLastUserMessageForPendingInput && role === 'user' && lastUserMessageRe.test(raw)) {
+          usedLastUserMessageForPendingInput = true;
+        }
         const content = processTextMacrosWithPendingFlag(raw, {
           user: name1,
           char: name2,

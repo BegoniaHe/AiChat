@@ -1268,3 +1268,15 @@
 - 2025-12-18 17:04（预设面板：保存不再跳回预设1 + 导入名带文件名）
   - **修复**：`PresetStore.upsert()` 更新已有预设时不再隐式改写 active 指针，避免“保存多个草稿后 active 被最后一次保存覆盖”导致 UI 自动跳回预设1。
   - **体验**：导入预设时默认名称改为导入文件名（优先使用 JSON 内的 `name`，否则用文件名去扩展名）。 
+
+- 2025-12-18 17:36（正则：随预设切换 + 删除预设可连带删除 + 发送时一律生效）
+  - **切换联动**：预设切换后自动同步正则启用状态：只启用当前 active 预设所绑定的正则集合，其他预设绑定集合自动停用（`RegexStore.syncPresetBindings`）。
+  - **删除连带**：删除预设时若检测到绑定正则集合，会弹窗询问是否一并删除，确认后同时删除对应正则集合。
+  - **发送生效**：发送 prompt 时会把启用的“用户输入正则”全部应用到 outgoing prompt（包含原本仅用于显示的 `markdownOnly` 规则）。
+
+- 2025-12-18 17:52（用户输入正则：修复“最新输入被跳过导致正则不生效”）
+  - **修复**：`{{lastUserMessage}}` 的“已注入则不追加 user 消息”判定收紧为仅当 **USER-role** 的 prompt block/extraPromptBlocks 使用该占位符时才生效，避免某些预设依赖 `USER_INPUT` 正则包裹最新输入却因未追加 user 消息而丢失输入内容。
+
+- 2025-12-18 20:19（动态评论 prompt：移除 moment_id/comment_id + moment_reply 兼容无 moment_id）
+  - **调整**：动态评论任务注入给模型的 `promptData` 不再包含 `moment_id`、`comment_id`、`user_comment_id`、`reply_to_comment_id` 等 ID 字段，减少噪音与泄漏。
+  - **兼容**：`moment_reply` 解析允许缺省 `moment_id::`；在“动态评论”任务中用已知的当前动态 id 回填；在聊天协议解析中若缺失 momentId 则忽略该事件以免误写入。

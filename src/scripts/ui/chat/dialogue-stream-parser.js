@@ -327,7 +327,8 @@ export class DialogueStreamParser {
                 const inner = work.slice(startIdx + 'moment_reply_start'.length, endAt);
                 const after = endAt + endMark.length;
                 const { momentId, comments } = parseMomentReplyBlock(inner);
-                if (momentId && comments.length) events.push({ type: 'moment_reply', momentId, comments });
+                // moment_id is optional (some tasks already know the target momentId in context).
+                if (comments.length) events.push({ type: 'moment_reply', momentId, comments });
                 work = work.slice(after);
                 advanced = true;
                 continue;

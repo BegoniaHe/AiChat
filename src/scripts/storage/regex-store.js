@@ -281,6 +281,34 @@ export class RegexStore {
         await this.persist();
     }
 
+    /**
+     * Auto-enable preset-bound local sets for the currently active preset,
+     * and auto-disable preset-bound sets for inactive presets (same presetType).
+     *
+     * This matches the product requirement: switching presets automatically switches bound regex.
+     */
+    async syncPresetBindings(activePresets = {}) {
+        await this.ready;
+        const sets = ensureObj(this.state?.local?.sets, {});
+        let changed = false;
+        for (const s of Object.values(sets)) {
+            if (!s || typeof s !== 'object') continue;
+            const bind = s.bind;
+            if (!bind || typeof bind !== 'object' || bind.type !== 'preset') continue;
+            const pt = String(bind.presetType || '').trim();
+            const pid = String(bind.presetId || '').trim();
+            if (!pt || !pid) continue;
+            const shouldEnable = String(activePresets?.[pt] || '') === pid;
+            if (s.enabled !== shouldEnable) {
+                s.enabled = shouldEnable;
+                s.updatedAt = Date.now();
+                changed = true;
+            }
+        }
+        if (changed) await this.persist();
+        return changed;
+    }
+
     /* ---------------- Session ---------------- */
     getSession(sessionId) {
         const sid = String(sessionId || '');
