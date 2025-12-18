@@ -176,6 +176,154 @@ const normalizeType = (type) => {
 
 const ensureObj = (v, fallback) => (v && typeof v === 'object') ? v : fallback;
 
+const normalizeOpenAIPreset = (preset) => {
+    if (!preset || typeof preset !== 'object') return;
+
+    // SillyTavern PromptManager global dummy character id
+    const ST_PROMPT_ORDER_DUMMY_ID = 100001;
+    const ST_PROMPT_ORDER_FALLBACK_ID = 100000;
+
+    const coerceRole = (role) => {
+        if (role === 0) return 'system';
+        if (role === 1) return 'user';
+        if (role === 2) return 'assistant';
+        const r = String(role || '').toLowerCase().trim();
+        if (r === 'system' || r === 'user' || r === 'assistant') return r;
+        return 'system';
+    };
+
+    const coerceIdentifier = (p, fallback) => {
+        const cand = [
+            p?.identifier,
+            p?.id,
+            p?.prompt_id,
+            p?.promptId,
+            p?.name,
+            p?.title,
+        ];
+        for (const c of cand) {
+            const s = String(c || '').trim();
+            if (s) return s;
+        }
+        return fallback;
+    };
+
+    const coerceContent = (p) => {
+        const cand = [
+            p?.content,
+            p?.prompt,
+            p?.text,
+            p?.value,
+            p?.message,
+        ];
+        for (const c of cand) {
+            const s = String(c ?? '');
+            if (s.trim()) return s;
+        }
+        return String(p?.content ?? '');
+    };
+
+    // 1) Normalize prompts: ST exports are usually an array, but some forks use object maps or "prompt" instead of "content".
+    let promptsRaw = preset.prompts;
+    if (!Array.isArray(promptsRaw) && promptsRaw && typeof promptsRaw === 'object') {
+        // Some exports are keyed by identifier: { main: {...}, nsfw: {...} }
+        promptsRaw = Object.entries(promptsRaw).map(([key, value]) => {
+            if (value && typeof value === 'object') {
+                // Preserve the map key as identifier when missing.
+                if (!('identifier' in value) || !String(value.identifier || '').trim()) {
+                    return { ...value, identifier: String(key || '').trim() || value.identifier };
+                }
+                return value;
+            }
+            // Extremely defensive: allow string values.
+            return { identifier: String(key || '').trim(), content: String(value ?? '') };
+        });
+    }
+    const promptsIn = Array.isArray(promptsRaw) ? promptsRaw : [];
+
+    const normalizedPrompts = [];
+    const keyToIdentifier = new Map();
+    for (let i = 0; i < promptsIn.length; i++) {
+        const p = promptsIn[i];
+        if (!p || typeof p !== 'object') continue;
+        const identifier = coerceIdentifier(p, `custom_${i}`);
+        const name = String(p?.name || p?.title || identifier).trim() || identifier;
+        const role = coerceRole(p?.role);
+        const system_prompt = (typeof p?.system_prompt === 'boolean') ? p.system_prompt : true;
+        const marker = Boolean(p?.marker);
+        const content = coerceContent(p);
+        const out = { ...p, identifier, name, role, system_prompt, marker, content };
+        normalizedPrompts.push(out);
+
+        // Build a mapping so prompt_order entries that refer to "id"/"name" can be resolved.
+        const keys = [
+            identifier,
+            String(p?.id || '').trim(),
+            String(p?.prompt_id || '').trim(),
+            String(p?.name || '').trim(),
+            String(p?.title || '').trim(),
+        ].filter(Boolean);
+        for (const k of keys) {
+            if (!keyToIdentifier.has(k)) keyToIdentifier.set(k, identifier);
+        }
+    }
+    preset.prompts = normalizedPrompts;
+
+    // 2) Normalize prompt_order blocks and merge identifiers so our UI/builder won't drop blocks.
+    let blocks = preset.prompt_order;
+    if (!Array.isArray(blocks) && blocks && typeof blocks === 'object') {
+        // Some exports store as {character_id:..., order:[...]} directly.
+        // Others store as a map: { "100001": {character_id:..., order:[...]} }
+        if ('order' in blocks || 'character_id' in blocks) {
+            blocks = [blocks];
+        } else {
+            blocks = Object.values(blocks);
+        }
+    }
+    blocks = Array.isArray(blocks) ? blocks : [];
+
+    // NOTE: Per product requirement, ONLY import/use the ST global dummyId (100001) block.
+    // Do NOT merge other character_id blocks; do NOT auto-append missing prompts to order.
+    const importBlock =
+        blocks.find(b => b && typeof b === 'object' && String(b.character_id) === String(ST_PROMPT_ORDER_DUMMY_ID)) ||
+        null;
+    if (!importBlock) return;
+
+    const ingestOrder = (orderArr) => {
+        const out = [];
+        const seen = new Set();
+        const arr = Array.isArray(orderArr) ? orderArr : [];
+        for (const it of arr) {
+            // ST order items are usually {identifier, enabled}, but may use id/name or even be a string.
+            const rawKey = (() => {
+                if (typeof it === 'string') return it;
+                if (typeof it === 'number' && Number.isFinite(it)) {
+                    // Some forks store numeric indices instead of identifiers.
+                    const idx = Math.trunc(it);
+                    const fromPrompt = promptsIn[idx];
+                    return fromPrompt && typeof fromPrompt === 'object' ? (fromPrompt.identifier ?? fromPrompt.id ?? fromPrompt.name) : '';
+                }
+                if (it && typeof it === 'object') return (it.identifier ?? it.id ?? it.prompt_id ?? it.promptId ?? it.name ?? it.title);
+                return '';
+            })();
+            const key = String(rawKey || '').trim();
+            if (!key) continue;
+            const identifier = keyToIdentifier.get(key) || key;
+            if (seen.has(identifier)) continue;
+            seen.add(identifier);
+            const enabled = (it && typeof it === 'object' && 'enabled' in it) ? (it.enabled !== false) : true;
+            out.push({ identifier, enabled });
+        }
+        return out;
+    };
+
+    const order = ingestOrder(importBlock.order);
+    if (!order.length) return;
+
+    // Keep ONLY dummyId=100001 order block (align ST PromptManager global strategy).
+    preset.prompt_order = [{ character_id: ST_PROMPT_ORDER_DUMMY_ID, order }];
+};
+
 const makeDefaultState = (defaultsByType) => {
     const findIdByName = (type, name) => {
         const entries = Object.entries(defaultsByType?.[type] || {});
@@ -325,6 +473,9 @@ export class PresetStore {
                     p.summary_rules = DEFAULT_SUMMARY_RULES;
                 }
             }
+            try {
+                for (const p of Object.values(state.presets.openai || {})) normalizeOpenAIPreset(p);
+            } catch {}
             await this.persist(state);
         } else {
             // ensure structure and merge defaults (do not overwrite user edits)
@@ -416,6 +567,9 @@ export class PresetStore {
                     p.summary_rules = DEFAULT_SUMMARY_RULES;
                 }
             }
+            try {
+                for (const p of Object.values(state.presets.openai || {})) normalizeOpenAIPreset(p);
+            } catch {}
             await this.persist(state);
         }
 
@@ -524,6 +678,9 @@ export class PresetStore {
         const t = normalizeType(type);
         const presetId = id || genId(`preset-${t}`);
         const next = { ...(data || {}), name: String(name || data?.name || presetId) };
+        if (t === 'openai') {
+            try { normalizeOpenAIPreset(next); } catch {}
+        }
         this.state.presets[t][presetId] = next;
         this.state.active[t] = presetId;
         await this.persist();

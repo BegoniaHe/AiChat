@@ -296,7 +296,17 @@ export class PresetPanel {
         if (typeof obj.story_string === 'string') return 'context';
         if (typeof obj.content === 'string' && ('post_history' in obj)) return 'sysprompt';
         if (typeof obj.input_sequence === 'string' || typeof obj.output_sequence === 'string') return 'instruct';
-        if ('temperature' in obj || 'top_p' in obj || Array.isArray(obj.prompts)) return 'openai';
+        // OpenAI preset: ST exports are raw preset objects; prompts can be an array or an object map.
+        if (
+            'temperature' in obj ||
+            'top_p' in obj ||
+            'temp_openai' in obj ||
+            'top_p_openai' in obj ||
+            'openai_max_context' in obj ||
+            'openai_max_tokens' in obj ||
+            ('prompts' in obj) ||
+            ('prompt_order' in obj)
+        ) return 'openai';
         return null;
     }
 
@@ -1225,12 +1235,18 @@ export class PresetPanel {
         const wrap = this.renderSection('自定义提示词区块（Prompt Blocks）', '与 ST 类似：区块默认折叠，点击展开；可拖拽排序并可新增自定义区块');
 
         // Prompt blocks (ST-like): show blocks in prompt_order, allow drag reorder
+        const pickPromptOrderBlock = () => {
+            const arr = Array.isArray(p.prompt_order) ? p.prompt_order : [];
+            const byId = (id) => arr.find(b => b && typeof b === 'object' && String(b.character_id) === String(id));
+            // ST PromptManager global dummyId=100001, keep 100000 as fallback.
+            return byId(100001) || byId(100000) || arr[0] || null;
+        };
         const prompts = Array.isArray(p.prompts) ? p.prompts : [];
         const promptById = new Map();
         prompts.forEach(pr => {
             if (pr?.identifier) promptById.set(pr.identifier, pr);
         });
-        const orderBlock = Array.isArray(p.prompt_order) ? p.prompt_order[0] : null;
+        const orderBlock = pickPromptOrderBlock();
         const order = Array.isArray(orderBlock?.order) ? orderBlock.order : [];
 
         const blocks = order.length
@@ -1605,10 +1621,17 @@ export class PresetPanel {
 
             current.prompts = Array.from(promptById.values());
             if (!Array.isArray(current.prompt_order)) current.prompt_order = [];
-            if (!current.prompt_order[0] || typeof current.prompt_order[0] !== 'object') {
-                current.prompt_order[0] = { character_id: 100000, order: [] };
+            const findBlock = (id) => current.prompt_order.find(b => b && typeof b === 'object' && String(b.character_id) === String(id));
+            let target = findBlock(100001) || findBlock(100000) || current.prompt_order[0] || null;
+            if (!target || typeof target !== 'object') {
+                target = { character_id: 100001, order: [] };
+                current.prompt_order.push(target);
+            } else if (target.character_id === undefined || target.character_id === null) {
+                target.character_id = 100001;
             }
-            current.prompt_order[0].order = order;
+            target.order = order;
+            // Per requirement: only keep ST global dummyId=100001 block to avoid importing/keeping extra blocks.
+            current.prompt_order = [{ character_id: 100001, order: target.order }];
             current.boundProfileId = window.appBridge?.config?.getActiveProfileId?.() || current.boundProfileId || null;
             return current;
         }

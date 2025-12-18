@@ -596,6 +596,10 @@ class AppBridge {
     const pendingUserTextRaw = String(userMessage ?? '').trim();
     const isMomentCommentTask = String(context?.task?.type || '').toLowerCase() === 'moment_comment';
     const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
+    const disableScenarioHint = Boolean(context?.meta?.disableScenarioHint);
+    const overrideLastUserMessageRaw = (typeof context?.meta?.overrideLastUserMessage === 'string')
+      ? String(context.meta.overrideLastUserMessage)
+      : '';
     const scenarioHint = (() => {
       if (isMomentCommentTask) {
         const isReply = Boolean(context?.task?.replyToAuthor) || Boolean(context?.task?.replyToCommentId) || Boolean(context?.task?.isReplyToComment);
@@ -604,17 +608,18 @@ class AppBridge {
       if (isGroupChat) return '在群聊，注意群聊格式';
       return '在私聊，注意私聊格式';
     })();
-    const pendingUserText = pendingUserTextRaw
+    const pendingUserText = pendingUserTextRaw && !disableScenarioHint
       ? `${pendingUserTextRaw}（${scenarioHint}）`
       : pendingUserTextRaw;
+    const effectiveLastUserMessage = overrideLastUserMessageRaw.trim() ? overrideLastUserMessageRaw.trim() : pendingUserText;
     const lastUserMessageRe = /{{\s*lastUserMessage\s*}}/i;
     let usedLastUserMessageForPendingInput = false;
     const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
       const raw = String(rawText ?? '');
-      const out = raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: pendingUserText }) : '';
-      if (!usedLastUserMessageForPendingInput && pendingUserText && lastUserMessageRe.test(raw)) {
+      const out = raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: effectiveLastUserMessage }) : '';
+      if (!usedLastUserMessageForPendingInput && effectiveLastUserMessage && lastUserMessageRe.test(raw)) {
         const rendered = String(out ?? '').trim();
-        if (rendered && rendered.includes(pendingUserText)) {
+        if (rendered && rendered.includes(effectiveLastUserMessage)) {
           usedLastUserMessageForPendingInput = true;
         }
       }
@@ -754,7 +759,14 @@ class AppBridge {
       typeof openp?.personality_format === 'string' ? openp.personality_format : '{{personality}}';
 
 	    // When OpenAI preset has prompt_order: use ST-like block ordering (drag & drop in UI)
-	    const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
+	    // ST PromptManager global dummyId=100001; keep 100000 as fallback.
+	    const pickOpenAIOrderBlock = () => {
+	      const arr = Array.isArray(openp?.prompt_order) ? openp.prompt_order : [];
+	      const byId = (id) => arr.find(b => b && typeof b === 'object' && String(b.character_id) === String(id));
+	      return byId(100001) || byId(100000) || arr[0] || null;
+	    };
+	    const openaiOrderBlock = pickOpenAIOrderBlock();
+	    const openaiOrder = Array.isArray(openaiOrderBlock?.order) ? openaiOrderBlock.order : null;
 
 	    // 摘要提示词：移入“聊天提示词”区块管理，并固定在系统深度=1（历史前）的位置
 	    const summaryPosition = (() => {
@@ -789,6 +801,7 @@ class AppBridge {
 	    // - 用 <chat_guide> 包裹，便于模型区分“聊天指南”与历史回顾
 	    // - 保证摘要提示词在所有聊天提示词下方
 	    const buildChatPromptBlocks = () => {
+	      if (Boolean(context?.meta?.disableChatGuide)) return [];
 	      const parts = [];
 	      if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
 	        parts.push(dialogueRules);
@@ -914,7 +927,9 @@ class AppBridge {
           isEdit: false,
           depth,
         });
-        const speaker = role === 'user' ? name1 : name2;
+        const speaker = role === 'assistant' && isGroupChat
+          ? (String(m?.name || '').trim() || name2)
+          : (role === 'user' ? name1 : name2);
         return { role, content: withSpeakerPrefix(out, speaker) };
       });
 
@@ -1159,7 +1174,9 @@ class AppBridge {
       for (const m of history) {
         if (!m || typeof m !== 'object') continue;
         if (m.role !== 'user' && m.role !== 'assistant') continue;
-        const speaker = m.role === 'user' ? name1 : name2;
+        const speaker = m.role === 'assistant' && isGroupChat
+          ? (String(m?.name || '').trim() || name2)
+          : (m.role === 'user' ? name1 : name2);
         m.content = withSpeakerPrefix(m.content, speaker);
       }
     } catch {}
@@ -1228,6 +1245,29 @@ class AppBridge {
         messages.push({ role: 'user', content: phi });
       }
     }
+
+    // Optional extra prompt blocks (appended just before the current user message).
+    // Useful for maintenance tasks that want to place content at the {{lastUserMessage}} position.
+    try {
+      const extra = context?.meta?.extraPromptBlocks;
+      const blocks = Array.isArray(extra) ? extra : [];
+      for (const b of blocks) {
+        if (!b || typeof b !== 'object') continue;
+        const raw = String(b.content ?? '').trim();
+        if (!raw) continue;
+        const roleRaw = String(b.role || 'system').toLowerCase();
+        const role = (roleRaw === 'user' || roleRaw === 'assistant' || roleRaw === 'system') ? roleRaw : 'system';
+        const content = processTextMacrosWithPendingFlag(raw, {
+          user: name1,
+          char: name2,
+          group: groupName || name2,
+          members: membersText,
+        });
+        const rendered = String(content || '').trim();
+        if (!rendered) continue;
+        messages.push({ role, content: rendered });
+      }
+    } catch {}
 
     // 5) Current user message
     if (!usedLastUserMessageForPendingInput) {
