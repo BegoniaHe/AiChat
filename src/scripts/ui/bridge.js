@@ -95,6 +95,30 @@ const SUMMARY_REQUEST_NOTICE = [
   '用一句话概括本条回复的内容，禁止不必要的总结和升华',
 ].join('\n');
 
+const formatExactTime = (ts) => {
+  const t = Number(ts || 0);
+  if (!Number.isFinite(t) || t <= 0) return '';
+  try {
+    return new Date(t).toLocaleString();
+  } catch {
+    return '';
+  }
+};
+
+const formatSince = (ts) => {
+  const t = Number(ts || 0);
+  if (!Number.isFinite(t) || t <= 0) return '';
+  const delta = Math.max(0, Date.now() - t);
+  const sec = Math.floor(delta / 1000);
+  if (sec < 60) return `${sec}秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}小时前`;
+  const day = Math.floor(hr / 24);
+  return `${day}天前`;
+};
+
 class AppBridge {
   constructor() {
     this.config = new ConfigManager();
@@ -485,6 +509,28 @@ class AppBridge {
   }
 
   /**
+   * Background one-shot chat (does not block main generation / no isGenerating lock).
+   * Intended for maintenance tasks like summary compaction.
+   */
+  async backgroundChat(messages, options = {}) {
+    if (!this.initialized) {
+      await this.init();
+    }
+    if (!this.isConfigured()) {
+      throw new Error('请先配置 API 信息');
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new Error('當前離線，請連接網絡後再試');
+    }
+    const msgs = Array.isArray(messages) ? messages : [];
+    if (!msgs.length) throw new Error('messages 不能为空');
+
+    // Use the same generation options mapping as normal chat, but allow caller overrides.
+    const genOptions = { ...this.getGenerationOptions(), ...(options || {}) };
+    return this.client.chat(msgs, genOptions);
+  }
+
+  /**
    * 流式生成
    */
   async *generateStream(messages, genOptions = {}, originalUserMessage = '') {
@@ -541,12 +587,25 @@ class AppBridge {
     const name1 = context?.user?.name || 'user';
     const name2 = context?.character?.name || 'assistant';
     const sessionIdForSummary = String(context?.session?.id || this.activeSessionId || 'default');
-    const pendingUserText = String(userMessage ?? '').trim();
+    const pendingUserTextRaw = String(userMessage ?? '').trim();
+    const isMomentCommentTask = String(context?.task?.type || '').toLowerCase() === 'moment_comment';
+    const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
+    const scenarioHint = (() => {
+      if (isMomentCommentTask) {
+        const isReply = Boolean(context?.task?.replyToAuthor) || Boolean(context?.task?.replyToCommentId) || Boolean(context?.task?.isReplyToComment);
+        return isReply ? '在动态评论回复，注意动态评论格式' : '在动态评论，注意动态评论格式';
+      }
+      if (isGroupChat) return '在群聊，注意群聊格式';
+      return '在私聊，注意私聊格式';
+    })();
+    const pendingUserText = pendingUserTextRaw
+      ? `${pendingUserTextRaw}（${scenarioHint}）`
+      : pendingUserTextRaw;
     const lastUserMessageRe = /{{\s*lastUserMessage\s*}}/i;
     let usedLastUserMessageForPendingInput = false;
     const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
       const raw = String(rawText ?? '');
-      const out = raw ? this.processTextMacros(raw, extraContext) : '';
+      const out = raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: pendingUserText }) : '';
       if (!usedLastUserMessageForPendingInput && pendingUserText && lastUserMessageRe.test(raw)) {
         const rendered = String(out ?? '').trim();
         if (rendered && rendered.includes(pendingUserText)) {
@@ -569,8 +628,6 @@ class AppBridge {
     const personaText = personaRaw ? processTextMacrosWithPendingFlag(personaRaw, { user: name1, char: name2 }) : '';
     const historyForMatch = Array.isArray(context.history) ? context.history : [];
     const matchText = [String(userMessage ?? ''), ...historyForMatch.map(m => String(m?.content ?? ''))].join('\n');
-    const isMomentCommentTask = String(context?.task?.type || '').toLowerCase() === 'moment_comment';
-    const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
     const groupName = String(context?.group?.name || '').trim();
     const groupMemberIds = Array.isArray(context?.group?.members) ? context.group.members.map(String) : [];
     const groupMemberNames = Array.isArray(context?.group?.memberNames) ? context.group.memberNames.map(String) : [];
@@ -691,7 +748,7 @@ class AppBridge {
       typeof openp?.personality_format === 'string' ? openp.personality_format : '{{personality}}';
 
 	    // When OpenAI preset has prompt_order: use ST-like block ordering (drag & drop in UI)
-		    const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
+	    const openaiOrder = Array.isArray(openp?.prompt_order?.[0]?.order) ? openp.prompt_order[0].order : null;
 
 	    // 摘要提示词：移入“聊天提示词”区块管理，并固定在系统深度=1（历史前）的位置
 	    const summaryPosition = (() => {
@@ -743,6 +800,101 @@ class AppBridge {
 	      const content = parts.map(t => String(t || '').trim()).filter(Boolean).join('\n\n').trim();
 	      if (!content) return [];
 	      return [{ role: 'system', content: `<chat_guide>\n${content}\n</chat_guide>` }];
+	    };
+
+	    const buildMomentCommentDataBlock = () => {
+	      if (!isMomentCommentTask) return null;
+	      const raw = String(context?.task?.promptData || '').trim();
+	      if (!raw) return null;
+	      const content = processTextMacrosWithPendingFlag(raw, {
+	        user: name1,
+	        char: name2,
+	        group: groupName || name2,
+	        members: membersText,
+	      });
+	      const rendered = String(content || '').trim();
+	      if (!rendered) return null;
+	      return { role: 'system', content: rendered };
+	    };
+
+	    const buildGroupMemberPrivateSummaryBlock = () => {
+	      if (!isGroupChat) return null;
+	      const memberIds = groupMemberIds.slice();
+	      if (!memberIds.length || !this.chatStore?.getSummaries) return null;
+	      const lines = [];
+	      for (let i = 0; i < memberIds.length; i++) {
+	        const mid = String(memberIds[i] || '').trim();
+	        if (!mid) continue;
+	        const display = String(groupMemberNames[i] || '') || this.contactsStore?.getContact?.(mid)?.name || mid;
+	        const compacted = this.chatStore?.getCompactedSummary?.(mid) || null;
+	        const list = this.chatStore.getSummaries(mid) || [];
+	        const arrRaw = Array.isArray(list) ? list : [];
+	        // A) Group injection rule:
+	        // 1) no compacted summary -> latest 3
+	        // 2) has compacted summary -> compacted + latest 2
+	        const arr = compacted ? arrRaw.slice(-2) : arrRaw.slice(-3);
+	        if (compacted && String(compacted.text || '').trim()) {
+	          const at = Number(compacted.at || 0) || 0;
+	          const exact = at ? formatExactTime(at) : '';
+	          const since = at ? formatSince(at) : '';
+	          const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
+	          lines.push(`- 用户与${display}的私聊大总结${when ? `（${when}）` : ''}：${String(compacted.text).trim()}`);
+	        }
+	        for (const it of arr) {
+	          const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+	          if (!text) continue;
+	          const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+	          const exact = at ? formatExactTime(at) : '';
+	          const since = at ? formatSince(at) : '';
+	          const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
+	          lines.push(`- 用户与${display}的私聊摘要${when ? `（${when}）` : ''}：${text}`);
+	        }
+	      }
+	      if (!lines.length) return null;
+	      return {
+	        role: 'system',
+	        content: [
+	          '以下为群聊成员与用户的近期私聊摘要回顾（仅供理解上下文）：',
+	          '注意信息差：私聊内容具有私密性，除非已在群内/动态公开，否则群内其他成员不应知晓。',
+	          ...lines,
+	        ].join('\n'),
+	      };
+	    };
+
+	    const buildPrivateSummaryBlockForTarget = (targetSessionId, displayName) => {
+	      const sid = String(targetSessionId || '').trim();
+	      if (!sid || !this.chatStore?.getSummaries) return null;
+	      const name = String(displayName || '').trim() || sid;
+	      const compacted = this.chatStore?.getCompactedSummary?.(sid) || null;
+	      const list = this.chatStore.getSummaries(sid) || [];
+	      const arrRaw = Array.isArray(list) ? list : [];
+	      const arr = compacted ? arrRaw.slice(-2) : arrRaw.slice(-3);
+	      const lines = [];
+	      if (compacted && String(compacted.text || '').trim()) {
+	        const at = Number(compacted.at || 0) || 0;
+	        const exact = at ? formatExactTime(at) : '';
+	        const since = at ? formatSince(at) : '';
+	        const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
+	        lines.push(`- 用户与${name}的私聊大总结${when ? `（${when}）` : ''}：${String(compacted.text).trim()}`);
+	      }
+	      for (const it of arr) {
+	        const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+	        if (!text) continue;
+	        const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+	        const exact = at ? formatExactTime(at) : '';
+	        const since = at ? formatSince(at) : '';
+	        const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
+	        lines.push(`- 用户与${name}的私聊摘要${when ? `（${when}）` : ''}：${text}`);
+	      }
+	      if (!lines.length) return null;
+	      return {
+	        role: 'system',
+	        content: [
+	          `以下为用户与${name}的近期私聊摘要回顾（仅供理解上下文）：`,
+	          '注意信息差：私聊内容具有私密性，除非已在群内/动态公开，否则其他人不应知晓。',
+	          ...lines,
+	        ].join('\n'),
+	      };
 	    };
 
 		    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
@@ -829,19 +981,29 @@ class AppBridge {
           return [];
         }
       })();
-      const historyRecallBlocks = (() => {
-        const blocks = [{ role: 'system', content: HISTORY_RECALL_NOTICE }];
-        if (summaries.length) {
-          blocks.push({
-            role: 'system',
-            content: `以下为该聊天室的简要摘要回顾：\n${summaries
-              .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
-              .filter(Boolean)
-              .join('\n')}`.trim(),
-          });
-        }
-        return blocks;
-      })();
+	      const historyRecallBlocks = (() => {
+	        const blocks = [{ role: 'system', content: HISTORY_RECALL_NOTICE }];
+	        const momentData = buildMomentCommentDataBlock();
+	        if (momentData) blocks.push(momentData);
+	        if (summaries.length) {
+	          blocks.push({
+	            role: 'system',
+	            content: `以下为该聊天室的简要摘要回顾：\n${summaries
+	              .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	              .filter(Boolean)
+	              .join('\n')}`.trim(),
+	          });
+	        }
+	        const priv = buildGroupMemberPrivateSummaryBlock();
+	        if (priv) blocks.push(priv);
+	        if (isMomentCommentTask) {
+	          const targetId = String(context?.task?.targetSessionId || '').trim();
+	          const targetName = String(context?.task?.targetName || '').trim();
+	          const t = buildPrivateSummaryBlockForTarget(targetId, targetName);
+	          if (t) blocks.push(t);
+	        }
+	        return blocks;
+	      })();
 
       for (const item of openaiOrder) {
         const identifier = item?.identifier;
@@ -1019,19 +1181,35 @@ class AppBridge {
 	    // 动态发布决策提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
 
 		    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
-    try {
-      const list = this.chatStore?.getSummaries?.(sessionIdForSummary) || [];
-      const summaries = Array.isArray(list) ? list.slice(-30) : [];
-      if (summaries.length) {
-        messages.push({
-          role: 'system',
-          content: `以下为该聊天室的简要摘要回顾：\n${summaries
-            .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
-            .filter(Boolean)
-            .join('\n')}`.trim(),
-        });
-      }
-    } catch {}
+	    try {
+	      const momentData = buildMomentCommentDataBlock();
+	      if (momentData) messages.push(momentData);
+	    } catch {}
+	    try {
+	      const list = this.chatStore?.getSummaries?.(sessionIdForSummary) || [];
+	      const summaries = Array.isArray(list) ? list.slice(-30) : [];
+	      if (summaries.length) {
+	        messages.push({
+	          role: 'system',
+	          content: `以下为该聊天室的简要摘要回顾：\n${summaries
+	            .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	            .filter(Boolean)
+	            .join('\n')}`.trim(),
+	        });
+	      }
+	    } catch {}
+	    try {
+	      const priv = buildGroupMemberPrivateSummaryBlock();
+	      if (priv) messages.push(priv);
+	    } catch {}
+	    if (isMomentCommentTask) {
+	      try {
+	        const targetId = String(context?.task?.targetSessionId || '').trim();
+	        const targetName = String(context?.task?.targetName || '').trim();
+	        const t = buildPrivateSummaryBlockForTarget(targetId, targetName);
+	        if (t) messages.push(t);
+	      } catch {}
+	    }
 	    if (history.length > 0) {
 	      messages.push(...history);
 	    }
@@ -1050,7 +1228,7 @@ class AppBridge {
 
     // 5) Current user message
     if (!usedLastUserMessageForPendingInput) {
-      messages.push({ role: 'user', content: userMessage });
+      messages.push({ role: 'user', content: pendingUserTextRaw ? pendingUserText : userMessage });
     }
     return messages;
   }

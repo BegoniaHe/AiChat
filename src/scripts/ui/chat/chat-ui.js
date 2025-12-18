@@ -201,6 +201,26 @@ export class ChatUI {
         this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     }
 
+    scrollToMessage(msgId) {
+        const id = String(msgId || '').trim();
+        if (!id || !this.scrollEl) return false;
+        const esc = (CSS && typeof CSS.escape === 'function') ? CSS.escape : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+        const el = this.scrollEl.querySelector(`[data-msg-id="${esc(id)}"]`);
+        if (!el) return false;
+        const top = el.offsetTop - 12;
+        this.scrollEl.scrollTop = Math.max(0, top);
+        // brief highlight
+        try {
+            el.style.transition = 'background 0.2s ease';
+            const prev = el.style.backgroundColor;
+            el.style.backgroundColor = 'rgba(239,68,68,0.10)';
+            setTimeout(() => {
+                el.style.backgroundColor = prev || '';
+            }, 900);
+        } catch {}
+        return true;
+    }
+
     /**
      * Render a message bubble - QQ Legacy Structure
      * @param {Object} message

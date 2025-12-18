@@ -204,7 +204,31 @@ const parseMomentReplyBlock = (innerText) => {
         }
         const parts = line.split('--').map(p => p.trim());
         if (parts.length >= 2) {
-            comments.push({ author: parts[0] || '', content: parts.slice(1).join('--') || '' });
+            const author = parts[0] || '';
+            const rest = parts.slice(1);
+            let replyTo = '';
+            let replyToAuthor = '';
+            const contentParts = [];
+            for (const seg of rest) {
+                const s = String(seg || '').trim();
+                const m1 = s.match(/^reply_to::\s*(.+)\s*$/i);
+                if (m1) {
+                    replyTo = String(m1[1] || '').trim();
+                    continue;
+                }
+                const m2 = s.match(/^reply_to_author::\s*(.+)\s*$/i);
+                if (m2) {
+                    replyToAuthor = String(m2[1] || '').trim();
+                    continue;
+                }
+                contentParts.push(seg);
+            }
+            comments.push({
+                author,
+                content: contentParts.join('--') || '',
+                replyTo,
+                replyToAuthor,
+            });
         }
     }
     return { momentId, comments };

@@ -65,6 +65,7 @@ const initApp = async () => {
                 ui.clearMessages();
                 ui.preloadHistory(decorateMessagesForDisplay(msgs));
             }
+            try { contactSettingsPanel.renderCompactedSummary?.(); } catch {}
             try {
                 if (activePage === 'moments') momentsPanel.render({ preserveScroll: true });
             } catch {}
@@ -99,7 +100,7 @@ const initApp = async () => {
             try { refreshChatAndContacts(); } catch {}
             const c = contactsStore.getContact(id);
             const cur = chatStore.getCurrent();
-            if (cur === id && currentChatTitle) currentChatTitle.textContent = c?.name || id;
+            if (cur === id && currentChatTitle) currentChatTitle.textContent = formatSessionName(id, c) || c?.name || id;
         }
     });
 
@@ -222,7 +223,7 @@ const initApp = async () => {
         contactsStore,
         defaultAvatar: avatars.assistant,
         userAvatar: personaStore.getActive()?.avatar || avatars.user,
-        onUserComment: async (momentId, commentText) => {
+        onUserComment: async (momentId, commentText, meta = null) => {
             const id = String(momentId || '').trim();
             const userComment = String(commentText || '').trim();
             if (!id || !userComment) return;
@@ -251,6 +252,15 @@ const initApp = async () => {
             // Build a constrained comment-reply task (adapted from 手机流式.html momentCommentTask)
             const authorName = String(m.author || '').trim() || '发布者';
             const originSessionId = String(m.originSessionId || m.authorId || chatStore.getCurrent() || '').trim();
+            const userCommentId = String(meta?.userCommentId || '').trim();
+            const replyTo = (meta && typeof meta === 'object' && meta.replyTo && typeof meta.replyTo === 'object')
+                ? {
+                    id: String(meta.replyTo.id || '').trim(),
+                    author: String(meta.replyTo.author || '').trim(),
+                    content: String(meta.replyTo.content || ''),
+                }
+                : null;
+            const isReplyToComment = Boolean(replyTo?.id);
             const candidates = (contactsStore.listContacts?.() || [])
                 .filter(c => c && !c.isGroup)
                 .map(c => String(c.name || c.id || '').trim())
@@ -260,21 +270,6 @@ const initApp = async () => {
             const uniq = [];
             [authorName, ...candidates].forEach((n) => { if (n && !uniq.includes(n)) uniq.push(n); });
             const listPart = uniq.slice(0, 16).map(n => `- ${n}`).join('\n');
-
-            // 场景 C：动态评论（提示词规则由「预设 → 聊天提示词 → 动态评论回覆提示词」注入，这里只提供数据）
-            const prompt = `
-【QQ空间动态评论回复（数据）】
-moment_id: ${id}
-发布者: ${authorName}
-动态内容: ${String(m.content || '').trim()}
-动态时间: ${String(m.time || '').trim() || '（未知）'}
-
-【用户评论】
-我：${userComment}
-
-【可用联系人名单】
-${listPart || '-（无）'}
-`.trim();
 
             const normalizeName = (s) => String(s || '').trim();
             const resolvePrivateChatTargetSessionId = (otherName) => {
@@ -291,6 +286,66 @@ ${listPart || '-（无）'}
 
                 return null;
             };
+
+            const target = (() => {
+                if (isReplyToComment) {
+                    const n = normalizeName(replyTo?.author);
+                    const sid = resolvePrivateChatTargetSessionId(n) || (n === normalizeName(authorName) ? originSessionId : null);
+                    return { name: n || authorName, sessionId: sid || '' };
+                }
+                const sid = String(originSessionId || '').trim() || resolvePrivateChatTargetSessionId(authorName) || '';
+                return { name: normalizeName(authorName) || '发布者', sessionId: sid };
+            })();
+
+            const recentComments = (() => {
+                const list = Array.isArray(m.comments) ? m.comments : [];
+                const tail = list.slice(-12);
+                return tail.map((c) => {
+                    const cid = String(c?.id || '').trim();
+                    const a = String(c?.author || '').trim();
+                    const content = String(c?.content || '').replace(/\n/g, '<br>');
+                    const rto = String(c?.replyTo || '').trim();
+                    const rta = String(c?.replyToAuthor || '').trim();
+                    const parts = [
+                        cid ? `comment_id::${cid}` : '',
+                        a ? `author::${a}` : '',
+                        rto ? `reply_to::${rto}` : '',
+                        rta ? `reply_to_author::${rta}` : '',
+                        content ? `content::${content}` : '',
+                    ].filter(Boolean);
+                    return parts.length ? `- ${parts.join(' | ')}` : '';
+                }).filter(Boolean).join('\n');
+            })();
+
+            const userLine = isReplyToComment
+                ? `{{user}}回覆了${replyTo.author}：{{lastUserMessage}}`
+                : `{{user}}：{{lastUserMessage}}`;
+
+            // 场景 C：动态评论（提示词规则由「预设 → 聊天提示词 → 动态评论回复提示词」注入；评论数据作为 system 注入，用户内容通过 {{lastUserMessage}} 填入）
+            const promptData = `
+【QQ空间动态评论回复（数据）】
+moment_id: ${id}
+发布者: ${authorName}
+动态内容: ${String(m.content || '').trim()}
+动态时间: ${String(m.time || '').trim() || '（未知）'}
+
+【用户评论】
+user_comment_id: ${userCommentId || '（未知）'}
+${userLine}
+
+${isReplyToComment ? `【回复上下文】
+reply_to_comment_id: ${replyTo.id}
+reply_to_author: ${replyTo.author}
+reply_to_content: ${String(replyTo.content || '').trim()}
+` : ''}
+
+${recentComments ? `【当前评论列表（最近12条，含 comment_id，可用于 reply_to）】
+${recentComments}
+` : ''}
+
+【可用联系人名单】
+${listPart || '-（无）'}
+`.trim();
 
             const applyEvents = (events = []) => {
                 let touchedMoments = false;
@@ -347,16 +402,28 @@ ${listPart || '-（无）'}
                 const p = personaStore.getActive?.() || {};
                 const persona = getEffectivePersona(originSessionId);
                 const uName = String(persona?.name || '').trim() || '我';
-                const ctx = { user: { name: uName, persona: String(persona?.description || ''), personaPosition: persona?.position, personaDepth: persona?.depth, personaRole: persona?.role }, character: { name: authorName }, history: [], task: { type: 'moment_comment' }, session: { id: originSessionId, isGroup: false } };
+                const ctx = {
+                    user: { name: uName, persona: String(persona?.description || ''), personaPosition: persona?.position, personaDepth: persona?.depth, personaRole: persona?.role },
+                    character: { name: target.name || authorName },
+                    history: [],
+                    task: { type: 'moment_comment', targetSessionId: target.sessionId || '', targetName: target.name || '' },
+                    session: { id: originSessionId, isGroup: false }
+                };
+                ctx.task.promptData = promptData;
+                if (isReplyToComment) {
+                    ctx.task.isReplyToComment = true;
+                    ctx.task.replyToCommentId = String(replyTo?.id || '').trim();
+                    ctx.task.replyToAuthor = String(replyTo?.author || '').trim();
+                }
                 if (config.stream) {
-                    const stream = await window.appBridge.generate(prompt, ctx);
+                    const stream = await window.appBridge.generate(userComment, ctx);
                     for await (const chunk of stream) {
                         const events = parser.push(chunk);
                         const res = applyEvents(events);
                         if (res?.touchedMoments) sawMomentReply = true;
                     }
                 } else {
-                    const raw = await window.appBridge.generate(prompt, ctx);
+                    const raw = await window.appBridge.generate(userComment, ctx);
                     const events = parser.push(raw);
                     const res = applyEvents(events);
                     if (res?.touchedMoments) sawMomentReply = true;
@@ -451,7 +518,7 @@ ${listPart || '-（无）'}
         return `${base}(${count})`;
     };
 
-    const renderChatList = () => {
+	    const renderChatList = () => {
         const el = document.getElementById('chat-list');
         if (!el) return;
         const ids = chatStore.listSessions()
@@ -465,60 +532,68 @@ ${listPart || '-（无）'}
             el.appendChild(empty);
             return;
         }
-        ids.forEach((id) => {
-            const contact = contactsStore.getContact(id);
-            const displayName = formatSessionName(id, contact);
-            const avatar = contact?.avatar || avatars.assistant;
-            const last = getLastVisibleMessage(id);
-            const preview = snippetFromMessage(last);
-            const time = last?.timestamp ? formatTime(last.timestamp) : '';
+	        ids.forEach((id) => {
+	            const contact = contactsStore.getContact(id);
+	            const displayName = formatSessionName(id, contact);
+	            const avatar = contact?.avatar || avatars.assistant;
+	            const last = getLastVisibleMessage(id);
+	            const preview = snippetFromMessage(last);
+	            const time = last?.timestamp ? formatTime(last.timestamp) : '';
+	            const unread = chatStore.getUnreadCount(id);
+	            const unreadBadge = unread > 0
+	                ? `<span style="margin-left:8px; min-width:18px; height:18px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; font-weight:800; line-height:18px;">${unread}</span>`
+	                : '';
 
-            const item = document.createElement('div');
-            item.className = 'chat-list-item';
-            item.dataset.session = id;
-            item.dataset.name = displayName;
-            item.innerHTML = `
-                <img src="${avatar}" alt="" class="chat-item-avatar">
-                <div class="chat-item-content">
-                    <div class="chat-item-header">
-                        <div class="chat-item-name">${displayName}</div>
-                        <div class="chat-item-time">${time}</div>
-                    </div>
-                    <div class="chat-item-preview">${preview}</div>
-                </div>
-            `;
-            el.appendChild(item);
-        });
-    };
+	            const item = document.createElement('div');
+	            item.className = 'chat-list-item';
+	            item.dataset.session = id;
+	            item.dataset.name = displayName;
+	            item.innerHTML = `
+	                <img src="${avatar}" alt="" class="chat-item-avatar">
+	                <div class="chat-item-content">
+	                    <div class="chat-item-header">
+	                        <div class="chat-item-name">${displayName}${unreadBadge}</div>
+	                        <div class="chat-item-time">${time}</div>
+	                    </div>
+	                    <div class="chat-item-preview">${preview}</div>
+	                </div>
+	            `;
+	            el.appendChild(item);
+	        });
+	    };
 
     // 创建联系人分组渲染器
-    const contactGroupRenderer = new ContactGroupRenderer({
+	    const contactGroupRenderer = new ContactGroupRenderer({
         groupStore,
         contactsStore,
         dragManager: contactDragManager,
-        renderContactFn: (contact) => {
-            const id = contact.id;
-            const last = getLastVisibleMessage(id);
-            const preview = snippetFromMessage(last);
-            const time = last?.timestamp ? formatTime(last.timestamp) : '';
-            const name = formatSessionName(id, contact);
-            const avatar = contact.avatar || avatars.assistant;
+	        renderContactFn: (contact) => {
+	            const id = contact.id;
+	            const last = getLastVisibleMessage(id);
+	            const preview = snippetFromMessage(last);
+	            const time = last?.timestamp ? formatTime(last.timestamp) : '';
+	            const name = formatSessionName(id, contact);
+	            const avatar = contact.avatar || avatars.assistant;
+	            const unread = chatStore.getUnreadCount(id);
+	            const unreadBadge = unread > 0
+	                ? `<span style="margin-left:8px; min-width:18px; height:18px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; font-weight:800; line-height:18px;">${unread}</span>`
+	                : '';
 
-            const item = document.createElement('div');
-            item.className = 'contact-item';
-            item.dataset.session = id;
-            item.dataset.name = name;
-            item.innerHTML = `
-                <img src="${avatar}" alt="" class="contact-avatar">
-                <div class="contact-info">
-                    <div class="contact-name">${name}</div>
-                    <div class="contact-desc">${preview}</div>
-                </div>
-                <div class="contact-time">${time}</div>
-            `;
-            return item;
-        }
-    });
+	            const item = document.createElement('div');
+	            item.className = 'contact-item';
+	            item.dataset.session = id;
+	            item.dataset.name = name;
+	            item.innerHTML = `
+	                <img src="${avatar}" alt="" class="contact-avatar">
+	                <div class="contact-info">
+	                    <div class="contact-name">${name}${unreadBadge}</div>
+	                    <div class="contact-desc">${preview}</div>
+	                </div>
+	                <div class="contact-time">${time}</div>
+	            `;
+	            return item;
+	        }
+	    });
 
     const renderContactsUngrouped = () => {
         const el = document.getElementById('contacts-ungrouped-list');
@@ -536,7 +611,7 @@ ${listPart || '-（无）'}
         contactGroupRenderer.render(el);
     };
 
-    const renderGroupsList = () => {
+	    const renderGroupsList = () => {
         const el = document.getElementById('contacts-groups-list');
         if (!el) return;
         const groups = contactsStore.listContacts().filter(c => c && c.isGroup);
@@ -548,30 +623,34 @@ ${listPart || '-（无）'}
             el.appendChild(empty);
             return;
         }
-        groups.forEach((g) => {
+	        groups.forEach((g) => {
             const id = g.id;
             const last = getLastVisibleMessage(id);
             const preview = snippetFromMessage(last);
             const time = last?.timestamp ? formatTime(last.timestamp) : '';
-            const name = formatSessionName(id, g);
-            const avatar = g.avatar || avatars.assistant;
-            const count = Array.isArray(g.members) ? g.members.length : 0;
+	            const name = formatSessionName(id, g);
+	            const avatar = g.avatar || avatars.assistant;
+	            const count = Array.isArray(g.members) ? g.members.length : 0;
+	            const unread = chatStore.getUnreadCount(id);
+	            const unreadBadge = unread > 0
+	                ? `<span style="margin-left:8px; min-width:18px; height:18px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; background:#ef4444; color:#fff; font-size:11px; font-weight:800; line-height:18px;">${unread}</span>`
+	                : '';
 
-            const item = document.createElement('div');
-            item.className = 'contact-item';
-            item.dataset.session = id;
-            item.dataset.name = name;
-            item.innerHTML = `
-                <img src="${avatar}" alt="" class="contact-avatar">
-                <div class="contact-info">
-                    <div class="contact-name">${name}</div>
-                    <div class="contact-desc">${preview || `群成员：${count}人`}</div>
-                </div>
-                <div class="contact-time">${time || String(count).padStart(2, '0') + '人'}</div>
-            `;
-            el.appendChild(item);
-        });
-    };
+	            const item = document.createElement('div');
+	            item.className = 'contact-item';
+	            item.dataset.session = id;
+	            item.dataset.name = name;
+	            item.innerHTML = `
+	                <img src="${avatar}" alt="" class="contact-avatar">
+	                <div class="contact-info">
+	                    <div class="contact-name">${name}${unreadBadge}</div>
+	                    <div class="contact-desc">${preview || `群成员：${count}人`}</div>
+	                </div>
+	                <div class="contact-time">${time || String(count).padStart(2, '0') + '人'}</div>
+	            `;
+	            el.appendChild(item);
+	        });
+	    };
 
     const refreshChatAndContacts = () => {
         contactsStore.ensureFromSessions(chatStore.listSessions(), { defaultAvatar: avatars.assistant });
@@ -1293,7 +1372,7 @@ ${listPart || '-（无）'}
     const backToListBtn = document.getElementById('back-to-list');
     let chatOriginPage = 'chat';
 
-    const enterChatRoom = (sessionId, sessionName, originPage = activePage) => {
+	    const enterChatRoom = (sessionId, sessionName, originPage = activePage) => {
         chatOriginPage = originPage || 'chat';
         chatList?.classList.add('hidden');
         chatRoom?.classList.remove('hidden');
@@ -1304,16 +1383,26 @@ ${listPart || '-（无）'}
         if (messageTopbar) messageTopbar.style.display = 'none';
         if (bottomNav) bottomNav.style.display = 'none';
 
-        const contact = contactsStore.getContact(sessionId);
-        if (currentChatTitle) currentChatTitle.textContent = sessionName || formatSessionName(sessionId, contact) || sessionId;
-        // 切换会话
-        chatStore.switchSession(sessionId);
+	        const contact = contactsStore.getContact(sessionId);
+	        if (currentChatTitle) currentChatTitle.textContent = formatSessionName(sessionId, contact) || sessionName || sessionId;
+	        const firstUnreadId = chatStore.getFirstUnreadMessageId(sessionId);
+	        // 切换会话
+	        chatStore.switchSession(sessionId);
         window.appBridge.setActiveSession(sessionId);
         syncUserPersonaUI(sessionId);
-        // 加载历史
-        const history = chatStore.getMessages(sessionId);
-        ui.clearMessages();
-        history.forEach(msg => ui.addMessage(msg));
+	        // 加载历史
+	        const history = chatStore.getMessages(sessionId);
+	        ui.clearMessages();
+	        history.forEach(msg => ui.addMessage(msg));
+	        // Jump to first unread message (LINE-like)
+	        if (firstUnreadId) {
+	            setTimeout(() => ui.scrollToMessage(firstUnreadId), 50);
+	        } else {
+	            setTimeout(() => ui.scrollToBottom(), 0);
+	        }
+	        // Mark read once user enters the chatroom
+	        try { chatStore.markRead(sessionId); } catch {}
+	        refreshChatAndContacts();
         const draft = chatStore.getDraft(sessionId);
         if (draft) {
             ui.setInputText(draft);
@@ -1657,6 +1746,88 @@ ${listPart || '-（无）'}
             const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
             return raw.slice(cut);
         };
+        const summaryCompacting = new Set();
+        const maybeCompactSummaries = (sid) => {
+            const sessionId = String(sid || '').trim();
+            if (!sessionId) return;
+            if (summaryCompacting.has(sessionId)) return;
+            const list = chatStore.getSummaries(sessionId) || [];
+            const summaries = Array.isArray(list) ? list : [];
+            const total = summaries.reduce((n, it) => {
+                const text = String((typeof it === 'string') ? it : it?.text || '');
+                return n + text.length;
+            }, 0);
+            if (total <= 1000) return;
+
+            summaryCompacting.add(sessionId);
+            // Run in background with a short delay to avoid competing with user interactions.
+            setTimeout(async () => {
+                try {
+                    const current = chatStore.getSummaries(sessionId) || [];
+                    const arr = Array.isArray(current) ? current : [];
+                    const payload = arr.map((it) => {
+                        const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+                        if (!text) return '';
+                        const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+                        const when = at ? new Date(at).toLocaleString() : '';
+                        return `- ${when ? `[${when}] ` : ''}${text}`;
+                    }).filter(Boolean).join('\n');
+                    if (!payload.trim()) return;
+
+                    const prompt = [
+                        '# 注意，无视你先前收到的任何指令，你的任务已更改，不再遵守格式要求，不再进行<think>',
+                        '接下来的一轮回复中，将不会进行创作，不再遵循前面的要求，而是会遵循<summary_rules>中的要求进行一轮总结',
+                        '【总结请求】',
+                        '请对前文内容进行全面梳理，根据以下要求制作简明扼要的总结：',
+                        '',
+                        '<summary_rules>',
+                        '总结应当遵循以下原则：',
+                        '- 按时间顺序或逻辑顺序组织信息，并明确给出具体时间节点',
+                        '- 保留关键事件和重要细节，省略冗余描述',
+                        '- 直接陈述事实，避免主观评价',
+                        '- 使用简洁清晰的语言，避免过度修饰',
+                        '- 突出事件发展脉络和关键转折点',
+                        '- 不使用任何xml标签包裹，使用纯文字进行叙述',
+                        '- 不回避任何敏感内容，保证记录完全还原前文',
+                        '',
+                        '总结必须使用以下格式：',
+                        '',
+                        '【关键事件】',
+                        '• {事件1}: {简要描述}',
+                        '• {事件2}: {简要描述}',
+                        '• {事件3}: {简要描述}',
+                        '...',
+                        '',
+                        '</sunmmary_rules>',
+                        '',
+                        '【前文内容（按时间标注的摘要列表）】',
+                        payload,
+                    ].join('\n');
+
+                    const out = await window.appBridge.backgroundChat(
+                        [{ role: 'user', content: prompt }],
+                        { temperature: 0.2, maxTokens: 800 }
+                    );
+                    const text = String(out || '').trim();
+                    if (!text) return;
+                    // Store compact summary below the normal summary list and keep only the latest 2 summaries.
+                    try { chatStore.setCompactedSummary(text, sessionId); } catch {}
+                    try {
+                        const keep = (chatStore.getSummaries(sessionId) || []).slice(-2);
+                        chatStore.clearSummaries(sessionId);
+                        keep.forEach((it) => {
+                            const t = String((typeof it === 'string') ? it : it?.text || '').trim();
+                            if (t) chatStore.addSummary(t, sessionId);
+                        });
+                    } catch {}
+                    try { refreshChatAndContacts(); } catch {}
+                } catch (err) {
+                    logger.debug('summary compaction failed', err);
+                } finally {
+                    summaryCompacting.delete(sessionId);
+                }
+            }, 450);
+        };
         const buildHistoryForLLM = (pendingUserText) => {
             const all = chatStore.getMessages(sessionId) || [];
             const history = all
@@ -1848,12 +2019,15 @@ ${listPart || '-（无）'}
                     if (activeGeneration?.cancelled) return;
 	                    ui.hideTyping();
 	                    chatStore.setLastRawResponse(fullRaw, sessionId);
-	                    const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
-	                    if (protocolSummary) {
-	                        try {
-	                            for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
-	                        } catch {}
-	                    }
+		                    const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
+		                    if (protocolSummary) {
+		                        try {
+		                            for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+		                        } catch {}
+		                        try {
+		                            for (const sid of summarySessionIds) maybeCompactSummaries(sid);
+		                        } catch {}
+		                    }
                     if (mutatedMoments) {
                         try { await momentsStore.flush(); } catch {}
                     }
@@ -2063,11 +2237,14 @@ ${listPart || '-（无）'}
                         }
                     });
 	                    if (didAnything) {
-	                        if (protocolSummary) {
-	                            try {
-	                                for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
-	                            } catch {}
-	                        }
+		                        if (protocolSummary) {
+		                            try {
+		                                for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+		                            } catch {}
+		                            try {
+		                                for (const sid of summarySessionIds) maybeCompactSummaries(sid);
+		                            } catch {}
+		                        }
 	                        refreshChatAndContacts();
 	                        if (activePage === 'moments') momentsPanel.render();
 	                        if (mutatedMoments) {
@@ -2139,11 +2316,14 @@ ${listPart || '-（无）'}
 	                        }
 	                    } catch {}
 	                    if (didAnything) {
-	                        if (protocolSummary) {
-	                            try {
-	                                for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
-	                            } catch {}
-	                        }
+		                if (protocolSummary) {
+		                    try {
+		                        for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+		                    } catch {}
+		                    try {
+		                        for (const sid of summarySessionIds) maybeCompactSummaries(sid);
+		                    } catch {}
+		                }
 	                        refreshChatAndContacts();
 	                        if (activePage === 'moments') momentsPanel.render();
 	                        if (mutatedMoments) {
@@ -2154,18 +2334,22 @@ ${listPart || '-（无）'}
 	                    // 如果对话模式未解析到有效标签，回退显示原文，便于调试
 	                    window.toastr?.warning?.('未解析到有效对话标签，已回退显示原文');
 	                }
-	                if (protocolSummary) {
-	                    try {
-	                        for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
-	                    } catch {}
-	                }
+		                if (protocolSummary) {
+		                    try {
+		                        for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+		                    } catch {}
+		                    try {
+		                        for (const sid of summarySessionIds) maybeCompactSummaries(sid);
+		                    } catch {}
+		                }
                 // === 创意写作模式（暂时停用）===
                 // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
                 // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-                const { text: stripped, summary } = extractSummaryBlock(resultRaw);
-                if (summary) {
-                    try { chatStore.addSummary(summary, sessionId); } catch {}
-                }
+	                const { text: stripped, summary } = extractSummaryBlock(resultRaw);
+	                if (summary) {
+	                    try { chatStore.addSummary(summary, sessionId); } catch {}
+	                    try { maybeCompactSummaries(sessionId); } catch {}
+	                }
                 const stored = stripped;
                 const display = stripped;
                 const parsed = {

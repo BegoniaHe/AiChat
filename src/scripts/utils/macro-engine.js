@@ -83,6 +83,11 @@ export class MacroEngine {
     applyVariableMacros(text, context) {
         const sessionId = this.getSessionId(context);
         let out = String(text || '');
+        const overrideLastUserMessage = (() => {
+            const v = context?.lastUserMessage;
+            const s = (typeof v === 'string') ? v : '';
+            return s.trim() ? s : '';
+        })();
 
         // Replace {{setvar::name::value}} with empty string and set local variable
         out = out.replace(/{{setvar::([^:}]+)::([^}]*)}}/gi, (_m, name, value) => {
@@ -153,7 +158,7 @@ export class MacroEngine {
         // Message macros (subset)
         out = out.replace(/{{lastMessage}}/gi, () => this.getLastMessage(sessionId));
         out = out.replace(/{{lastMessageId}}/gi, () => this.getLastIdByRole('', sessionId));
-        out = out.replace(/{{lastUserMessage}}/gi, () => this.getLastByRole('user', sessionId));
+        out = out.replace(/{{lastUserMessage}}/gi, () => overrideLastUserMessage || this.getLastByRole('user', sessionId));
         out = out.replace(/{{lastCharMessage}}/gi, () => this.getLastByRole('assistant', sessionId));
         out = out.replace(/{{lastUserMessageId}}/gi, () => this.getLastIdByRole('user', sessionId));
         out = out.replace(/{{lastCharMessageId}}/gi, () => this.getLastIdByRole('assistant', sessionId));

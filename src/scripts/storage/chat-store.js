@@ -67,7 +67,15 @@ export class ChatStore {
 
     _ensureSession(id) {
         if (!this.state.sessions[id]) {
-            this.state.sessions[id] = { messages: [], draft: '', variables: {}, settings: {}, detachedSummaries: [] };
+            this.state.sessions[id] = {
+                messages: [],
+                draft: '',
+                variables: {},
+                settings: {},
+                detachedSummaries: [],
+                compactedSummary: null,
+                lastReadMessageId: '',
+            };
             return;
         }
         const s = this.state.sessions[id];
@@ -76,6 +84,8 @@ export class ChatStore {
         if (!s.variables) s.variables = {};
         if (!s.settings) s.settings = {};
         if (!Array.isArray(s.detachedSummaries)) s.detachedSummaries = [];
+        if (typeof s.compactedSummary !== 'object') s.compactedSummary = null;
+        if (typeof s.lastReadMessageId !== 'string') s.lastReadMessageId = '';
         // Normalize legacy summaries (string[]) into objects
         try {
             s.detachedSummaries = (s.detachedSummaries || []).map((it) => {
@@ -210,6 +220,57 @@ export class ChatStore {
         this.state.sessions[id].messages.push(msg);
         this._persist();
         return msg;
+    }
+
+    markRead(id = this.currentId, messageId = '') {
+        this._ensureSession(id);
+        const sid = String(id || '').trim();
+        if (!sid) return;
+        const nextId = String(messageId || '').trim();
+        if (nextId) {
+            this.state.sessions[sid].lastReadMessageId = nextId;
+            this._persist();
+            return;
+        }
+        const last = this.getLastMessage(sid);
+        if (last?.id) {
+            this.state.sessions[sid].lastReadMessageId = String(last.id);
+            this._persist();
+        }
+    }
+
+    getLastReadMessageId(id = this.currentId) {
+        this._ensureSession(id);
+        return String(this.state.sessions[id]?.lastReadMessageId || '');
+    }
+
+    getFirstUnreadMessageId(id = this.currentId) {
+        this._ensureSession(id);
+        const msgs = this.getMessages(id) || [];
+        const lastRead = this.getLastReadMessageId(id);
+        const startIdx = lastRead ? msgs.findIndex(m => String(m?.id || '') === lastRead) : -1;
+        const from = startIdx >= 0 ? startIdx + 1 : 0;
+        for (let i = from; i < msgs.length; i++) {
+            const m = msgs[i];
+            if (!m) continue;
+            if (m.role === 'assistant') return String(m.id || '');
+        }
+        return '';
+    }
+
+    getUnreadCount(id = this.currentId) {
+        this._ensureSession(id);
+        const msgs = this.getMessages(id) || [];
+        const lastRead = this.getLastReadMessageId(id);
+        const startIdx = lastRead ? msgs.findIndex(m => String(m?.id || '') === lastRead) : -1;
+        const from = startIdx >= 0 ? startIdx + 1 : 0;
+        let n = 0;
+        for (let i = from; i < msgs.length; i++) {
+            const m = msgs[i];
+            if (!m) continue;
+            if (m.role === 'assistant') n++;
+        }
+        return n;
     }
 
     setDraft(text, id = this.currentId) {
@@ -460,6 +521,29 @@ export class ChatStore {
                 return [];
             }
         };
+        const getCurrentCompactedSummarySnapshot = () => {
+            try {
+                const session = this.state.sessions[id];
+                const curAid = session.currentArchiveId;
+                if (curAid && Array.isArray(session.archives)) {
+                    const arc = session.archives.find(a => a.id === curAid);
+                    const cs = arc?.compactedSummary;
+                    if (!cs || typeof cs !== 'object') return null;
+                    const text = String(cs.text || '').trim();
+                    if (!text) return null;
+                    const at = Number(cs.at || 0) || 0;
+                    return { at, text };
+                }
+                const cs = session.compactedSummary;
+                if (!cs || typeof cs !== 'object') return null;
+                const text = String(cs.text || '').trim();
+                if (!text) return null;
+                const at = Number(cs.at || 0) || 0;
+                return { at, text };
+            } catch {
+                return null;
+            }
+        };
 
         this.state.sessions[id].archives.push({
             id: archiveId,
@@ -467,6 +551,7 @@ export class ChatStore {
             timestamp,
             messages: [...messages],
             summaries: getCurrentSummariesSnapshot(),
+            compactedSummary: getCurrentCompactedSummarySnapshot(),
         });
         
         this._persist();
@@ -485,6 +570,7 @@ export class ChatStore {
         session.messages = [];
         session.currentArchiveId = null;
         session.detachedSummaries = [];
+        session.compactedSummary = null;
         session.draft = '';
         session.lastRawResponse = '';
         this._persist();
@@ -547,6 +633,71 @@ export class ChatStore {
             return Array.isArray(list) ? list : [];
         }
         return Array.isArray(session.detachedSummaries) ? session.detachedSummaries : [];
+    }
+
+    getCompactedSummary(id = this.currentId) {
+        const sid = String(id || '').trim();
+        if (!sid) return null;
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            const cs = arc?.compactedSummary;
+            if (cs && typeof cs === 'object') {
+                const text = String(cs.text || '').trim();
+                if (!text) return null;
+                const at = Number(cs.at || 0) || 0;
+                return { at, text };
+            }
+            return null;
+        }
+        const cs = session.compactedSummary;
+        if (!cs || typeof cs !== 'object') return null;
+        const text = String(cs.text || '').trim();
+        if (!text) return null;
+        const at = Number(cs.at || 0) || 0;
+        return { at, text };
+    }
+
+    setCompactedSummary(summaryText, id = this.currentId, { at = Date.now() } = {}) {
+        const sid = String(id || '').trim();
+        const text = String(summaryText || '').trim();
+        if (!sid || !text) return false;
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const item = { at: Number(at || Date.now()) || Date.now(), text };
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            if (arc) {
+                arc.compactedSummary = item;
+                this._persist();
+                return true;
+            }
+        }
+        session.compactedSummary = item;
+        this._persist();
+        return true;
+    }
+
+    clearCompactedSummary(id = this.currentId) {
+        const sid = String(id || '').trim();
+        if (!sid) return false;
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            if (arc) {
+                arc.compactedSummary = null;
+                this._persist();
+                return true;
+            }
+        }
+        session.compactedSummary = null;
+        this._persist();
+        return true;
     }
 
     addSummary(summaryText, id = this.currentId) {

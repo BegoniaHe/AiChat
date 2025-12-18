@@ -27,9 +27,31 @@ export class MomentsPanel {
     this.expandedComments = new Set();
     this.openComposer = new Set();
     this.pendingComment = new Set();
+    this.replyTargets = new Map(); // momentId -> { id, author, content }
     this.commentMenuEl = null;
     this.visibleCount = 5;
     this.pageSize = 5;
+  }
+
+  buildThreadedComments(comments = []) {
+    const list = Array.isArray(comments) ? comments.filter(Boolean) : [];
+    const byId = new Map();
+    list.forEach((c) => {
+      const id = String(c?.id || '').trim();
+      if (id) byId.set(id, c);
+    });
+    const repliesByParent = new Map();
+    const roots = [];
+    for (const c of list) {
+      const replyTo = String(c?.replyTo || '').trim();
+      if (replyTo && byId.has(replyTo)) {
+        if (!repliesByParent.has(replyTo)) repliesByParent.set(replyTo, []);
+        repliesByParent.get(replyTo).push(c);
+      } else {
+        roots.push(c);
+      }
+    }
+    return { roots, repliesByParent, byId };
   }
 
   mount(listEl) {
@@ -248,9 +270,40 @@ export class MomentsPanel {
       const VISIBLE_COMMENTS = 8;
       const expanded = this.expandedComments.has(m.id);
       const showComposer = this.openComposer.has(m.id);
+      const replyTarget = this.replyTargets.get(m.id) || null;
       const hiddenCount = comments.length > VISIBLE_COMMENTS ? comments.length - VISIBLE_COMMENTS : 0;
       const visibleComments = expanded ? comments : hiddenCount > 0 ? comments.slice(-VISIBLE_COMMENTS) : comments;
+      const { roots: commentRoots, repliesByParent } = this.buildThreadedComments(visibleComments);
       const pending = this.pendingComment.has(m.id);
+      const threadedHtml = commentRoots
+        .map((c) => {
+          const cid = String(c?.id || '').trim();
+          const author = String(c?.author || '').trim();
+          const content = String(c?.content || '');
+          const replies = cid ? (repliesByParent.get(cid) || []) : [];
+          const replyHtml = replies
+            .map((r) => {
+              const rid = String(r?.id || '').trim();
+              const rauthor = String(r?.author || '').trim();
+              const rcontent = String(r?.content || '');
+              const toName = String(r?.replyToAuthor || '').trim() || author;
+              return `
+                        <div class="moment-comment moment-comment-reply" data-comment-id="${esc(rid)}" style="margin-left:20px; padding-left:10px; border-left:2px solid rgba(0,0,0,0.08);">
+                            <span class="comment-user"><span class="comment-author" role="button" tabindex="0" data-comment-id="${esc(rid)}" style="cursor:pointer; font-weight:800;">${esc(rauthor)}</span> 回复 <span class="comment-replyto" style="font-weight:800;">${esc(toName)}</span>：</span>
+                            <span class="comment-text">${htmlText(rcontent)}</span>
+                        </div>
+                    `;
+            })
+            .join('');
+          return `
+                        <div class="moment-comment" data-comment-id="${esc(cid)}">
+                            <span class="comment-user"><span class="comment-author" role="button" tabindex="0" data-comment-id="${esc(cid)}" style="cursor:pointer; font-weight:800;">${esc(author)}</span>：</span>
+                            <span class="comment-text">${htmlText(content)}</span>
+                        </div>
+                        ${replyHtml}
+                    `;
+        })
+        .join('');
       card.innerHTML = `
                 <div class="moment-header">
                     <img src="${esc(avatar)}" alt="" class="moment-avatar">
@@ -279,29 +332,34 @@ export class MomentsPanel {
                         ? `<div class="moment-comments-toggle" data-action="expand">展开查看更多评论 (${hiddenCount}条)</div>`
                         : ''
                     }
-                    ${visibleComments
-                      .map(
-                        c => `
-                        <div class="moment-comment" data-comment-id="${esc(c.id || '')}">
-                            <span class="comment-user">${esc(c.author || '')}：</span>
-                            <span class="comment-text">${htmlText(c.content || '')}</span>
-                        </div>
-                    `,
-                      )
-                      .join('')}
+                    ${threadedHtml}
                     ${
                       expanded && hiddenCount > 0
                         ? `<div class="moment-comments-toggle" data-action="collapse">收起评论</div>`
                         : ''
                     }
                 </div>
-                <div class="moment-comment-composer" style="${showComposer ? '' : 'display:none;'}">
-                    <input class="moment-comment-input" type="text" placeholder="写评论..." ${
-                      pending ? 'disabled' : ''
-                    } />
-                    <button class="moment_comment" data-action="send" ${pending ? 'disabled' : ''}>${
-        pending ? '发送中…' : '发送'
-      }</button>
+                <div class="moment-comment-composer" style="${
+                  showComposer ? 'display:flex; flex-direction:column; align-items:stretch; gap:10px;' : 'display:none;'
+                }">
+                    <div class="moment-replying" style="${
+                      replyTarget ? '' : 'display:none;'
+                    } padding:8px 10px; margin-bottom:10px; border:1px solid rgba(0,0,0,0.08); border-radius:12px; background:rgba(248,250,252,0.92); font-size:12px; color:#334155;">
+                        <div style="display:flex; gap:10px; align-items:flex-start;">
+                            <div style="flex:1; min-width:0; white-space:normal; overflow-wrap:anywhere; word-break:break-word; line-height:1.35;">
+                                回复 <b>${esc(replyTarget?.author || '')}</b>：${esc(String(replyTarget?.content || '').slice(0, 120))}
+                            </div>
+                            <button class="moment-reply-cancel" data-action="cancel-reply" type="button" style="border:none; background:transparent; color:#ef4444; font-weight:900; cursor:pointer; padding:0 4px; font-size:16px; line-height:1;">×</button>
+                        </div>
+                    </div>
+                    <div class="moment-comment-input-row" style="display:flex; gap:10px; align-items:center;">
+                        <input class="moment-comment-input" type="text" placeholder="${
+                          replyTarget ? `回复 ${esc(replyTarget.author || '')}...` : '写评论...'
+                        }" style="flex:1; min-width:0;" ${pending ? 'disabled' : ''} />
+                        <button class="moment_comment" data-action="send" ${pending ? 'disabled' : ''}>${
+          pending ? '发送中…' : '发送'
+        }</button>
+                    </div>
                 </div>
             `;
       const dotsBtn = card.querySelector('.moment-more');
@@ -314,6 +372,7 @@ export class MomentsPanel {
         e.stopPropagation();
         if (this.openComposer.has(m.id)) this.openComposer.delete(m.id);
         else this.openComposer.add(m.id);
+        this.replyTargets.delete(m.id);
         this.render({ preserveScroll: true });
         // focus input after rerender
         setTimeout(() => {
@@ -360,6 +419,8 @@ export class MomentsPanel {
         commentEl.addEventListener('contextmenu', e => {
           e.preventDefault();
           e.stopPropagation();
+          if (!cid) return;
+          this.showCommentMenu({ x: e.clientX || 0, y: e.clientY || 0 }, m.id, cid);
         });
         commentEl.addEventListener(
           'touchstart',
@@ -383,21 +444,74 @@ export class MomentsPanel {
         commentEl.addEventListener('mouseleave', clear);
       });
 
+      // Click author name to reply (楼中楼)
+      card.querySelectorAll('.comment-author').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const cid = String(el.dataset.commentId || '').trim();
+          if (!cid) return;
+          const all = Array.isArray(m.comments) ? m.comments : [];
+          const target = all.find((x) => String(x?.id || '').trim() === cid) || null;
+          if (!target) return;
+          this.replyTargets.set(m.id, { id: cid, author: String(target.author || '').trim(), content: String(target.content || '') });
+          this.openComposer.add(m.id);
+          this.render({ preserveScroll: true });
+          setTimeout(() => {
+            const escId =
+              window.CSS && typeof window.CSS.escape === 'function'
+                ? window.CSS.escape(String(m.id))
+                : String(m.id).replace(/["\\]/g, '\\$&');
+            const next = this.listEl?.querySelector(`.moment-card[data-moment-id="${escId}"] .moment-comment-input`);
+            next?.focus?.();
+          }, 0);
+        });
+      });
+
+      card.querySelector('.moment-reply-cancel')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.replyTargets.delete(m.id);
+        this.render({ preserveScroll: true });
+        setTimeout(() => {
+          const escId =
+            window.CSS && typeof window.CSS.escape === 'function'
+              ? window.CSS.escape(String(m.id))
+              : String(m.id).replace(/["\\]/g, '\\$&');
+          const next = this.listEl?.querySelector(`.moment-card[data-moment-id="${escId}"] .moment-comment-input`);
+          next?.focus?.();
+        }, 0);
+      });
+
       const sendBtn = card.querySelector('.moment_comment[data-action="send"]');
       const inputEl = card.querySelector('.moment-comment-input');
       const send = async () => {
         if (pending) return;
         const text = String(inputEl?.value || '').trim();
         if (!text) return;
-        this.store.addComments(m.id, [{ author: '我', content: text }]);
+        const reply = this.replyTargets.get(m.id) || null;
+        const userCommentId = `comment-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+        this.store.addComments(m.id, [
+          {
+            id: userCommentId,
+            author: '我',
+            content: text,
+            replyTo: String(reply?.id || '').trim(),
+            replyToAuthor: String(reply?.author || '').trim(),
+          },
+        ]);
         this.openComposer.delete(m.id);
+        this.replyTargets.delete(m.id);
         this.expandedComments.add(m.id); // show newest comment
         if (inputEl) inputEl.value = '';
         this.pendingComment.add(m.id);
         this.render({ preserveScroll: true });
 
         try {
-          await this.onUserComment?.(m.id, text);
+          await this.onUserComment?.(m.id, text, {
+            userCommentId,
+            replyTo: reply ? { ...reply } : null,
+          });
         } catch (err) {
           logger.warn('onUserComment failed', err);
         } finally {
@@ -522,8 +636,8 @@ export class MomentsPanel {
                         ? comments
                             .map(
                               c => `
-                        <div style="border:1px solid #e5e7eb; border-radius:12px; padding:10px;">
-                            <div style="font-weight:800; font-size:13px;">${esc(c.author || '')}</div>
+                        <div class="moment-detail-comment" data-comment-id="${esc(c.id || '')}" style="border:1px solid #e5e7eb; border-radius:12px; padding:10px;">
+                            <div class="moment-detail-author" role="button" tabindex="0" data-comment-id="${esc(c.id || '')}" style="font-weight:800; font-size:13px; cursor:pointer;">${esc(c.author || '')}</div>
                             <div style="margin-top:6px; overflow-wrap:anywhere;">${htmlText(c.content || '')}</div>
                         </div>
                     `,
@@ -533,6 +647,80 @@ export class MomentsPanel {
                     }
                 </div>
             `;
+
+      // Long press / right click to delete comment in detail view too
+      const wrap = body;
+      wrap.querySelectorAll('.moment-detail-comment').forEach((commentEl) => {
+        commentEl.style.userSelect = 'none';
+        commentEl.style.webkitUserSelect = 'none';
+        const cid = String(commentEl.dataset.commentId || '').trim();
+        let timer = null;
+        let startX = 0;
+        let startY = 0;
+        const clear = () => {
+          if (timer) clearTimeout(timer);
+          timer = null;
+        };
+        const schedule = (x, y) => {
+          clear();
+          startX = x;
+          startY = y;
+          timer = setTimeout(() => {
+            if (!cid) return;
+            this.showCommentMenu({ x: startX, y: startY }, m.id, cid);
+          }, 520);
+        };
+        commentEl.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!cid) return;
+          this.showCommentMenu({ x: e.clientX || 0, y: e.clientY || 0 }, m.id, cid);
+        });
+        commentEl.addEventListener(
+          'touchstart',
+          (e) => {
+            e.stopPropagation();
+            const t = e.touches?.[0];
+            if (!t) return;
+            schedule(t.clientX, t.clientY);
+          },
+          { passive: true },
+        );
+        commentEl.addEventListener('touchmove', clear, { passive: true });
+        commentEl.addEventListener('touchend', clear, { passive: true });
+        commentEl.addEventListener('touchcancel', clear, { passive: true });
+        commentEl.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          schedule(e.clientX, e.clientY);
+        });
+        commentEl.addEventListener('mouseup', clear);
+        commentEl.addEventListener('mouseleave', clear);
+      });
+
+      // Click author in detail view to reply (open composer on feed card)
+      wrap.querySelectorAll('.moment-detail-author').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const cid = String(el.dataset.commentId || '').trim();
+          if (!cid) return;
+          const all = Array.isArray(m.comments) ? m.comments : [];
+          const target = all.find((x) => String(x?.id || '').trim() === cid) || null;
+          if (!target) return;
+          this.replyTargets.set(m.id, { id: cid, author: String(target.author || '').trim(), content: String(target.content || '') });
+          this.openComposer.add(m.id);
+          this.render({ preserveScroll: true });
+          // Focus feed composer if visible
+          setTimeout(() => {
+            const escId =
+              window.CSS && typeof window.CSS.escape === 'function'
+                ? window.CSS.escape(String(m.id))
+                : String(m.id).replace(/["\\]/g, '\\$&');
+            const next = this.listEl?.querySelector(`.moment-card[data-moment-id="${escId}"] .moment-comment-input`);
+            next?.focus?.();
+          }, 0);
+        });
+      });
     }
     this.modal.style.display = 'block';
   }

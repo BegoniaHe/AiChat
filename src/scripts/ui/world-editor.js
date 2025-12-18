@@ -185,12 +185,22 @@ export class WorldEditorModal {
         this.overlay.id = 'world-editor-overlay';
         this.overlay.className = 'popup-overlay';
         this.overlay.style.display = 'none';
+        // Ensure editor sits above world management panel
+        this.overlay.style.position = 'fixed';
+        this.overlay.style.inset = '0';
+        this.overlay.style.background = 'rgba(0,0,0,0.45)';
+        this.overlay.style.zIndex = '22000';
         this.overlay.onclick = () => this.hide();
 
         this.modal = document.createElement('div');
         this.modal.id = 'world-editor-modal';
         this.modal.className = 'world-editor-popup';
         this.modal.style.display = 'none';
+        this.modal.style.position = 'fixed';
+        this.modal.style.top = '50%';
+        this.modal.style.left = '50%';
+        this.modal.style.transform = 'translate(-50%, -50%)';
+        this.modal.style.zIndex = '23000';
         this.modal.onclick = (e) => e.stopPropagation();
 
         this.modal.innerHTML = `
@@ -552,4 +562,3 @@ export class WorldEditorModal {
         }
     }
 }
-

@@ -210,9 +210,31 @@ export class MomentsStore {
             ? (Number.isFinite(Number(moment.likes)) ? Number(moment.likes) : 0)
             : (Number.isFinite(Number(existingById?.likes)) ? Number(existingById.likes) : (Number.isFinite(Number(existingBySig?.likes)) ? Number(existingBySig.likes) : 0));
 
+        const normalizeComments = (incoming = []) => {
+            const list = Array.isArray(incoming) ? incoming : [];
+            const used = new Set();
+            const out = [];
+            list.forEach((c) => {
+                if (!c || typeof c !== 'object') return;
+                const rawId = String(c.id || '').trim();
+                const id = (rawId && !used.has(rawId)) ? rawId : genId('comment');
+                used.add(id);
+                out.push({
+                    id,
+                    author: String(c.author || '').trim(),
+                    content: String(c.content || ''),
+                    replyTo: String(c.replyTo || '').trim(),
+                    replyToAuthor: String(c.replyToAuthor || '').trim(),
+                    time: String(c.time || ''),
+                    timestamp: Number.isFinite(Number(c.timestamp)) ? Number(c.timestamp) : Date.now(),
+                });
+            });
+            return out;
+        };
+
         const comments = hasOwn(moment, 'comments')
-            ? (Array.isArray(moment.comments) ? moment.comments : [])
-            : (Array.isArray(existingById?.comments) ? existingById.comments : (Array.isArray(existingBySig?.comments) ? existingBySig.comments : []));
+            ? normalizeComments(moment.comments)
+            : normalizeComments(Array.isArray(existingById?.comments) ? existingById.comments : (Array.isArray(existingBySig?.comments) ? existingBySig.comments : []));
 
         const timestamp = hasOwn(moment, 'timestamp')
             ? (Number.isFinite(Number(moment.timestamp)) ? Number(moment.timestamp) : Date.now())
@@ -263,10 +285,16 @@ export class MomentsStore {
         const existing = Array.isArray(m.comments) ? m.comments.slice() : [];
         (Array.isArray(comments) ? comments : []).forEach((c) => {
             if (!c) return;
+            const proposedId = String(c.id || '').trim();
+            const cid = (proposedId && !existing.some(x => String(x?.id || '').trim() === proposedId))
+                ? proposedId
+                : genId('comment');
             existing.push({
-                id: genId('comment'),
+                id: cid,
                 author: String(c.author || '').trim(),
                 content: String(c.content || ''),
+                replyTo: String(c.replyTo || '').trim(),
+                replyToAuthor: String(c.replyToAuthor || '').trim(),
                 time: String(c.time || ''),
                 timestamp: Number.isFinite(Number(c.timestamp)) ? Number(c.timestamp) : Date.now(),
             });

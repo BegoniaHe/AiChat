@@ -88,7 +88,7 @@ const DEFAULT_MOMENT_CREATION_RULES = `
 `.trim();
 
 // 动态评论回复提示词：用于“动态评论”场景（仅输出评论回覆规则）
-const DEFAULT_MOMENT_COMMENT_RULES = `
+const LEGACY_DEFAULT_MOMENT_COMMENT_RULES = `
 你正在处理 QQ空间「动态评论回复」任务。
 
 （注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回覆规则。）
@@ -106,6 +106,41 @@ const DEFAULT_MOMENT_COMMENT_RULES = `
    moment_reply_end
 3) 发布者必须回复用户评论；并且至少还要有 1 名其他角色参与评论。
 4) 评论内容若需要换行，使用 <br>。
+
+【注意】
+- 评论人必须是具体名字（优先从联系人名单中挑选）；不要使用“匿名网友”等敷衍名字。
+- 本场景不要输出私聊/群聊标签块（只输出评论回复）。
+`.trim();
+
+const DEFAULT_MOMENT_COMMENT_RULES = `
+你正在处理 QQ空间「动态评论回复」任务。
+
+（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回覆规则。）
+
+【输入中会提供】
+- moment_id、发布者、动态内容
+- 用户评论（会包含 user_comment_id）
+- 可用联系人名单
+- 可能还会提供：用户是否在回复某条评论（reply_to_comment_id / reply_to_author / reply_to_content）
+
+【输出硬性要求】
+1) 只输出一个 <content>...</content> 区块，除此之外不要输出任何文字。
+2) <content> 内必须输出一段 moment_reply_start/moment_reply_end：
+   moment_reply_start
+   moment_id::动态ID（使用输入中提供的 moment_id）
+   评论人--评论内容
+   评论人--评论内容--reply_to::comment_id--reply_to_author::名字
+   moment_reply_end
+3) “谁来回复”不是强制：
+   - 当用户在评论动态本身时：发布者对用户评论有较高概率回复，但可按情境与性格自行决定不回复（例如明显无关、骚扰/挑衅言论等）。
+   - 当用户在回复某条评论时：被回复的那位角色对用户评论有较高概率回复；同样可按情境与性格自行决定不回复。
+4) 至少输出 1 条评论；若情境合适可多条（可包含其他角色的围观/插话）。
+5) 评论内容若需要换行，使用 <br>。
+
+【reply_to 规则（用于楼中楼）】
+- 仅当你要“回复某条评论”时才附加 reply_to::。
+- reply_to:: 的值必须来自输入里提供的 comment_id / user_comment_id。
+- reply_to_author:: 填被回复的角色名（可用输入里的 reply_to_author 或评论列表里的 author）。
 
 【注意】
 - 评论人必须是具体名字（优先从联系人名单中挑选）；不要使用“匿名网友”等敷衍名字。
@@ -267,6 +302,13 @@ export class PresetStore {
                 if (typeof p.moment_comment_rules !== 'string' || !p.moment_comment_rules.trim()) {
                     p.moment_comment_rules = DEFAULT_MOMENT_COMMENT_RULES;
                 }
+                // Migration: 旧默认值「发布者必须回复用户评论」更新为更贴近社交应用的“高概率回复 + 可自行决策”
+                try {
+                    const cur = String(p.moment_comment_rules || '').trim();
+                    if (cur && cur === LEGACY_DEFAULT_MOMENT_COMMENT_RULES.trim()) {
+                        p.moment_comment_rules = DEFAULT_MOMENT_COMMENT_RULES;
+                    }
+                } catch {}
 
                 if (typeof p.group_enabled !== 'boolean') p.group_enabled = true;
                 // 群聊提示词：同上（系统深度=1）
