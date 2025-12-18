@@ -520,7 +520,9 @@ export class PresetPanel {
         // Switch tab after deciding import target (OpenAI goes to "自定义" for prompt blocks)
         this.activeType = importType === 'openai' ? 'custom' : importType;
 
-        const name = prompt('导入预设名称', json?.name || '导入预设');
+        const fileBaseName = String(file?.name || '').replace(/\.[^/.]+$/, '').trim();
+        const defaultName = String(json?.name || '').trim() || fileBaseName || '导入预设';
+        const name = prompt('导入预设名称', defaultName);
         if (!name) return;
         let boundSets = json?.boundRegexSets || json?.bound_regex_sets || json?.bound_regex_sets_v1 || null;
         const data = { ...json, name };

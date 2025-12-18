@@ -673,7 +673,7 @@ export class PresetStore {
         return this.getState();
     }
 
-    async upsert(type, { id, name, data }) {
+    async upsert(type, { id, name, data, makeActive } = {}) {
         await this.ready;
         const t = normalizeType(type);
         const presetId = id || genId(`preset-${t}`);
@@ -682,7 +682,12 @@ export class PresetStore {
             try { normalizeOpenAIPreset(next); } catch {}
         }
         this.state.presets[t][presetId] = next;
-        this.state.active[t] = presetId;
+        // IMPORTANT: do not implicitly switch the active preset when updating existing ones,
+        // otherwise "Save" across multiple drafts will end up selecting the last-saved preset.
+        const shouldActivate = (typeof makeActive === 'boolean')
+            ? makeActive
+            : !id; // default: only auto-activate on create/import
+        if (shouldActivate) this.state.active[t] = presetId;
         await this.persist();
         return presetId;
     }
