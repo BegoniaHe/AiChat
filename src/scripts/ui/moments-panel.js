@@ -267,7 +267,7 @@ export class MomentsPanel {
         }
       } catch {}
       const comments = Array.isArray(m.comments) ? m.comments : [];
-      const VISIBLE_COMMENTS = 8;
+      const VISIBLE_COMMENTS = 3;
       const expanded = this.expandedComments.has(m.id);
       const showComposer = this.openComposer.has(m.id);
       const replyTarget = this.replyTargets.get(m.id) || null;
@@ -502,7 +502,6 @@ export class MomentsPanel {
         ]);
         this.openComposer.delete(m.id);
         this.replyTargets.delete(m.id);
-        this.expandedComments.add(m.id); // show newest comment
         if (inputEl) inputEl.value = '';
         this.pendingComment.add(m.id);
         this.render({ preserveScroll: true });

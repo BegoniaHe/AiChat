@@ -119,6 +119,12 @@ const formatSince = (ts) => {
   return `${day}天前`;
 };
 
+const formatSinceInParens = (ts) => {
+  const raw = formatSince(ts);
+  if (!raw) return '';
+  return `距今${raw.replace(/前$/, '')}`;
+};
+
 class AppBridge {
   constructor() {
     this.config = new ConfigManager();
@@ -821,7 +827,7 @@ class AppBridge {
 	      if (!isGroupChat) return null;
 	      const memberIds = groupMemberIds.slice();
 	      if (!memberIds.length || !this.chatStore?.getSummaries) return null;
-	      const lines = [];
+	      const sections = [];
 	      for (let i = 0; i < memberIds.length; i++) {
 	        const mid = String(memberIds[i] || '').trim();
 	        if (!mid) continue;
@@ -833,30 +839,30 @@ class AppBridge {
 	        // 1) no compacted summary -> latest 3
 	        // 2) has compacted summary -> compacted + latest 2
 	        const arr = compacted ? arrRaw.slice(-2) : arrRaw.slice(-3);
+	        const items = [];
 	        if (compacted && String(compacted.text || '').trim()) {
-	          const at = Number(compacted.at || 0) || 0;
-	          const exact = at ? formatExactTime(at) : '';
-	          const since = at ? formatSince(at) : '';
-	          const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
-	          lines.push(`- 用户与${display}的私聊大总结${when ? `（${when}）` : ''}：${String(compacted.text).trim()}`);
+	          items.push(`- 总结：${String(compacted.text).trim()}`);
 	        }
-	        for (const it of arr) {
+	        for (let j = 0; j < arr.length; j++) {
+	          const it = arr[j];
 	          const text = String((typeof it === 'string') ? it : it?.text || '').trim();
 	          if (!text) continue;
 	          const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
-	          const exact = at ? formatExactTime(at) : '';
-	          const since = at ? formatSince(at) : '';
-	          const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
-	          lines.push(`- 用户与${display}的私聊摘要${when ? `（${when}）` : ''}：${text}`);
+	          const isNewest = j === arr.length - 1;
+	          const when = (isNewest && at) ? formatSinceInParens(at) : '';
+	          items.push(`- ${text}${when ? `（${when}）` : ''}`);
+	        }
+	        if (items.length) {
+	          sections.push(`${name1}与${display}:\n${items.join('\n')}`);
 	        }
 	      }
-	      if (!lines.length) return null;
+	      if (!sections.length) return null;
 	      return {
 	        role: 'system',
 	        content: [
-	          '以下为群聊成员与用户的近期私聊摘要回顾（仅供理解上下文）：',
-	          '注意信息差：私聊内容具有私密性，除非已在群内/动态公开，否则群内其他成员不应知晓。',
-	          ...lines,
+	          '群聊成员私聊摘要回顾（YAML，仅供理解上下文）：',
+	          '（私聊信息默认不对其他成员公开）',
+	          ...sections,
 	        ].join('\n'),
 	      };
 	    };
@@ -869,30 +875,27 @@ class AppBridge {
 	      const list = this.chatStore.getSummaries(sid) || [];
 	      const arrRaw = Array.isArray(list) ? list : [];
 	      const arr = compacted ? arrRaw.slice(-2) : arrRaw.slice(-3);
-	      const lines = [];
+	      const items = [];
 	      if (compacted && String(compacted.text || '').trim()) {
-	        const at = Number(compacted.at || 0) || 0;
-	        const exact = at ? formatExactTime(at) : '';
-	        const since = at ? formatSince(at) : '';
-	        const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
-	        lines.push(`- 用户与${name}的私聊大总结${when ? `（${when}）` : ''}：${String(compacted.text).trim()}`);
+	        items.push(`- 总结：${String(compacted.text).trim()}`);
 	      }
-	      for (const it of arr) {
+	      for (let j = 0; j < arr.length; j++) {
+	        const it = arr[j];
 	        const text = String((typeof it === 'string') ? it : it?.text || '').trim();
 	        if (!text) continue;
 	        const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
-	        const exact = at ? formatExactTime(at) : '';
-	        const since = at ? formatSince(at) : '';
-	        const when = [exact ? `时间: ${exact}` : '', since ? `距今: ${since}` : ''].filter(Boolean).join(' · ');
-	        lines.push(`- 用户与${name}的私聊摘要${when ? `（${when}）` : ''}：${text}`);
+	        const isNewest = j === arr.length - 1;
+	        const when = (isNewest && at) ? formatSinceInParens(at) : '';
+	        items.push(`- ${text}${when ? `（${when}）` : ''}`);
 	      }
-	      if (!lines.length) return null;
+	      if (!items.length) return null;
 	      return {
 	        role: 'system',
 	        content: [
-	          `以下为用户与${name}的近期私聊摘要回顾（仅供理解上下文）：`,
-	          '注意信息差：私聊内容具有私密性，除非已在群内/动态公开，否则其他人不应知晓。',
-	          ...lines,
+	          `私聊摘要回顾（YAML，仅供理解上下文）：`,
+	          '（私聊信息默认不对第三方公开）',
+	          `${name1}与${name}:`,
+	          ...items,
 	        ].join('\n'),
 	      };
 	    };

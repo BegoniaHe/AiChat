@@ -369,11 +369,31 @@ export class ChatStore {
     deleteMessage(msgId, id = this.currentId) {
         const session = this.state.sessions[id];
         if (!session || !session.messages) return false;
+        const targetId = String(msgId || '').trim();
+        if (!targetId) return false;
         const before = session.messages.length;
-        session.messages = session.messages.filter(m => m.id !== msgId);
+        const idx = session.messages.findIndex(m => String(m?.id || '') === targetId);
+        if (idx === -1) return false;
+
+        const lastRead = String(session.lastReadMessageId || '');
+        const wasLastRead = lastRead && lastRead === targetId;
+
+        session.messages = session.messages.filter(m => String(m?.id || '') !== targetId);
         const changed = session.messages.length !== before;
-        if (changed) this._persist();
-        return changed;
+        if (!changed) return false;
+
+        // If we deleted the message that "lastReadMessageId" points to,
+        // keep the read pointer stable by moving it to a nearby existing message.
+        if (wasLastRead) {
+            const fallback =
+                (idx - 1 >= 0 && session.messages[idx - 1]?.id)
+                    ? String(session.messages[idx - 1].id)
+                    : (session.messages.length ? String(session.messages[session.messages.length - 1]?.id || '') : '');
+            session.lastReadMessageId = fallback;
+        }
+
+        this._persist();
+        return true;
     }
 
     updateMessage(msgId, updater, id = this.currentId) {

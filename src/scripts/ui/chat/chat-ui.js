@@ -34,6 +34,13 @@ export class ChatUI {
         this.bindNetworkEvents();
     }
 
+    normalizeAssistantLineBreaks(text) {
+        // Some models output "<br>" as a line break marker; render it as real newlines while keeping the same bubble.
+        return String(text ?? '')
+            .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+            .replace(/<br\s*\/?>/gi, '\n');
+    }
+
     bindIframeLongPressForwarding() {
         if (this.__chatappIframePressBound) return;
         this.__chatappIframePressBound = true;
@@ -445,7 +452,11 @@ export class ChatUI {
                 // Safe rich rendering (code fences + html iframe preview)
                 // renderRichText(bubble, message.content, { messageId: message.id });
                 // === 对话模式（纯文本）===
-                bubble.textContent = String(message.content ?? '');
+                if (message.role === 'assistant') {
+                    bubble.textContent = this.normalizeAssistantLineBreaks(message.content);
+                } else {
+                    bubble.textContent = String(message.content ?? '');
+                }
                 bubble.style.whiteSpace = 'pre-wrap';
         }
 
@@ -576,7 +587,7 @@ export class ChatUI {
             id: msgId,
             update: (text) => {
                 // Keep streaming lightweight (avoid re-parsing markdown/code each token)
-                messageEl.textContent = text;
+                messageEl.textContent = this.normalizeAssistantLineBreaks(text);
                 this.scrollToBottom();
                 this.messageBuffer[bufferIndex].content = text;
             },
@@ -600,7 +611,7 @@ export class ChatUI {
                         // === 创意写作模式（暂时停用）===
                         // renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
                         // === 对话模式（纯文本）===
-                        messageEl.textContent = text;
+                        messageEl.textContent = this.normalizeAssistantLineBreaks(text);
                         messageEl.style.whiteSpace = 'pre-wrap';
                     } catch {}
                 }

@@ -135,6 +135,11 @@ export class MacroEngine {
         let out = String(text || '');
         const user = String(baseVars?.user || 'User');
         const char = String(baseVars?.char || 'Assistant');
+        const overrideLastUserMessage = (() => {
+            const v = context?.lastUserMessage;
+            const s = (typeof v === 'string') ? v : '';
+            return s.trim() ? s : '';
+        })();
 
         // Legacy non-curly macros (ST-style)
         out = out.replace(/<USER>/gi, user);

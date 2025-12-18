@@ -380,7 +380,8 @@ ${listPart || '-（无）'}
                                 avatar: contactsStore.getContact(targetSessionId)?.avatar || avatars.assistant,
                                 time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
                             };
-                            chatStore.appendMessage(parsed, targetSessionId);
+                            const saved = chatStore.appendMessage(parsed, targetSessionId);
+                            autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                             touchedChats = true;
                         });
                     }
@@ -1371,6 +1372,16 @@ ${listPart || '-（无）'}
     /* ---------------- 聊天列表 <-> 聊天室切换 ---------------- */
     const backToListBtn = document.getElementById('back-to-list');
     let chatOriginPage = 'chat';
+    const isChatRoomVisible = () => Boolean(chatRoom) && !chatRoom.classList.contains('hidden');
+    const autoMarkReadIfActive = (sessionId, messageId = '') => {
+        try {
+            const sid = String(sessionId || '').trim();
+            if (!sid) return;
+            if (!isChatRoomVisible()) return;
+            if (String(chatStore.getCurrent() || '') !== sid) return;
+            chatStore.markRead(sid, messageId);
+        } catch {}
+    };
 
 	    const enterChatRoom = (sessionId, sessionName, originPage = activePage) => {
         chatOriginPage = originPage || 'chat';
@@ -1977,7 +1988,8 @@ ${listPart || '-（无）'}
                                         meta: role === 'assistant' ? { showName: true } : undefined,
                                     };
                                     if (targetGroupId === sessionId) ui.addMessage(parsed);
-                                    chatStore.appendMessage(parsed, targetGroupId);
+                                    const saved = chatStore.appendMessage(parsed, targetGroupId);
+                                    if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                                 });
                                 didAnything = true;
                                 refreshChatAndContacts();
@@ -2007,7 +2019,8 @@ ${listPart || '-（无）'}
                                 if (targetSessionId === sessionId) {
                                     ui.addMessage(parsed);
                                 }
-                                chatStore.appendMessage(parsed, targetSessionId);
+                                const saved = chatStore.appendMessage(parsed, targetSessionId);
+                                autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                             });
                             didAnything = true;
                             refreshChatAndContacts();
@@ -2079,7 +2092,8 @@ ${listPart || '-（无）'}
 	                                                meta: role === 'assistant' ? { showName: true } : undefined,
 	                                            };
 	                                            if (targetGroupId === sessionId) ui.addMessage(parsed);
-	                                            chatStore.appendMessage(parsed, targetGroupId);
+	                                            const saved = chatStore.appendMessage(parsed, targetGroupId);
+	                                            if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
 	                                        });
 	                                        didAnything = true;
 	                                        refreshChatAndContacts();
@@ -2099,7 +2113,8 @@ ${listPart || '-（无）'}
 	                                                time: formatNowTime(),
 	                                            };
 	                                            if (targetSessionId === sessionId) ui.addMessage(parsed);
-	                                            chatStore.appendMessage(parsed, targetSessionId);
+	                                            const saved = chatStore.appendMessage(parsed, targetSessionId);
+	                                            autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
 	                                        });
 	                                        didAnything = true;
 	                                        refreshChatAndContacts();
@@ -2151,7 +2166,10 @@ ${listPart || '-（无）'}
                         ...parseSpecialMessage(display)
                     };
                     streamCtrl.finish(parsed);
-                    chatStore.appendMessage(parsed, sessionId);
+                    {
+                        const saved = chatStore.appendMessage(parsed, sessionId);
+                        autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
+                    }
                     refreshChatAndContacts();
                 }
             } else {
@@ -2210,7 +2228,8 @@ ${listPart || '-（无）'}
                                     meta: role === 'assistant' ? { showName: true } : undefined,
                                 };
                                 if (targetGroupId === sessionId) ui.addMessage(parsed);
-                                chatStore.appendMessage(parsed, targetGroupId);
+                                const saved = chatStore.appendMessage(parsed, targetGroupId);
+                                if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                                 didAnything = true;
                             });
                             return;
@@ -2231,7 +2250,8 @@ ${listPart || '-（无）'}
                                     time: formatNowTime(),
                                 };
                                 if (targetSessionId === sessionId) ui.addMessage(parsed);
-                                chatStore.appendMessage(parsed, targetSessionId);
+                                const saved = chatStore.appendMessage(parsed, targetSessionId);
+                                autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                                 didAnything = true;
                             });
                         }
@@ -2290,7 +2310,8 @@ ${listPart || '-（无）'}
 	                                            meta: role === 'assistant' ? { showName: true } : undefined,
 	                                        };
 	                                        if (targetGroupId === sessionId) ui.addMessage(parsed);
-	                                        chatStore.appendMessage(parsed, targetGroupId);
+	                                        const saved = chatStore.appendMessage(parsed, targetGroupId);
+	                                        if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
 	                                        didAnything = true;
 	                                    });
 	                                    return;
@@ -2308,7 +2329,8 @@ ${listPart || '-（无）'}
 	                                            time: formatNowTime(),
 	                                        };
 	                                        if (targetSessionId === sessionId) ui.addMessage(parsed);
-	                                        chatStore.appendMessage(parsed, targetSessionId);
+	                                        const saved = chatStore.appendMessage(parsed, targetSessionId);
+	                                        autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
 	                                        didAnything = true;
 	                                    });
 	                                }
@@ -2362,7 +2384,10 @@ ${listPart || '-（无）'}
                     ...parseSpecialMessage(display)
                 };
                 ui.addMessage(parsed);
-                chatStore.appendMessage(parsed, sessionId);
+                {
+                    const saved = chatStore.appendMessage(parsed, sessionId);
+                    autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
+                }
                 refreshChatAndContacts();
             }
         } catch (error) {
@@ -2496,7 +2521,10 @@ ${listPart || '-（无）'}
                         ...parseSpecialMessage(display)
                     };
                     streamCtrl.finish(parsed);
-                    chatStore.appendMessage(parsed, sessionId);
+                    {
+                        const saved = chatStore.appendMessage(parsed, sessionId);
+                        autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
+                    }
                     refreshChatAndContacts();
                 } else {
                     ui.showTyping(assistantAvatar);
@@ -2517,7 +2545,10 @@ ${listPart || '-（无）'}
                         ...parseSpecialMessage(display)
                     };
                     ui.addMessage(parsed);
-                    chatStore.appendMessage(parsed, sessionId);
+                    {
+                        const saved = chatStore.appendMessage(parsed, sessionId);
+                        autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
+                    }
                     refreshChatAndContacts();
                 }
             } catch (err) {
