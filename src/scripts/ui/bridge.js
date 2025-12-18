@@ -1184,12 +1184,20 @@ class AppBridge {
     }
 
     // 3) History
-    const history = Array.isArray(context.history) ? context.history.slice() : [];
+    const history = Array.isArray(context.history) ? context.history.map(m => ({ ...m })) : [];
     // Prefix speaker names to reduce model confusion (role is still preserved)
     try {
       for (const m of history) {
         if (!m || typeof m !== 'object') continue;
         if (m.role !== 'user' && m.role !== 'assistant') continue;
+
+        // Prevent OOM: Replace heavy Base64 content with placeholders for LLM context
+        if (m.type === 'image' || (typeof m.content === 'string' && m.content.startsWith('data:image'))) {
+          m.content = '[图片]';
+        } else if (m.type === 'audio' || (typeof m.content === 'string' && m.content.startsWith('data:audio'))) {
+          m.content = '[语音]';
+        }
+
         const speaker = m.role === 'assistant' && isGroupChat
           ? (String(m?.name || '').trim() || name2)
           : (m.role === 'user' ? name1 : name2);

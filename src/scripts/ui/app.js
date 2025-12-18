@@ -66,7 +66,7 @@ const initApp = async () => {
       if (forceRefresh) {
         const msgs = chatStore.getMessages(id);
         ui.clearMessages();
-        ui.preloadHistory(decorateMessagesForDisplay(msgs));
+        ui.preloadHistory(decorateMessagesForDisplay(msgs, { sessionId: id }));
       }
       try {
         contactSettingsPanel.renderCompactedSummary?.();
@@ -512,7 +512,52 @@ ${listPart || '-（无）'}
 
   const isConversationMessage = m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'system');
 
-  const decorateMessagesForDisplay = (messages = []) => {
+  const normalizeLooseName = (s) => {
+    const raw = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+    return raw.replace(/[^a-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
+  };
+
+  const resolveContactByDisplayName = (displayName) => {
+    const raw = String(displayName || '').trim();
+    if (!raw) return null;
+    const key = normalizeLooseName(raw);
+    const list = contactsStore.listContacts?.() || [];
+    const exact = list.find(c => String(c?.name || c?.id || '').trim() === raw);
+    if (exact) return exact;
+    const fuzzy = list.find(c => normalizeLooseName(c?.name || c?.id) === key);
+    return fuzzy || null;
+  };
+
+  const resolveAvatarForMessage = (message, sessionId) => {
+    try {
+      if (!message || typeof message !== 'object') return '';
+      if (message.role === 'user') return avatars.user;
+
+      // Group chats: prefer per-speaker avatar when possible.
+      const sid = String(sessionId || '').trim();
+      const isGroup = sid.startsWith('group:') || Boolean(contactsStore.getContact(sid)?.isGroup);
+      if (isGroup && message.role === 'assistant') {
+        const speaker = String(message.name || '').trim();
+        if (speaker && speaker !== '助手') {
+          try {
+            const byName = resolveContactByDisplayName(speaker);
+            if (byName?.avatar) return byName.avatar;
+          } catch {}
+          try {
+            const byId = contactsStore.getContact(speaker);
+            if (byId?.avatar) return byId.avatar;
+          } catch {}
+        }
+      }
+
+      if (message.role === 'assistant') return getAssistantAvatarForSession(sid);
+      return '';
+    } catch {
+      return '';
+    }
+  };
+
+  const decorateMessagesForDisplay = (messages = [], { sessionId } = {}) => {
     const list = Array.isArray(messages) ? messages : [];
     const convPos = new Map(); // index -> conversation order
     list.forEach((m, i) => {
@@ -524,6 +569,7 @@ ${listPart || '-（无）'}
       if (!m || typeof m !== 'object') return m;
       const base = typeof m.raw === 'string' ? m.raw : typeof m.content === 'string' ? m.content : '';
       if (!base) return m;
+      const avatar = m.avatar || resolveAvatarForMessage(m, sessionId);
       const j = convPos.has(i) ? convPos.get(i) : null;
       const depth = j === null ? undefined : total - 1 - j;
 
@@ -532,12 +578,12 @@ ${listPart || '-（无）'}
         // AI 回覆：输出后先经过正则（display），再做富文本/iframe 渲染
         // return { ...m, content: window.appBridge.applyOutputDisplayRegex(base, { depth }) };
         // === 对话模式 ===
-        return { ...m, content: base };
+        return { ...m, avatar, content: base };
       }
       if (m.role === 'user' && (m.type === 'text' || !m.type)) {
-        return { ...m, content: window.appBridge.applyInputDisplayRegex(base, { depth }) };
+        return { ...m, avatar, content: window.appBridge.applyInputDisplayRegex(base, { depth }) };
       }
-      return m;
+      return { ...m, avatar };
     });
   };
 
@@ -980,7 +1026,12 @@ ${listPart || '-（无）'}
         const msgs = chatStore.getMessages(sid);
         const draft = chatStore.getDraft(sid);
         ui.clearMessages();
-        ui.preloadHistory(decorateMessagesForDisplay(msgs));
+        {
+          const PAGE = 90;
+          const start = Math.max(0, msgs.length - PAGE);
+          ui.preloadHistory(decorateMessagesForDisplay(msgs.slice(start), { sessionId: sid }));
+          chatRenderState.set(sid, { start });
+        }
         ui.setInputText(draft || '');
         ui.setSessionLabel(sid);
       }
@@ -1511,6 +1562,7 @@ ${listPart || '-（无）'}
   /* ---------------- 聊天列表 <-> 聊天室切换 ---------------- */
   const backToListBtn = document.getElementById('back-to-list');
   let chatOriginPage = 'chat';
+  const chatRenderState = new Map(); // sessionId -> { start }
   const isChatRoomVisible = () => Boolean(chatRoom) && !chatRoom.classList.contains('hidden');
   const autoMarkReadIfActive = (sessionId, messageId = '') => {
     try {
@@ -1543,14 +1595,22 @@ ${listPart || '-（无）'}
     syncUserPersonaUI(sessionId);
     // 加载历史
     const history = chatStore.getMessages(sessionId);
-    ui.clearMessages();
-    history.forEach(msg => ui.addMessage(msg));
-    // Jump to first unread message (LINE-like)
+    const PAGE = 90;
+    let start = Math.max(0, history.length - PAGE);
     if (firstUnreadId) {
-      setTimeout(() => ui.scrollToMessage(firstUnreadId), 50);
-    } else {
-      setTimeout(() => ui.scrollToBottom(), 0);
+      const idx = history.findIndex(m => String(m?.id || '') === String(firstUnreadId));
+      if (idx !== -1 && idx < start) {
+        start = Math.max(0, idx - 10);
+      }
     }
+    const initial = history.slice(start, start + PAGE);
+    ui.clearMessages();
+    ui.preloadHistory(decorateMessagesForDisplay(initial, { sessionId }));
+    // Keep a render cursor so we can lazy-load earlier messages when scrolling up.
+    chatRenderState.set(sessionId, { start });
+
+    if (firstUnreadId) setTimeout(() => ui.scrollToMessage(firstUnreadId), 50);
+    else setTimeout(() => ui.scrollToBottom(), 0);
     // Mark read once user enters the chatroom
     try {
       chatStore.markRead(sessionId);
@@ -1726,7 +1786,10 @@ ${listPart || '-（无）'}
     const history = chatStore.getMessages(currentId);
     ui.setSessionLabel(currentId);
     if (history && history.length) {
-      ui.preloadHistory(decorateMessagesForDisplay(history));
+      const PAGE = 90;
+      const start = Math.max(0, history.length - PAGE);
+      ui.preloadHistory(decorateMessagesForDisplay(history.slice(start), { sessionId: currentId }));
+      chatRenderState.set(currentId, { start });
     }
     const draft = chatStore.getDraft(currentId);
     if (draft) ui.setInputText(draft);
@@ -1736,6 +1799,37 @@ ${listPart || '-（无）'}
 
   // Track the current in-flight generation so we can support "收回" (cancel + retract)
   let activeGeneration = null; // { sessionId, userMsgId, streamCtrl, cancelled }
+
+  // Chat UI lazy-load: only render the latest N messages; load earlier on scroll-to-top.
+  const bindChatScrollLazyLoad = () => {
+    if (!ui?.scrollEl || ui.__chatappLazyBound) return;
+    ui.__chatappLazyBound = true;
+    let loading = false;
+    ui.scrollEl.addEventListener('scroll', () => {
+      if (loading) return;
+      if (ui.scrollEl.scrollTop > 18) return;
+      const sid = String(chatStore.getCurrent() || '').trim();
+      if (!sid) return;
+      const st = chatRenderState.get(sid);
+      if (!st || !Number.isFinite(st.start) || st.start <= 0) return;
+      loading = true;
+      try {
+        const all = chatStore.getMessages(sid) || [];
+        const PAGE = 90;
+        const nextStart = Math.max(0, st.start - PAGE);
+        const chunk = all.slice(nextStart, st.start);
+        if (chunk.length) {
+          ui.prependHistory(decorateMessagesForDisplay(chunk, { sessionId: sid }));
+          chatRenderState.set(sid, { start: nextStart });
+        } else {
+          chatRenderState.set(sid, { start: 0 });
+        }
+      } finally {
+        setTimeout(() => { loading = false; }, 0);
+      }
+    }, { passive: true });
+  };
+  bindChatScrollLazyLoad();
 
   // Summary compaction runner (used by auto-trigger and manual "↻" button in settings)
   const summaryCompacting = new Set();
@@ -2109,6 +2203,29 @@ ${listPart || '-（无）'}
       if (history.length > 50) {
         history.splice(0, history.length - 50);
       }
+      try {
+        const openaiPreset = window?.appBridge?.presets?.getActive?.('openai') || {};
+        const maxContext = Number(openaiPreset?.openai_max_context);
+        const maxOut = Number(openaiPreset?.openai_max_tokens);
+        const ctxTokens = Number.isFinite(maxContext) ? Math.max(0, Math.trunc(maxContext)) : 0;
+        const outTokens = Number.isFinite(maxOut) ? Math.max(0, Math.trunc(maxOut)) : 0;
+        const inputBudgetTokens = Math.max(2000, ctxTokens ? (ctxTokens - outTokens - 512) : 8000);
+        const maxChars = Math.min(140_000, Math.max(30_000, inputBudgetTokens * 4));
+
+        const capPerMessage = 40_000;
+        for (const m of history) {
+          if (m && typeof m.content === 'string' && m.content.length > capPerMessage) {
+            m.content = `${m.content.slice(0, capPerMessage)}…`;
+          }
+        }
+
+        let total = 0;
+        for (const m of history) total += (typeof m?.content === 'string' ? m.content.length : 0);
+        while (history.length > 1 && total > maxChars) {
+          const dropped = history.shift();
+          total -= (typeof dropped?.content === 'string' ? dropped.content.length : 0);
+        }
+      } catch {}
       return history;
     };
     let disableSummaryForThis = false;
@@ -2889,7 +3006,10 @@ ${listPart || '-（无）'}
       const id = chatStore.getCurrent();
       const msgs = chatStore.getMessages(id);
       ui.clearMessages();
-      ui.preloadHistory(decorateMessagesForDisplay(msgs));
+      const PAGE = 90;
+      const start = Math.max(0, msgs.length - PAGE);
+      ui.preloadHistory(decorateMessagesForDisplay(msgs.slice(start), { sessionId: id }));
+      chatRenderState.set(id, { start });
       refreshChatAndContacts();
     } catch {}
   };
@@ -2917,7 +3037,12 @@ ${listPart || '-（无）'}
       const msgs = chatStore.getMessages(id);
       const draft = chatStore.getDraft(id);
       ui.clearMessages();
-      ui.preloadHistory(decorateMessagesForDisplay(msgs));
+      {
+        const PAGE = 90;
+        const start = Math.max(0, msgs.length - PAGE);
+        ui.preloadHistory(decorateMessagesForDisplay(msgs.slice(start), { sessionId: id }));
+        chatRenderState.set(id, { start });
+      }
       ui.setInputText(draft || '');
       ui.setSessionLabel(id);
       refreshChatAndContacts();

@@ -287,6 +287,15 @@ pub async fn load_kv(app: AppHandle, name: String) -> Result<Value, String> {
         return Ok(serde_json::json!({}));
     }
 
+    let max_len: u64 = 10 * 1024 * 1024; // 10 MiB
+    if let Ok(meta) = fs::metadata(&file) {
+        let len = meta.len();
+        if len > max_len {
+            eprintln!("[load_kv] 文件过大，跳过加载: {:?}, {} bytes", file, len);
+            return Ok(serde_json::json!({ "_tooLarge": true, "size": len }));
+        }
+    }
+
     let json = fs::read_to_string(&file).map_err(|e| e.to_string())?;
     let data: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
 

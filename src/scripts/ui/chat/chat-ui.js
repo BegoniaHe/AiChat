@@ -660,7 +660,7 @@ export class ChatUI {
         const fragment = document.createDocumentFragment();
         for (const msg of list) {
             const el = this.buildMessageElement({
-                role: msg.role === 'user' ? 'user' : 'assistant',
+                role: msg.role === 'system' ? 'system' : (msg.role === 'user' ? 'user' : 'assistant'),
                 type: msg.type || 'text',
                 content: msg.content,
                 name: msg.name,
@@ -674,6 +674,49 @@ export class ChatUI {
         }
         this.scrollEl.appendChild(fragment);
         this.scrollToBottom();
+    }
+
+    prependHistory(messages = []) {
+        const list = Array.isArray(messages) ? messages : [];
+        if (!list.length || !this.scrollEl) return;
+        const beforeHeight = this.scrollEl.scrollHeight;
+        const beforeTop = this.scrollEl.scrollTop;
+
+        const fragment = document.createDocumentFragment();
+        for (const msg of list) {
+            const el = this.buildMessageElement({
+                role: msg.role === 'system' ? 'system' : (msg.role === 'user' ? 'user' : 'assistant'),
+                type: msg.type || 'text',
+                content: msg.content,
+                name: msg.name,
+                avatar: msg.avatar,
+                time: msg.time,
+                meta: msg.meta,
+                badge: msg.badge,
+                id: msg.id
+            });
+            if (el) fragment.appendChild(el);
+        }
+
+        const first = this.scrollEl.firstChild;
+        if (first) this.scrollEl.insertBefore(fragment, first);
+        else this.scrollEl.appendChild(fragment);
+
+        const afterHeight = this.scrollEl.scrollHeight;
+        const delta = afterHeight - beforeHeight;
+        this.scrollEl.scrollTop = beforeTop + delta;
+    }
+
+    refreshAvatars(resolver) {
+        if (!this.scrollEl || typeof resolver !== 'function') return;
+        const list = this.scrollEl.querySelectorAll('.QQ_chat_mymsg, .QQ_chat_charmsg');
+        list.forEach((wrapper) => {
+            const msg = wrapper.__chatappMessage;
+            const img = wrapper.querySelector('img.QQ_chat_head');
+            if (!img) return;
+            const src = resolver(msg);
+            if (src && img.src !== src) img.src = src;
+        });
     }
 
     removeMessage(msgId) {

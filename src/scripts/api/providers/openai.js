@@ -47,6 +47,22 @@ const makeAbortError = () => {
   return err;
 };
 
+const estimateOpenAIRequestChars = ({ model, messages, stream, options } = {}) => {
+  const arr = Array.isArray(messages) ? messages : [];
+  let n = 0;
+  n += String(model || '').length + 64;
+  n += stream ? 32 : 16;
+  n += (options && typeof options === 'object') ? 256 : 0;
+  for (const m of arr) {
+    if (!m || typeof m !== 'object') continue;
+    n += 64;
+    if (typeof m.role === 'string') n += m.role.length;
+    if (typeof m.name === 'string') n += m.name.length;
+    if (typeof m.content === 'string') n += m.content.length;
+  }
+  return n;
+};
+
 export class OpenAIProvider {
   constructor(config) {
     this.provider = config.provider || 'openai';
@@ -176,6 +192,17 @@ export class OpenAIProvider {
   async chat(messages, options = {}) {
     const { signal, options: payloadOptions } = splitRequestOptions(options);
     const normalized = this.normalizeOptions(payloadOptions);
+    const estimatedChars = estimateOpenAIRequestChars({
+      model: this.model,
+      messages,
+      stream: false,
+      options: normalized,
+    });
+    if (estimatedChars > 1_800_000) {
+      throw new Error(
+        `请求过大（约 ${Math.round(estimatedChars / 1024)} KB），可能导致 Android WebView OOM；请减少历史/摘要/世界书注入或清理该聊天室。`,
+      );
+    }
     const data = await this.requestJson({
       url: `${this.baseUrl}/chat/completions`,
       method: 'POST',
@@ -198,6 +225,17 @@ export class OpenAIProvider {
   async *streamChat(messages, options = {}) {
     const { signal, options: payloadOptions } = splitRequestOptions(options);
     const normalized = this.normalizeOptions(payloadOptions);
+    const estimatedChars = estimateOpenAIRequestChars({
+      model: this.model,
+      messages,
+      stream: true,
+      options: normalized,
+    });
+    if (estimatedChars > 1_800_000) {
+      throw new Error(
+        `请求过大（约 ${Math.round(estimatedChars / 1024)} KB），可能导致 Android WebView OOM；请减少历史/摘要/世界书注入或清理该聊天室。`,
+      );
+    }
     const payload = JSON.stringify({
       model: this.model,
       messages: messages,

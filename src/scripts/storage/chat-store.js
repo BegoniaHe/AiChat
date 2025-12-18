@@ -3,6 +3,204 @@
  */
 
 import { logger } from '../utils/logger.js';
+const MAX_PERSIST_MESSAGES_PER_SESSION = 400;
+const MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION = 600_000;
+const MAX_PERSIST_ARCHIVES_PER_SESSION = 6;
+const MAX_PERSIST_ARCHIVE_MESSAGES = 400;
+const MAX_PERSIST_SUMMARIES_PER_SESSION = 120;
+const MAX_PERSIST_STRING_CHARS = 180_000;
+const MAX_PERSIST_DATA_URL_CHARS = 4096;
+
+const isDataUrl = (s) => typeof s === 'string' && s.startsWith('data:') && s.length > MAX_PERSIST_DATA_URL_CHARS;
+
+const clampString = (value, max = MAX_PERSIST_STRING_CHARS) => {
+    const s = String(value ?? '');
+    if (s.length <= max) return s;
+    return `${s.slice(0, max)}…`;
+};
+
+const sanitizeMessageForPersist = (msg) => {
+    if (!msg || typeof msg !== 'object') return msg;
+    const out = { ...msg };
+
+    // Never persist very large inline binaries (images/audio/avatars); they will explode KV/localStorage.
+    if (isDataUrl(out.content)) out.content = '[binary omitted]';
+    // Avoid duplicating avatars per message; avatar should be resolved from contacts/persona at render time.
+    delete out.avatar;
+
+    // Many message payloads include huge raw originals; we only keep bounded versions on disk.
+    if (typeof out.rawOriginal === 'string') delete out.rawOriginal;
+
+    if (typeof out.content === 'string') out.content = clampString(out.content);
+    if (typeof out.raw === 'string') out.raw = clampString(out.raw);
+
+    try {
+        if (out.meta && typeof out.meta === 'object') {
+            const meta = { ...out.meta };
+            if (isDataUrl(meta.url)) meta.url = '[binary omitted]';
+            // Avoid persisting extremely large meta strings (rare but catastrophic on Android).
+            for (const k of Object.keys(meta)) {
+                if (typeof meta[k] === 'string') meta[k] = clampString(meta[k], 40_000);
+            }
+            out.meta = meta;
+        }
+    } catch {}
+
+    return out;
+};
+
+const sliceTailWithinChars = (arr, getText, { maxItems, maxChars } = {}) => {
+    const list = Array.isArray(arr) ? arr : [];
+    const limitItems = Number.isFinite(maxItems) ? Math.max(0, Math.trunc(maxItems)) : list.length;
+    const limitChars = Number.isFinite(maxChars) ? Math.max(0, Math.trunc(maxChars)) : Infinity;
+
+    let total = 0;
+    const picked = [];
+    for (let i = list.length - 1; i >= 0; i--) {
+        if (picked.length >= limitItems) break;
+        const it = list[i];
+        const t = getText(it);
+        const len = t ? t.length : 0;
+        if (total + len > limitChars && picked.length) break;
+        total += len;
+        picked.push(it);
+    }
+    picked.reverse();
+    return picked;
+};
+
+const sanitizeSessionForPersist = (session) => {
+    if (!session || typeof session !== 'object') return session;
+    const out = { ...session };
+
+    const messagesRaw = Array.isArray(out.messages) ? out.messages : [];
+    const sanitizedMessages = messagesRaw.map(sanitizeMessageForPersist);
+    out.messages = sliceTailWithinChars(
+        sanitizedMessages,
+        (m) => {
+            if (!m || typeof m !== 'object') return '';
+            const a = typeof m.content === 'string' ? m.content : '';
+            const b = typeof m.raw === 'string' ? m.raw : '';
+            return a + b;
+        },
+        { maxItems: MAX_PERSIST_MESSAGES_PER_SESSION, maxChars: MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION },
+    );
+
+    // If lastRead pointer points to a trimmed-away message, fall back to last existing message id.
+    try {
+        const lr = String(out.lastReadMessageId || '');
+        if (lr) {
+            const exists = out.messages.some(m => String(m?.id || '') === lr);
+            if (!exists) {
+                const last = out.messages.length ? out.messages[out.messages.length - 1] : null;
+                out.lastReadMessageId = last?.id ? String(last.id) : '';
+            }
+        }
+    } catch {}
+
+    if (typeof out.draft === 'string') out.draft = clampString(out.draft, 20_000);
+
+    try {
+        const s = Array.isArray(out.detachedSummaries) ? out.detachedSummaries : [];
+        const normalized = s
+            .map((it) => {
+                if (!it) return null;
+                if (typeof it === 'string') return { at: 0, text: clampString(it, 6000) };
+                const text = String(it.text || '').trim();
+                if (!text) return null;
+                const at = Number(it.at || 0) || 0;
+                return { at, text: clampString(text, 6000) };
+            })
+            .filter(Boolean);
+        out.detachedSummaries = normalized.slice(-MAX_PERSIST_SUMMARIES_PER_SESSION);
+    } catch {}
+
+    try {
+        const clampCompacted = (cs) => {
+            if (!cs || typeof cs !== 'object') return null;
+            const text = String(cs.text || '').trim();
+            if (!text) return null;
+            const at = Number(cs.at || 0) || 0;
+            const raw = typeof cs.raw === 'string' ? clampString(cs.raw, 120_000) : undefined;
+            return raw === undefined ? { at, text: clampString(text, 24_000) } : { at, text: clampString(text, 24_000), raw };
+        };
+        out.compactedSummary = clampCompacted(out.compactedSummary);
+        if (out.compactedSummaryLastRaw && typeof out.compactedSummaryLastRaw === 'object') {
+            const at = Number(out.compactedSummaryLastRaw.at || 0) || 0;
+            const raw = String(out.compactedSummaryLastRaw.raw || '').trim();
+            out.compactedSummaryLastRaw = raw ? { at, raw: clampString(raw, 120_000) } : null;
+        }
+    } catch {}
+
+    // Archives can easily duplicate huge message lists; keep bounded in persisted snapshot.
+    try {
+        const arcs = Array.isArray(out.archives) ? out.archives : [];
+        const sanitized = arcs
+            .map((a) => {
+                if (!a || typeof a !== 'object') return null;
+                const arc = { ...a };
+                const msgs = Array.isArray(arc.messages) ? arc.messages.map(sanitizeMessageForPersist) : [];
+                arc.messages = sliceTailWithinChars(
+                    msgs,
+                    (m) => {
+                        if (!m || typeof m !== 'object') return '';
+                        const a = typeof m.content === 'string' ? m.content : '';
+                        const b = typeof m.raw === 'string' ? m.raw : '';
+                        return a + b;
+                    },
+                    { maxItems: MAX_PERSIST_ARCHIVE_MESSAGES, maxChars: MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION },
+                );
+                // Snapshot summaries in archive are optional; keep them small if present.
+                if (Array.isArray(arc.summaries)) {
+                    arc.summaries = arc.summaries
+                        .map((it) => {
+                            if (!it) return null;
+                            if (typeof it === 'string') return { at: 0, text: clampString(it, 6000) };
+                            const text = String(it.text || '').trim();
+                            if (!text) return null;
+                            const at = Number(it.at || 0) || 0;
+                            return { at, text: clampString(text, 6000) };
+                        })
+                        .filter(Boolean)
+                        .slice(-MAX_PERSIST_SUMMARIES_PER_SESSION);
+                }
+                if (arc.compactedSummary && typeof arc.compactedSummary === 'object') {
+                    const text = String(arc.compactedSummary.text || '').trim();
+                    if (text) {
+                        arc.compactedSummary = {
+                            at: Number(arc.compactedSummary.at || 0) || 0,
+                            text: clampString(text, 24_000),
+                            raw: typeof arc.compactedSummary.raw === 'string' ? clampString(arc.compactedSummary.raw, 120_000) : undefined,
+                        };
+                        if (arc.compactedSummary.raw === undefined) delete arc.compactedSummary.raw;
+                    } else {
+                        arc.compactedSummary = null;
+                    }
+                }
+                if (arc.compactedSummaryLastRaw && typeof arc.compactedSummaryLastRaw === 'object') {
+                    const raw = String(arc.compactedSummaryLastRaw.raw || '').trim();
+                    arc.compactedSummaryLastRaw = raw
+                        ? { at: Number(arc.compactedSummaryLastRaw.at || 0) || 0, raw: clampString(raw, 120_000) }
+                        : null;
+                }
+                return arc;
+            })
+            .filter(Boolean);
+        out.archives = sanitized.slice(0, MAX_PERSIST_ARCHIVES_PER_SESSION);
+    } catch {}
+
+    return out;
+};
+
+const sanitizeStateForPersist = (state) => {
+    const src = state && typeof state === 'object' ? state : { sessions: {}, currentId: 'default' };
+    const sessions = src.sessions && typeof src.sessions === 'object' ? src.sessions : {};
+    const nextSessions = {};
+    for (const [sid, session] of Object.entries(sessions)) {
+        nextSessions[sid] = sanitizeSessionForPersist(session);
+    }
+    return { ...src, sessions: nextSessions };
+};
 
 const isQuotaError = (err) => {
     try {
@@ -57,7 +255,7 @@ const STORE_KEY = 'chat_store_v1';
 
 export class ChatStore {
     constructor() {
-        this.state = this._load();
+        this.state = sanitizeStateForPersist(this._load());
         this.currentId = this.state.currentId || 'default';
         this.ready = this._hydrateFromDisk();
         this._lsDisabled = false;
@@ -115,7 +313,7 @@ export class ChatStore {
         try {
             const kv = await safeInvoke('load_kv', { name: STORE_KEY });
             if (kv && kv.sessions) {
-                this.state = kv;
+                this.state = sanitizeStateForPersist(kv);
                 this.currentId = kv.currentId || 'default';
                 try {
                     localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
@@ -153,12 +351,13 @@ export class ChatStore {
     }
 
     _persist() {
+        const persistable = () => sanitizeStateForPersist(this.state);
         // 1. Fast path: Schedule localStorage shortly (50ms debounce) to skip current frame
         if (this._lsTimer) clearTimeout(this._lsTimer);
         this._lsTimer = setTimeout(() => {
             if (this._lsDisabled) return;
             try {
-                localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                localStorage.setItem(STORE_KEY, JSON.stringify(persistable()));
             } catch (err) {
                 if (isQuotaError(err)) {
                     this._lsDisabled = true;
@@ -176,7 +375,7 @@ export class ChatStore {
         // 2. Slow path: Schedule disk save (2000ms debounce) to avoid frequent fsync on Android
         if (this._diskTimer) clearTimeout(this._diskTimer);
         this._diskTimer = setTimeout(() => {
-            safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+            safeInvoke('save_kv', { name: STORE_KEY, data: persistable() }).catch((err) => {
                 logger.debug('chat store save_kv failed (可能非 Tauri)', err);
             });
         }, 2000);

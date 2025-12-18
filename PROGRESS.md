@@ -1280,3 +1280,17 @@
 - 2025-12-18 20:19（动态评论 prompt：移除 moment_id/comment_id + moment_reply 兼容无 moment_id）
   - **调整**：动态评论任务注入给模型的 `promptData` 不再包含 `moment_id`、`comment_id`、`user_comment_id`、`reply_to_comment_id` 等 ID 字段，减少噪音与泄漏。
   - **兼容**：`moment_reply` 解析允许缺省 `moment_id::`；在“动态评论”任务中用已知的当前动态 id 回填；在聊天协议解析中若缺失 momentId 则忽略该事件以免误写入。
+
+- 2025-12-18 21:10（Android OOM：KV/请求负载限额与瘦身）
+  - **ChatStore 持久化瘦身**：`chat_store_v1` 落盘会剔除超大 dataURL/原始回覆、并对消息/摘要/存档做上限裁剪，避免 `save_kv` 通过 JS<->native bridge 传输超大 payload 导致 WebView OOM。
+  - **Prompt 历史硬上限**：构建 outgoing history 时按 `openai_max_context/openai_max_tokens` 推导字符预算并裁剪，避免生成请求体过大。
+  - **OpenAI provider 兜底**：请求体过大时直接报错提示清理历史/注入内容，避免 native `http_request` 触发 OOM。
+  - **load_kv 防护**：`load_kv` 遇到超大 JSON 文件（>10MiB）返回轻量 stub，允许前端启动后覆盖写回瘦身后的数据。
+
+- 2025-12-18 21:35（聊天记录加载：仅渲染最新 + 上滑加载更早）
+  - **UI 懒加载**：进入聊天室/启动预载时只渲染最近 90 条消息；滚动到顶部会自动 prepend 更早 90 条（避免一次性把长历史全部塞进 DOM/内存）。
+  - **头像渲染对齐**：聊天消息不再持久化每条消息的 `avatar`（避免重复 base64 造成膨胀），改为渲染时从联系人资料/默认头像动态补齐。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+    - 修改：`src/scripts/ui/chat/chat-ui.js`
+    - 修改：`src/scripts/storage/chat-store.js`
