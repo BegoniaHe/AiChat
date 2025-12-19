@@ -163,7 +163,11 @@ export class MacroEngine {
         // Message macros (subset)
         out = out.replace(/{{lastMessage}}/gi, () => this.getLastMessage(sessionId));
         out = out.replace(/{{lastMessageId}}/gi, () => this.getLastIdByRole('', sessionId));
-        out = out.replace(/{{lastUserMessage}}/gi, () => overrideLastUserMessage || this.getLastByRole('user', sessionId));
+        // Accept a few common aliases used in templates.
+        const lastUser = () => overrideLastUserMessage || this.getLastByRole('user', sessionId);
+        out = out.replace(/{{lastUserMessage}}/gi, lastUser);
+        out = out.replace(/{{userLastMessage}}/gi, lastUser);
+        out = out.replace(/{{user_last_message}}/gi, lastUser);
         out = out.replace(/{{lastCharMessage}}/gi, () => this.getLastByRole('assistant', sessionId));
         out = out.replace(/{{lastUserMessageId}}/gi, () => this.getLastIdByRole('user', sessionId));
         out = out.replace(/{{lastCharMessageId}}/gi, () => this.getLastIdByRole('assistant', sessionId));

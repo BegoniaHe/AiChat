@@ -36,6 +36,9 @@ const initApp = async () => {
   const chatStore = new ChatStore();
   window.appBridge.setChatStore(chatStore);
   const contactsStore = new ContactsStore();
+  try {
+    window.appBridge.setContactsStore?.(contactsStore);
+  } catch {}
   const groupStore = new GroupStore();
   const momentsStore = new MomentsStore();
   const personaStore = new PersonaStore();
@@ -511,6 +514,49 @@ ${listPart || '-（无）'}
   const formatNowTime = () => new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
   const isConversationMessage = m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'system');
+
+  const sanitizeAssistantReplyText = (text, userName) => {
+    const stripXmlBlocks = (src) => {
+      let out = String(src ?? '');
+      const paired = /<([A-Za-z][\w:-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1\s*>/g;
+      for (let i = 0; i < 20; i++) {
+        const next = out.replace(paired, '');
+        if (next === out) break;
+        out = next;
+      }
+      out = out.replace(/<([A-Za-z][\w:-]*)(?:\s[^>]*)?\/\s*>/g, '');
+      // Remove any remaining standalone tags (no content removal possible without an end tag).
+      out = out.replace(/<([A-Za-z][\w:-]*)(?:\s[^>]*)?>/g, '');
+      return out;
+    };
+
+    const stripLeadingUserSpeakerLines = (src, name) => {
+      const raw = String(src ?? '');
+      const lines = raw.split(/\r?\n/);
+      const n = String(name || '').trim();
+      const escaped = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const userRe = new RegExp(`^\\s*(?:${n ? escaped(n) : '我'}|用户|user)\\s*[:：]\\s*`, 'i');
+
+      let i = 0;
+      while (i < lines.length && !String(lines[i] || '').trim()) i++;
+      while (i < lines.length) {
+        const line = String(lines[i] || '');
+        if (!line.trim()) {
+          i++;
+          continue;
+        }
+        if (!userRe.test(line)) break;
+        i++;
+      }
+      return lines.slice(i).join('\n').replace(/^\s+/, '');
+    };
+
+    let out = String(text ?? '');
+    out = stripXmlBlocks(out);
+    out = stripLeadingUserSpeakerLines(out, userName);
+    out = out.replace(/\n{4,}/g, '\n\n\n');
+    return out.trimStart();
+  };
 
   const normalizeLooseName = (s) => {
     const raw = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
@@ -2182,6 +2228,7 @@ ${listPart || '-（无）'}
       const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
       return raw.slice(cut);
     };
+
 	    const buildHistoryForLLM = pendingUserText => {
 	      const all = chatStore.getMessages(sessionId) || [];
 	      const history = all
@@ -2361,7 +2408,7 @@ ${listPart || '-（无）'}
                   const parsed = {
                     role,
                     type: 'text',
-                    ...parseSpecialMessage(content),
+                    ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
                     name: role === 'user' ? userName : speaker || '成员',
                     avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
                     time: m?.time || formatNowTime(),
@@ -2388,10 +2435,11 @@ ${listPart || '-（无）'}
               summarySessionIds.add(targetSessionId);
 
               ev.messages.forEach(msgText => {
+                const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
                 const parsed = {
                   role: 'assistant',
                   type: 'text',
-                  ...parseSpecialMessage(String(msgText || '')),
+                  ...parseSpecialMessage(cleaned),
                   name: '助手',
                   avatar: getAssistantAvatarForSession(targetSessionId),
                   time: formatNowTime(),
@@ -2472,7 +2520,7 @@ ${listPart || '-（无）'}
                       const parsed = {
                         role,
                         type: 'text',
-                        ...parseSpecialMessage(content),
+                        ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
                         name: role === 'user' ? userName : speaker || '成员',
                         avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
                         time: m?.time || formatNowTime(),
@@ -2491,10 +2539,11 @@ ${listPart || '-（无）'}
                     if (!targetSessionId) return;
                     summarySessionIds.add(targetSessionId);
                     (ev.messages || []).forEach(msgText => {
+                      const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
                       const parsed = {
                         role: 'assistant',
                         type: 'text',
-                        ...parseSpecialMessage(String(msgText || '')),
+                        ...parseSpecialMessage(cleaned),
                         name: '助手',
                         avatar: getAssistantAvatarForSession(targetSessionId),
                         time: formatNowTime(),
@@ -2543,8 +2592,8 @@ ${listPart || '-（无）'}
               chatStore.addSummary(summary, sessionId);
             } catch {}
           }
-          let stored = stripped;
-          let display = stripped;
+          let stored = sanitizeAssistantReplyText(stripped, userName);
+          let display = stored;
           // === 创意写作模式（暂时停用）===
           // try {
           //     stored = window.appBridge.applyOutputStoredRegex(full);
@@ -2621,7 +2670,7 @@ ${listPart || '-（无）'}
                 const c = isMe ? null : resolveContactByDisplayName(speaker);
                 const parsed = {
                   role,
-                  ...parseSpecialMessage(content),
+                  ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
                   name: role === 'user' ? userName : speaker || '成员',
                   avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
                   time: m?.time || formatNowTime(),
@@ -2642,9 +2691,10 @@ ${listPart || '-（无）'}
               }
               summarySessionIds.add(targetSessionId);
               (ev.messages || []).forEach(msgText => {
+                const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
                 const parsed = {
                   role: 'assistant',
-                  ...parseSpecialMessage(String(msgText || '')),
+                  ...parseSpecialMessage(cleaned),
                   name: '助手',
                   avatar: getAssistantAvatarForSession(targetSessionId),
                   time: formatNowTime(),
@@ -2710,7 +2760,7 @@ ${listPart || '-（无）'}
                     const c = isMe ? null : resolveContactByDisplayName(speaker);
                     const parsed = {
                       role,
-                      ...parseSpecialMessage(content),
+                      ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
                       name: role === 'user' ? userName : speaker || '成员',
                       avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
                       time: m?.time || formatNowTime(),
@@ -2728,9 +2778,10 @@ ${listPart || '-（无）'}
                   if (!targetSessionId) return;
                   summarySessionIds.add(targetSessionId);
                   (ev.messages || []).forEach(msgText => {
+                    const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
                     const parsed = {
                       role: 'assistant',
-                      ...parseSpecialMessage(String(msgText || '')),
+                      ...parseSpecialMessage(cleaned),
                       name: '助手',
                       avatar: getAssistantAvatarForSession(targetSessionId),
                       time: formatNowTime(),
@@ -2762,8 +2813,8 @@ ${listPart || '-（无）'}
             }
             return;
           }
-          // 如果对话模式未解析到有效标签，回退显示原文，便于调试
-          window.toastr?.warning?.('未解析到有效对话标签，已回退显示原文');
+          window.toastr?.warning?.('未解析到有效对话标签，已丢弃（可在“三 > 原始回复”查看）');
+          return;
         }
         if (protocolSummary) {
           try {
@@ -2785,8 +2836,9 @@ ${listPart || '-（无）'}
             requestSummaryCompaction(sessionId);
           } catch {}
         }
-        const stored = stripped;
-        const display = stripped;
+        const cleaned = sanitizeAssistantReplyText(stripped, userName);
+        const stored = cleaned;
+        const display = cleaned;
         const parsed = {
           role: 'assistant',
           name: '助手',
@@ -2944,8 +2996,9 @@ ${listPart || '-（无）'}
             full += chunk;
             streamCtrl.update(full);
           }
-          let stored = full;
-          let display = full;
+          const uName = getEffectivePersona(sessionId)?.name || '我';
+          let stored = sanitizeAssistantReplyText(full, uName);
+          let display = stored;
           // === 创意写作模式（暂时停用）===
           // try {
           //     stored = window.appBridge.applyOutputStoredRegex(full);
@@ -2975,8 +3028,9 @@ ${listPart || '-（无）'}
           // === 创意写作模式（暂时停用）===
           // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
           // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-          const stored = resultRaw;
-          const display = resultRaw;
+          const uName = getEffectivePersona(sessionId)?.name || '我';
+          const stored = sanitizeAssistantReplyText(resultRaw, uName);
+          const display = stored;
           const parsed = {
             role: 'assistant',
             name: '助手',

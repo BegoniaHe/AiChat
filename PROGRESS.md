@@ -1294,3 +1294,15 @@
     - 修改：`src/scripts/ui/app.js`
     - 修改：`src/scripts/ui/chat/chat-ui.js`
     - 修改：`src/scripts/storage/chat-store.js`
+
+- 2025-12-19 09：34（对话输出清洗 + 协议解析失败不回退原文）
+  - **去重**：AI 回覆若开头重复了用户发言（形如 `{{user}}：...`），会在展示/入库前过滤掉这些前缀行。
+  - **过滤 XML**：AI 回覆中出现的 XML/HTML 标签及其块内容会被剔除，避免把结构化标签误显示成正文。
+  - **协议解析回退**：对话模式二次解析失败后不再把原始回覆整段塞进聊天室；原始回覆仍保留在「三 > 原始回复」查看。
+  - 文件修改：
+    - 修改：`src/scripts/ui/app.js`
+
+- 2025-12-19 10:10（群聊协议解析：<br> 不再破坏 speaker/content/time）
+  - **修复**：群聊对话协议解析不再在分段前把 `<br>` 直接替换为换行；改为用内部标记先提取 `speaker--content--HH:MM` 片段，避免 `<br>` 出现在内容中时把一条消息拆断，导致头像匹配失败/渲染异常（灰字/默认头像）。
+  - 文件修改：
+    - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`

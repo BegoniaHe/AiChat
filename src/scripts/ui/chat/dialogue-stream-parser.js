@@ -111,20 +111,69 @@ const parseGroupChatBlock = (innerText) => {
         : [];
 
     const chatRaw = getBlock('聊天内容') || src;
-    const text = normalizeNewlines(chatRaw).replace(/<br\s*\/?>/gi, '\n');
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    // IMPORTANT:
+    // Some models put "<br>" inside a single group's message content. If we convert it to "\n" before parsing,
+    // it will break the "speaker--content--HH:MM" structure and cause speaker/avatar mismatches.
+    // Strategy:
+    // - Preserve "<br>" as an internal marker while extracting message segments.
+    // - Only convert it to "\n" AFTER we have parsed each message's speaker/content/time.
+    const BR_MARK = '\u000b'; // vertical tab as internal line-break marker
+    const normalized = normalizeNewlines(chatRaw);
+    const textMarked = normalized
+        .replace(/&lt;br\s*\/?&gt;/gi, BR_MARK)
+        .replace(/<br\s*\/?>/gi, BR_MARK);
 
     const messages = [];
-    for (const line of lines) {
-        const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
-        if (m) {
-            messages.push({ speaker: String(m[1] || '').trim(), content: String(m[2] || '').trim(), time: String(m[3] || '').trim() });
-            continue;
+    const unmark = (s) => String(s ?? '').replaceAll(BR_MARK, '\n');
+
+    // First pass: extract repeated "speaker--content--HH:MM" segments even if the model uses <br> to separate them.
+    // We scan by the time terminator to avoid being confused by internal <br> markers.
+    {
+        const src2 = textMarked;
+        let idx = 0;
+        const timeRe = /--\s*(\d{1,2}:\d{2})\s*/g;
+        while (idx < src2.length) {
+            timeRe.lastIndex = idx;
+            const tm = timeRe.exec(src2);
+            if (!tm) break;
+            const segEnd = timeRe.lastIndex;
+            const segment = String(src2.slice(idx, segEnd) || '').trim();
+            idx = segEnd;
+            // Consume common separators between segments (newline, <br> marker, whitespace)
+            while (idx < src2.length && /[\s\u000b]/.test(src2[idx])) idx++;
+
+            // segment ends with "--HH:MM", split it into pre + time
+            const lastSep = segment.lastIndexOf('--');
+            if (lastSep === -1) continue;
+            const time = String(segment.slice(lastSep + 2) || '').trim();
+            const pre = String(segment.slice(0, lastSep) || '').trim();
+            const firstSep = pre.indexOf('--');
+            if (firstSep === -1) continue;
+            const speaker = String(pre.slice(0, firstSep) || '').trim();
+            const content = String(pre.slice(firstSep + 2) || '').trim();
+            if (!speaker || !content) continue;
+            messages.push({ speaker, content: unmark(content).trim(), time });
         }
-        const parts = line.split('--').map(p => p.trim()).filter(Boolean);
-        if (parts.length >= 2) {
-            messages.push({ speaker: parts[0], content: parts.slice(1).join('--'), time: '' });
-            continue;
+    }
+
+    // Fallback pass: line-based parsing for partial formats (e.g. missing time)
+    if (!messages.length) {
+        const lines = textMarked.split('\n').map(l => l.trim()).filter(Boolean);
+        for (const line of lines) {
+            const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
+            if (m) {
+                messages.push({
+                    speaker: String(m[1] || '').trim(),
+                    content: unmark(String(m[2] || '').trim()).trim(),
+                    time: String(m[3] || '').trim(),
+                });
+                continue;
+            }
+            const parts = line.split('--').map(p => p.trim()).filter(Boolean);
+            if (parts.length >= 2) {
+                messages.push({ speaker: parts[0], content: unmark(parts.slice(1).join('--')).trim(), time: '' });
+                continue;
+            }
         }
     }
 

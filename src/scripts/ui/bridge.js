@@ -144,6 +144,7 @@ class AppBridge {
     this.abortReason = '';
     this.chatStore = null; // Injected
     this.macroEngine = null; // Initialized on setChatStore
+    this.contactsStore = null; // Injected
     this.hydrateWorldSessionMap();
     this.hydrateGlobalWorldId();
   }
@@ -151,6 +152,10 @@ class AppBridge {
   setChatStore(store) {
     this.chatStore = store;
     this.macroEngine = new MacroEngine(store);
+  }
+
+  setContactsStore(store) {
+    this.contactsStore = store;
   }
 
   processTextMacros(text, extraContext = {}) {
@@ -629,12 +634,10 @@ class AppBridge {
       ? `${pendingUserTextRaw}（${scenarioHint}）`
       : pendingUserTextRaw;
     const effectiveLastUserMessage = overrideLastUserMessageRaw.trim() ? overrideLastUserMessageRaw.trim() : pendingUserText;
-    const lastUserMessageRe = /{{\s*lastUserMessage\s*}}/i;
+    const lastUserMessageRe = /{{\s*(?:lastUserMessage|userLastMessage|user_last_message)\s*}}/i;
     let usedLastUserMessageForPendingInput = false;
     const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
       const raw = String(rawText ?? '');
-      // NOTE: do not infer "lastUserMessage used" here; it must be tied to a USER-role block,
-      // otherwise some presets rely on USER_INPUT regex to wrap the latest user message.
       return raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: effectiveLastUserMessage }) : '';
     };
     // SillyTavern-like persona settings (subset)
@@ -655,6 +658,82 @@ class AppBridge {
     const groupMemberIds = Array.isArray(context?.group?.members) ? context.group.members.map(String) : [];
     const groupMemberNames = Array.isArray(context?.group?.memberNames) ? context.group.memberNames.map(String) : [];
     const membersText = groupMemberNames.filter(Boolean).join(',');
+
+    const getSessionSummaryItems = (sid, { limitPlain = 30, limitPlainGroup = 10, limitWithCompacted = 2, limitWithCompactedGroup = 3 } = {}) => {
+      const id = String(sid || '').trim();
+      if (!id || !this.chatStore?.getSummaries) return { compacted: null, summaries: [] };
+      const compacted = this.chatStore?.getCompactedSummary?.(id) || null;
+      const list = this.chatStore.getSummaries(id) || [];
+      const arrRaw = Array.isArray(list) ? list : [];
+
+      if (isGroupChat) {
+        if (compacted && String(compacted.text || '').trim()) {
+          return { compacted, summaries: arrRaw.slice(-Math.max(0, limitWithCompactedGroup)) };
+        }
+        return { compacted: null, summaries: arrRaw.slice(-Math.max(0, limitPlainGroup)) };
+      }
+
+      // Non-group chats keep existing behavior unless caller wants different limits.
+      if (compacted && String(compacted.text || '').trim()) {
+        return { compacted, summaries: arrRaw.slice(-Math.max(0, limitWithCompacted)) };
+      }
+      return { compacted: null, summaries: arrRaw.slice(-Math.max(0, limitPlain)) };
+    };
+
+    const buildPrivateChatMemberGroupSummaryBlock = () => {
+      if (isGroupChat) return null;
+      if (isMomentCommentTask) return null;
+      const memberId = String(sessionIdForSummary || '').trim();
+      if (!memberId) return null;
+      if (!this.chatStore?.getSummaries) return null;
+      const groups = (() => {
+        try {
+          const list = this.contactsStore?.listGroups?.() || [];
+          return Array.isArray(list)
+            ? list.filter(g => Array.isArray(g?.members) && g.members.map(String).includes(memberId))
+            : [];
+        } catch {
+          return [];
+        }
+      })();
+      if (!groups.length) return null;
+
+      const sections = [];
+      for (const g of groups) {
+        const gid = String(g?.id || '').trim();
+        if (!gid) continue;
+        const gname = String(g?.name || '').trim() || gid.replace(/^group:/, '') || gid;
+
+        const compacted = this.chatStore?.getCompactedSummary?.(gid) || null;
+        const list = this.chatStore.getSummaries(gid) || [];
+        const arrRaw = Array.isArray(list) ? list : [];
+        const arr = (compacted && String(compacted.text || '').trim()) ? arrRaw.slice(-2) : arrRaw.slice(-5);
+        const items = [];
+        if (compacted && String(compacted.text || '').trim()) {
+          items.push(`- 大总结：${String(compacted.text).trim()}`);
+        }
+        for (let j = 0; j < arr.length; j++) {
+          const it = arr[j];
+          const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+          if (!text) continue;
+          const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+          const isNewest = j === arr.length - 1;
+          const when = (isNewest && at) ? formatSinceInParens(at) : '';
+          items.push(`- ${text}${when ? `（${when}）` : ''}`);
+        }
+        if (items.length) {
+          sections.push([`群聊：${gname}`, ...items].join('\n'));
+        }
+      }
+      if (!sections.length) return null;
+      return {
+        role: 'system',
+        content: [
+          '角色所在群聊摘要回顾（仅供理解上下文）：',
+          ...sections,
+        ].join('\n\n'),
+      };
+    };
     const worldPromptRaw = isMomentCommentTask
       ? ''
       : (() => {
@@ -1003,27 +1082,59 @@ class AppBridge {
       };
 
       let historyInserted = false;
-      const summaries = (() => {
+      const sessionSummary = (() => {
         try {
-          const list = this.chatStore?.getSummaries?.(sessionIdForSummary) || [];
-          return Array.isArray(list) ? list.slice(-30) : [];
+          // Group chat requirement: last 10 OR (compacted + last 3).
+          // Non-group: keep previous behavior (last 30).
+          return getSessionSummaryItems(sessionIdForSummary, {
+            limitPlain: 30,
+            limitPlainGroup: 10,
+            limitWithCompacted: 30, // unused for non-group
+            limitWithCompactedGroup: 3,
+          });
         } catch {
-          return [];
+          return { compacted: null, summaries: [] };
         }
       })();
 	      const historyRecallBlocks = (() => {
 	        const blocks = [{ role: 'system', content: HISTORY_RECALL_NOTICE }];
 	        const momentData = buildMomentCommentDataBlock();
 	        if (momentData) blocks.push(momentData);
-	        if (summaries.length) {
-	          blocks.push({
-	            role: 'system',
-	            content: `以下为该聊天室的简要摘要回顾：\n${summaries
-	              .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
-	              .filter(Boolean)
-	              .join('\n')}`.trim(),
-	          });
-	        }
+	        try {
+	          const compactedText = String(sessionSummary?.compacted?.text || '').trim();
+	          const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
+	          if (isGroupChat) {
+	            const rows = [];
+	            if (compactedText) rows.push(`- 大总结：${compactedText}`);
+	            rows.push(
+	              ...summaries
+	                .map(s => String(typeof s === 'string' ? s : s?.text || '').trim())
+	                .filter(Boolean)
+	                .map(t => `- ${t}`),
+	            );
+	            if (rows.length) {
+	              blocks.push({
+	                role: 'system',
+	                content: `以下为该群聊的摘要回顾：\n${rows.join('\n')}`.trim(),
+	              });
+	            }
+	          } else {
+	            if (summaries.length) {
+	              blocks.push({
+	                role: 'system',
+	                content: `以下为该聊天室的简要摘要回顾：\n${summaries
+	                  .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	                  .filter(Boolean)
+	                  .join('\n')}`.trim(),
+	              });
+	            }
+	          }
+	        } catch {}
+
+          try {
+            const groupSummary = buildPrivateChatMemberGroupSummaryBlock();
+            if (groupSummary) blocks.push(groupSummary);
+          } catch {}
 	        const priv = buildGroupMemberPrivateSummaryBlock();
 	        if (priv) blocks.push(priv);
 	        if (isMomentCommentTask) {
@@ -1083,7 +1194,7 @@ class AppBridge {
 
         const role = String(pr?.role || 'system').toLowerCase();
         const mappedRole = role === 'user' || role === 'assistant' || role === 'system' ? role : 'system';
-        if (!usedLastUserMessageForPendingInput && mappedRole === 'user' && rawHadLastUser) {
+        if (!usedLastUserMessageForPendingInput && rawHadLastUser) {
           usedLastUserMessageForPendingInput = true;
         }
         messages.push({ role: mappedRole, content });
@@ -1230,18 +1341,45 @@ class AppBridge {
 	      if (momentData) messages.push(momentData);
 	    } catch {}
 	    try {
-	      const list = this.chatStore?.getSummaries?.(sessionIdForSummary) || [];
-	      const summaries = Array.isArray(list) ? list.slice(-30) : [];
-	      if (summaries.length) {
-	        messages.push({
-	          role: 'system',
-	          content: `以下为该聊天室的简要摘要回顾：\n${summaries
-	            .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	      const sessionSummary = getSessionSummaryItems(sessionIdForSummary, {
+	        limitPlain: 30,
+	        limitPlainGroup: 10,
+	        limitWithCompacted: 30,
+	        limitWithCompactedGroup: 3,
+	      });
+	      const compactedText = String(sessionSummary?.compacted?.text || '').trim();
+	      const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
+	      if (isGroupChat) {
+	        const rows = [];
+	        if (compactedText) rows.push(`- 大总结：${compactedText}`);
+	        rows.push(
+	          ...summaries
+	            .map(s => String(typeof s === 'string' ? s : s?.text || '').trim())
 	            .filter(Boolean)
-	            .join('\n')}`.trim(),
-	        });
+	            .map(t => `- ${t}`),
+	        );
+	        if (rows.length) {
+	          messages.push({
+	            role: 'system',
+	            content: `以下为该群聊的摘要回顾：\n${rows.join('\n')}`.trim(),
+	          });
+	        }
+	      } else {
+	        if (summaries.length) {
+	          messages.push({
+	            role: 'system',
+	            content: `以下为该聊天室的简要摘要回顾：\n${summaries
+	              .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	              .filter(Boolean)
+	              .join('\n')}`.trim(),
+	          });
+	        }
 	      }
 	    } catch {}
+      try {
+        const groupSummary = buildPrivateChatMemberGroupSummaryBlock();
+        if (groupSummary) messages.push(groupSummary);
+      } catch {}
 	    try {
 	      const priv = buildGroupMemberPrivateSummaryBlock();
 	      if (priv) messages.push(priv);
@@ -1281,7 +1419,7 @@ class AppBridge {
         if (!raw) continue;
         const roleRaw = String(b.role || 'system').toLowerCase();
         const role = (roleRaw === 'user' || roleRaw === 'assistant' || roleRaw === 'system') ? roleRaw : 'system';
-        if (!usedLastUserMessageForPendingInput && role === 'user' && lastUserMessageRe.test(raw)) {
+        if (!usedLastUserMessageForPendingInput && lastUserMessageRe.test(raw)) {
           usedLastUserMessageForPendingInput = true;
         }
         const content = processTextMacrosWithPendingFlag(raw, {
