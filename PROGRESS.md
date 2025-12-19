@@ -198,6 +198,28 @@
   - 菜单进一步贴近按钮（取消额外距离）；配置面板在填充前若未创建将自动 createUI，避免元素为 null。
 - 2025-12-11 10:23
   - 菜单定位函数化，按按钮 rect+scrollY 精确贴 1px；配置加载为空时回退默认，避免“provider 为 null”崩溃。
+- 2025-12-19 11:51
+  - 媒体本地化基础：新增 `media-assets.js` 管理内置/首启拷贝的图片/音频资源，支持别名与源 URL 映射。
+  - Tauri 新增 `ensure_media_bundle`：首启从 `resources/media` 拷贝到 app data 并加载 manifest；CSP 放行 asset/tauri/file 资源。
+  - 聊天/动态渲染接入：`message-parser` 解析 [img-]/[bqb-]/[yy-] 并解析到本地 URL；聊天表情包渲染为图片；动态列表与详情支持图片网格 + 音频播放器。
+  - 新增媒体清单模板：`src/assets/media/manifest.json` 与 `src-tauri/resources/media/manifest.json`。
+  - 动态样式补充：新增 `.moment-audios` 相关样式。
+- 2025-12-19 13:03
+  - 新增 23 张本地表情包资源到 `src/assets/media` 与 `src-tauri/resources/media`，并更新两份 `manifest.json`（文件名即关键词）。
+- 2025-12-19 13:48
+  - 扩充本地表情包资源到 47 张，已同步至 `src/assets/media` 与 `src-tauri/resources/media` 并更新 manifest。
+- 2025-12-19 13:53
+  - 更新内置世界书表情包列表，加入现有 47 个关键词供模型使用。
+- 2025-12-19 14:04
+  - 修正 Tauri 资源打包路径为 `src-tauri/resources/media/**`，并让首启拷贝逻辑兼容多种 bundle 目录结构。
+- 2025-12-19 14:42
+  - 资源打包路径回退为 `resources/media/**`（相对 `src-tauri`），避免 Android 构建时重复 `src-tauri/src-tauri`。
+- 2025-12-19 14:46
+  - 调整资源 glob 为 `resources/media/*`，避免 `**` 在构建时未匹配到文件。
+- 2025-12-19 15:00
+  - 表情包文件名统一改为 ASCII（`sticker_001.png` 等），保留中文关键词在 manifest 以供模型输出匹配。
+- 2025-12-19 15:11
+  - 表情包渲染尺寸下调（聊天气泡内 140px 上限），并为图片/语音/表情包加载失败提示做去重处理。
 - 2025-12-11 10:25
   - 菜单上移约两头像高度（相对按钮偏移），进一步贴近按钮；配置面板加宽到 94% / 680px 以适配手机。
 - 2025-12-11 10:27

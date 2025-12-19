@@ -3,6 +3,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { resolveMediaAsset, isLikelyUrl, isAssetRef } from '../utils/media-assets.js';
 
 const esc = s =>
   String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -11,6 +12,86 @@ const htmlText = s => {
   return esc(s)
     .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
     .replace(/\n/g, '<br>');
+};
+
+const normalizeInlineBreaks = (s) => String(s ?? '')
+  .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+  .replace(/<br\s*\/?>/gi, '\n');
+
+const appendTextWithBreaks = (el, text) => {
+  const parts = String(text || '').split('\n');
+  parts.forEach((part, idx) => {
+    if (idx) el.appendChild(document.createElement('br'));
+    if (part) el.appendChild(document.createTextNode(part));
+  });
+};
+
+const extractMomentMedia = (raw = '') => {
+  const text = normalizeInlineBreaks(raw);
+  const images = [];
+  const audios = [];
+  const TOKEN_RE = /\[(img|bqb|yy)-([\s\S]+?)\]|<img\s+[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  let output = '';
+  let lastIndex = 0;
+
+  const pushImage = (payload, kind = 'image') => {
+    const resolved = resolveMediaAsset(kind, payload) || resolveMediaAsset('image', payload);
+    const url = resolved?.url || (isLikelyUrl(payload) ? payload : '');
+    if (!url) return false;
+    images.push({ url, label: String(payload || '').trim() });
+    return true;
+  };
+
+  const pushAudio = (payload) => {
+    const resolved = resolveMediaAsset('audio', payload);
+    const url = resolved?.url || (isLikelyUrl(payload) ? payload : '');
+    if (!url) return false;
+    audios.push({ url, label: String(payload || '').trim() });
+    return true;
+  };
+
+  let match;
+  while ((match = TOKEN_RE.exec(text))) {
+    const before = text.slice(lastIndex, match.index);
+    output += before;
+    lastIndex = TOKEN_RE.lastIndex;
+    if (match[3]) {
+      const ok = pushImage(match[3], 'image');
+      if (!ok) output += match[0];
+      continue;
+    }
+    const type = String(match[1] || '').toLowerCase();
+    const payload = String(match[2] || '').trim();
+    if (!payload) {
+      output += match[0];
+      continue;
+    }
+    if (type === 'yy') {
+      const ok = pushAudio(payload);
+      if (!ok) output += match[0];
+      continue;
+    }
+    const ok = pushImage(payload, type === 'bqb' ? 'sticker' : 'image');
+    if (!ok) output += match[0];
+  }
+  output += text.slice(lastIndex);
+
+  const trimmed = output.trim();
+  if (trimmed && (isAssetRef(trimmed) || isLikelyUrl(trimmed))) {
+    const img = resolveMediaAsset('image', trimmed);
+    if (img?.url) {
+      images.push({ url: img.url, label: trimmed });
+      output = '';
+    } else {
+      const audio = resolveMediaAsset('audio', trimmed);
+      if (audio?.url) {
+        audios.push({ url: audio.url, label: trimmed });
+        output = '';
+      }
+    }
+  }
+
+  return { text: output, images, audios };
 };
 
 export class MomentsPanel {
@@ -362,6 +443,53 @@ export class MomentsPanel {
                     </div>
                 </div>
             `;
+      const media = extractMomentMedia(m.content || '');
+      const textEl = card.querySelector('.moment-text');
+      if (textEl) {
+        textEl.innerHTML = '';
+        const textValue = String(media.text || '').trim();
+        if (textValue) {
+          appendTextWithBreaks(textEl, textValue);
+          textEl.style.display = '';
+        } else {
+          textEl.style.display = 'none';
+        }
+      }
+      const contentEl = card.querySelector('.moment-content');
+      if (contentEl) {
+        if (media.images.length) {
+          const grid = document.createElement('div');
+          grid.className = 'moment-images';
+          media.images.forEach((img) => {
+            const el = document.createElement('img');
+            el.src = img.url;
+            el.alt = img.label || '';
+            el.loading = 'lazy';
+            el.addEventListener('click', (e) => {
+              e.stopPropagation();
+              this.openImagePreview?.(img.url);
+            });
+            grid.appendChild(el);
+          });
+          contentEl.appendChild(grid);
+        }
+        if (media.audios.length) {
+          const list = document.createElement('div');
+          list.className = 'moment-audios';
+          media.audios.forEach((audio) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'moment-audio-item';
+            wrap.innerHTML = `
+              <span class="moment-audio-label">语音</span>
+              <audio controls preload="none">
+                <source src="${audio.url}">
+              </audio>
+            `;
+            list.appendChild(wrap);
+          });
+          contentEl.appendChild(list);
+        }
+      }
       const dotsBtn = card.querySelector('.moment-more');
       dotsBtn?.addEventListener('click', e => {
         e.stopPropagation();
@@ -625,7 +753,7 @@ export class MomentsPanel {
                         <div style="color:#64748b; font-size:12px; margin-top:2px;">${esc(m.time || '')} · 👁 ${Number(
         m.views || 0,
       )} · 👍 ${Number(m.likes || 0)}</div>
-                        <div style="margin-top:10px; overflow-wrap:anywhere;">${htmlText(m.content || '')}</div>
+                        <div class="moment-detail-text" style="margin-top:10px; overflow-wrap:anywhere;">${htmlText(m.content || '')}</div>
                     </div>
                 </div>
                 <div style="margin-top:14px; font-weight:800;">评论</div>
@@ -646,6 +774,48 @@ export class MomentsPanel {
                     }
                 </div>
             `;
+      const media = extractMomentMedia(m.content || '');
+      const detailText = body.querySelector('.moment-detail-text');
+      if (detailText) {
+        detailText.innerHTML = '';
+        const textValue = String(media.text || '').trim();
+        if (textValue) appendTextWithBreaks(detailText, textValue);
+        const hasMedia = media.images.length || media.audios.length;
+        if (!textValue && !hasMedia) detailText.style.display = 'none';
+        else detailText.style.display = '';
+      }
+      if (media.images.length) {
+        const grid = document.createElement('div');
+        grid.className = 'moment-images';
+        media.images.forEach((img) => {
+          const el = document.createElement('img');
+          el.src = img.url;
+          el.alt = img.label || '';
+          el.loading = 'lazy';
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openImagePreview(img.url);
+          });
+          grid.appendChild(el);
+        });
+        detailText?.appendChild(grid);
+      }
+      if (media.audios.length) {
+        const list = document.createElement('div');
+        list.className = 'moment-audios';
+        media.audios.forEach((audio) => {
+          const wrap = document.createElement('div');
+          wrap.className = 'moment-audio-item';
+          wrap.innerHTML = `
+            <span class="moment-audio-label">语音</span>
+            <audio controls preload="none">
+              <source src="${audio.url}">
+            </audio>
+          `;
+          list.appendChild(wrap);
+        });
+        detailText?.appendChild(list);
+      }
 
       // Long press / right click to delete comment in detail view too
       const wrap = body;
@@ -722,6 +892,16 @@ export class MomentsPanel {
       });
     }
     this.modal.style.display = 'block';
+  }
+
+  openImagePreview(url) {
+    const src = String(url || '').trim();
+    if (!src) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'lightbox';
+    overlay.innerHTML = `<img src="${src}" alt="preview">`;
+    overlay.addEventListener('click', () => overlay.remove());
+    document.body.appendChild(overlay);
   }
 
   addLocalComment() {

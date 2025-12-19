@@ -4,6 +4,7 @@ import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { logger } from '../utils/logger.js';
+import { initMediaAssets } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
 import './bridge.js';
 import { ChatUI } from './chat/chat-ui.js';
@@ -48,6 +49,7 @@ const initApp = async () => {
   await groupStore.ready;
   await momentsStore.ready;
   await personaStore.ready;
+  await initMediaAssets();
   await window.appBridge?.regex?.ready;
   await window.appBridge?.presets?.ready;
   try {

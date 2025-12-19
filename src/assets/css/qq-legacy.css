@@ -273,6 +273,18 @@
     touch-action: manipulation;
 }
 
+.QQ_chat_msgdiv img.previewable {
+    max-width: 240px;
+    max-height: 240px;
+    border-radius: 12px;
+    display: block;
+}
+
+.QQ_chat_msgdiv img.previewable.sticker-image {
+    max-width: 140px;
+    max-height: 140px;
+}
+
 /* 我的消息气泡（如有自定义背景色） */
 .QQ_chat_mymsg .QQ_chat_msgdiv {
     text-align: left;  /* 保持文本左对齐 */

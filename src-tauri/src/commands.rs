@@ -3,7 +3,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
 use std::os::unix::io::AsRawFd;
@@ -13,6 +13,101 @@ fn get_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map_err(|e| e.to_string())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.exists() {
+        return Err(format!("source directory missing: {}", src.display()));
+    }
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::copy(&path, &target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct MediaBundleInfo {
+    pub ready: bool,
+    pub copied: bool,
+    pub base_dir: String,
+    pub manifest: Option<Value>,
+    pub warning: Option<String>,
+}
+
+/// Ensure bundled media assets exist in app data dir.
+#[tauri::command]
+pub async fn ensure_media_bundle(app: AppHandle) -> Result<MediaBundleInfo, String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+
+    let target_dir = data_dir.join("media");
+    fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    let manifest_path = target_dir.join("manifest.json");
+
+    let mut copied = false;
+    let mut warning = None;
+
+    if !manifest_path.exists() {
+        match app.path().resource_dir() {
+            Ok(resource_dir) => {
+                let candidates = [
+                    resource_dir.join("media"),
+                    resource_dir.join("resources").join("media"),
+                    resource_dir.join("src-tauri").join("resources").join("media"),
+                ];
+                let mut picked = None;
+                for dir in candidates {
+                    if dir.exists() {
+                        picked = Some(dir);
+                        break;
+                    }
+                }
+                if let Some(src_dir) = picked {
+                    if let Err(err) = copy_dir_recursive(&src_dir, &target_dir) {
+                        warning = Some(format!("copy media bundle failed: {}", err));
+                    } else {
+                        copied = true;
+                    }
+                } else {
+                    warning = Some("media bundle not found in resources".to_string());
+                }
+            }
+            Err(err) => {
+                warning = Some(format!("resource_dir unavailable: {}", err));
+            }
+        }
+    }
+
+    let manifest = if manifest_path.exists() {
+        match fs::read_to_string(&manifest_path) {
+            Ok(json) => serde_json::from_str::<Value>(&json).ok(),
+            Err(err) => {
+                warning = Some(format!("read media manifest failed: {}", err));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(MediaBundleInfo {
+        ready: manifest.is_some(),
+        copied,
+        base_dir: target_dir.to_string_lossy().to_string(),
+        manifest,
+        warning,
+    })
 }
 
 /// 保存配置

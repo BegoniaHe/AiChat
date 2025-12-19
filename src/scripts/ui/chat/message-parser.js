@@ -12,27 +12,53 @@
  * Fallback: plain text.
  */
 
+import { resolveMediaAsset, isLikelyUrl } from '../../utils/media-assets.js';
+
 const TOKEN_PATTERN = /^\[(img|yy|music|zz|bqb)-([\s\S]+)\]$/i;
+
+const attachAssetMeta = (resolved) => {
+    const item = resolved?.item;
+    if (!item || typeof item !== 'object') return undefined;
+    return {
+        assetId: item.id || '',
+        assetKind: item.kind || '',
+        assetLabel: item.label || '',
+    };
+};
 
 export function parseSpecialMessage(raw = '') {
     const text = (raw || '').trim();
     // If HTML-like img tag exists, treat as image content
     if (/<img\s+[^>]*src=/.test(text)) {
         const src = (text.match(/src=["']([^"']+)["']/) || [])[1];
-        if (src) return { type: 'image', content: src };
+        if (src) {
+            const resolved = resolveMediaAsset('image', src);
+            if (resolved?.url) return { type: 'image', content: resolved.url, meta: attachAssetMeta(resolved) };
+            return { type: 'image', content: src };
+        }
     }
     // Detect raw audio URL
     if (/https?:\/\/\S+\.(mp3|wav|ogg|m4a)/i.test(text)) {
         const matchAudio = text.match(/https?:\/\/\S+/i);
         if (matchAudio) {
-            return { type: 'audio', content: matchAudio[0] };
+            const resolved = resolveMediaAsset('audio', matchAudio[0]);
+            return {
+                type: 'audio',
+                content: resolved?.url || matchAudio[0],
+                meta: attachAssetMeta(resolved),
+            };
         }
     }
     // If text looks like pure URL ending with common image/video
     if (/https?:\/\/\S+\.(png|jpe?g|webp|gif|mp4)/i.test(text)) {
         const matchUrl = text.match(/https?:\/\/\S+/i);
         if (matchUrl) {
-            return { type: 'image', content: matchUrl[0] };
+            const resolved = resolveMediaAsset('image', matchUrl[0]);
+            return {
+                type: 'image',
+                content: resolved?.url || matchUrl[0],
+                meta: attachAssetMeta(resolved),
+            };
         }
     }
     const match = text.match(TOKEN_PATTERN);
@@ -45,16 +71,24 @@ export function parseSpecialMessage(raw = '') {
 
     switch (type) {
         case 'img': {
+            const resolved = resolveMediaAsset('image', payload);
+            if (resolved?.url) {
+                return { type: 'image', content: resolved.url, meta: attachAssetMeta(resolved) };
+            }
             // If payload looks like a URL, treat as image URL; otherwise show text.
-            const isUrl = /^https?:\/\//i.test(payload) || payload.startsWith('./') || payload.startsWith('/assets');
+            const isUrl = isLikelyUrl(payload) || payload.startsWith('./') || payload.startsWith('/assets');
             if (isUrl) {
                 return { type: 'image', content: payload };
             }
             return { type: 'meta', content: `图片：${payload}` };
         }
         case 'yy': {
+            const resolved = resolveMediaAsset('audio', payload);
+            if (resolved?.url) {
+                return { type: 'audio', content: resolved.url, meta: attachAssetMeta(resolved) };
+            }
             // Placeholder: audio URL if present, otherwise show text.
-            const isUrl = /^https?:\/\//i.test(payload) || payload.endsWith('.mp3') || payload.endsWith('.wav');
+            const isUrl = isLikelyUrl(payload) || payload.endsWith('.mp3') || payload.endsWith('.wav');
             if (isUrl) {
                 return { type: 'audio', content: payload };
             }
@@ -68,6 +102,10 @@ export function parseSpecialMessage(raw = '') {
             return { type: 'transfer', content: payload };
         }
         case 'bqb': {
+            const resolved = resolveMediaAsset('sticker', payload) || resolveMediaAsset('image', payload);
+            if (resolved?.url) {
+                return { type: 'sticker', content: resolved.url, meta: attachAssetMeta(resolved) };
+            }
             return { type: 'sticker', content: payload };
         }
         default:

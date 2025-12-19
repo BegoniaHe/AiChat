@@ -3,7 +3,29 @@
  */
 
 import { logger } from '../../utils/logger.js';
+import { resolveMediaAsset } from '../../utils/media-assets.js';
 import { renderRichText, setupIframeResizeListener } from './rich-text-renderer.js';
+
+const resolveMediaUrl = (kind, value) => {
+    const resolved = resolveMediaAsset(kind, value);
+    return resolved?.url || value || '';
+};
+
+const toastOnce = (message, level = 'warning', ttl = 8000) => {
+    const text = String(message || '').trim();
+    if (!text) return;
+    const key = `${level}:${text}`;
+    const now = Date.now();
+    if (!toastOnce._cache) toastOnce._cache = new Map();
+    const seenAt = toastOnce._cache.get(key) || 0;
+    if (now - seenAt < ttl) return;
+    toastOnce._cache.set(key, now);
+    const fn = window.toastr?.[level] || window.toastr?.warning;
+    fn?.(text);
+    setTimeout(() => {
+        if (toastOnce._cache.get(key) === now) toastOnce._cache.delete(key);
+    }, ttl);
+};
 
 export class ChatUI {
     constructor() {
@@ -312,32 +334,38 @@ export class ChatUI {
         bubble.className = 'QQ_chat_msgdiv';
 
         switch (message.type) {
-            case 'image':
-                bubble.innerHTML = `<img src="${message.content}" alt="image" class="previewable">`;
+            case 'image': {
+                const imgSrc = resolveMediaUrl('image', message.content);
+                bubble.innerHTML = `<img src="${imgSrc}" alt="image" class="previewable">`;
                 const imgEl = bubble.querySelector('img');
-                imgEl.addEventListener('click', () => this.openLightbox(message.content));
+                imgEl.addEventListener('click', () => this.openLightbox(imgSrc));
                 imgEl.onerror = () => {
                     imgEl.classList.add('broken');
                     imgEl.alt = '圖片加載失敗';
-                    window.toastr?.warning('圖片加載失敗，請檢查連結或網絡');
+                    toastOnce('圖片加載失敗，請檢查連結或網絡');
                 };
                 break;
-            case 'audio':
+            }
+            case 'audio': {
+                const audioSrc = resolveMediaUrl('audio', message.content);
                 bubble.innerHTML = `
                     <div class="message-toolbar">
                         <span class="chip">语音</span>
                         <audio controls preload="none" style="width: 160px;">
-                            <source src="${message.content}">
+                            <source src="${audioSrc}">
                         </audio>
                     </div>`;
                 const audioEl = bubble.querySelector('audio');
                 audioEl.onerror = () => {
-                    window.toastr?.warning('語音加載失敗');
+                    toastOnce('語音加載失敗');
                 };
                 break;
+            }
             case 'music': {
                 const artist = message.meta?.artist || '';
-                const url = message.meta?.url || '';
+                const rawUrl = message.meta?.url || '';
+                const resolved = resolveMediaAsset('audio', rawUrl);
+                const url = resolved?.url || rawUrl;
                 const statusText = url ? '待播放' : '無音頻地址';
                 bubble.innerHTML = `
                     <div class="card music-card">
@@ -439,9 +467,22 @@ export class ChatUI {
                     window.toastr?.success(`已确认收款：${message.content}`);
                 };
                 break;
-            case 'sticker':
-                bubble.innerHTML = `<div class="chip">表情包：${message.content}</div>`;
+            case 'sticker': {
+                const stickerResolved = resolveMediaAsset('sticker', message.content) || resolveMediaAsset('image', message.content);
+                if (stickerResolved?.url) {
+                    bubble.innerHTML = `<img src="${stickerResolved.url}" alt="sticker" class="previewable sticker-image">`;
+                    const stickerImg = bubble.querySelector('img');
+                    stickerImg.addEventListener('click', () => this.openLightbox(stickerResolved.url));
+                    stickerImg.onerror = () => {
+                        stickerImg.classList.add('broken');
+                        stickerImg.alt = '表情包加載失敗';
+                        toastOnce('表情包加載失敗');
+                    };
+                } else {
+                    bubble.innerHTML = `<div class="chip">表情包：${message.content}</div>`;
+                }
                 break;
+            }
             case 'meta':
                 bubble.classList.add('meta');
                 bubble.textContent = message.content;
