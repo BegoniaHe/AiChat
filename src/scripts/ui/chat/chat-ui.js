@@ -157,6 +157,32 @@ export class ChatUI {
         });
     }
 
+    /**
+     * 新方法：分别绑定 Enter 和发送按钮的回调
+     * @param {Object} handlers - { onEnter: Function, onSendButton: Function }
+     */
+    onSendWithMode(handlers) {
+        const { onEnter, onSendButton } = handlers;
+
+        // 发送按钮：真正发送请求
+        if (typeof onSendButton === 'function') {
+            this.sendBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                onSendButton();
+            });
+        }
+
+        // Enter 键：缓存消息
+        if (typeof onEnter === 'function') {
+            this.inputEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    onEnter();
+                }
+            });
+        }
+    }
+
     onConfig(handler) {
         if (this.configBtn) {
             this.configBtn.addEventListener('click', handler);
@@ -322,6 +348,12 @@ export class ChatUI {
         wrapper.dataset.msgId = message.id;
         wrapper.dataset.role = message.role || '';
         wrapper.__chatappMessage = message;
+
+        // 添加 pending/sending 状态标记
+        if (message.status === 'pending' || message.status === 'sending') {
+            wrapper.classList.add('message-pending');
+            wrapper.dataset.status = message.status;
+        }
 
         // 头像
         const avatarImg = document.createElement('img');
@@ -709,7 +741,8 @@ export class ChatUI {
                 time: msg.time,
                 meta: msg.meta,
                 badge: msg.badge,
-                id: msg.id
+                id: msg.id,
+                status: msg.status
             });
             if (el) fragment.appendChild(el);
         }
@@ -734,7 +767,8 @@ export class ChatUI {
                 time: msg.time,
                 meta: msg.meta,
                 badge: msg.badge,
-                id: msg.id
+                id: msg.id,
+                status: msg.status
             });
             if (el) fragment.appendChild(el);
         }
@@ -1175,9 +1209,16 @@ export class ChatUI {
             actions.push({ key: 'regenerate', label: '重新生成' });
             actions.push({ key: 'delete', label: '删除' });
         } else if (message.role === 'user') {
+            // 如果是 pending 消息，显示"发送到这里"
+            if (message.status === 'pending') {
+                actions.push({ key: 'send-to-here', label: '🚀 发送到这里' });
+            }
             actions.push({ key: 'copy-text', label: '复制' });
-            actions.push({ key: 'edit', label: '编辑' });
-            actions.push({ key: 'retract', label: '收回' });
+            if (message.status !== 'pending' && message.status !== 'sending') {
+                // 已发送的消息才能编辑/收回
+                actions.push({ key: 'edit', label: '编辑' });
+                actions.push({ key: 'retract', label: '收回' });
+            }
             actions.push({ key: 'delete', label: '删除' });
         }
         this.contextMenu.innerHTML = '';

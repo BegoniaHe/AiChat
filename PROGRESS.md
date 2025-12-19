@@ -1328,3 +1328,32 @@
   - **修复**：群聊对话协议解析不再在分段前把 `<br>` 直接替换为换行；改为用内部标记先提取 `speaker--content--HH:MM` 片段，避免 `<br>` 出现在内容中时把一条消息拆断，导致头像匹配失败/渲染异常（灰字/默认头像）。
   - 文件修改：
     - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+
+- 2025-12-20 0：38（消息缓存发送模式：半透明气泡 + 蓝点提示）
+  - **核心机制**：
+    - **Enter 键缓存**：用户按 Enter 键时，消息以半透明气泡（opacity: 0.5）显示在聊天室中，标记为 `status: 'pending'`，不立即发送 API 请求。
+    - **蓝点提示**：聊天列表与联系人列表显示蓝色数字徽章（`background: #199AFF`），标识该会话有多少条待发送消息（红点 = 未读，蓝点 = 待发送）。
+    - **发送到这里**：长按 pending 气泡弹出菜单，选择"🚀 发送到这里"：
+      - 点击第 1 条 pending → 仅发送第 1 条
+      - 点击第 N 条 pending → 发送第 1 到第 N 条（合并为一个请求，换行分隔）
+    - **智能合并**：多条 pending 消息发送时，在请求体中用 `\n` 合并为一条（避免 API 限流），但聊天室中保持独立气泡，发送成功后所有气泡变为不透明（`status: 'sent'`）。
+    - **按聊天室隔离**：每个会话（群聊/私聊/动态）独立维护 pending 队列，切换会话时蓝点数量自动更新。
+  - **视觉设计**：
+    - pending 气泡：半透明 + 蓝色虚线边框 + "⏱️ 待发送"标签
+    - sending 气泡：opacity 0.6（发送中）
+    - sent 气泡：opacity 1.0（正常显示）
+  - **交互优化**：
+    - 有 pending 消息时，点击发送按钮会自动合并所有 pending 消息 + 输入框内容一起发送
+    - AI 回复触发私聊时，原 pending 消息不受影响，仍显示为半透明可操作
+  - **Bug 修复**：
+    - 修复：退出聊天室再进入时 pending 消息变不透明（`decorateMessagesForDisplay` 未保留 `status` 字段）
+    - 修复：有 pending 消息时点击发送按钮报错"未找到指定消息"（未处理输入框 + pending 混合场景）
+    - 修复：多条 pending 消息被合并成一个大气泡（发送时误创建新 userMsg）
+  - 文件修改：
+    - 新增：`src/scripts/ui/pending-message-panel.js`（已删除，采用新方案）
+    - 修改：`src/scripts/storage/chat-store.js`（扩展 session 结构，添加 `pending: []` 字段 + pending 消息管理方法）
+    - 修改：`src/scripts/ui/chat/chat-ui.js`（新增 `onSendWithMode` 方法区分 Enter/发送按钮 + 长按菜单显示"发送到这里"）
+    - 修改：`src/scripts/ui/app.js`（新增 `handleEnter` 缓存逻辑 + 修改 `handleSend` 支持 pending 合并发送 + 聊天列表/联系人列表显示蓝点）
+    - 修改：`src/assets/css/qq-legacy.css`（新增 `.message-pending` 半透明样式 + 蓝色虚线边框 + "待发送"标签）
+- 2025-12-20 00:44
+  - 缓存消息修复：进入聊天室渲染历史时保留 `status`，发送按钮忽略事件参数避免误判 targetId，发送完成统一将 pending 标记为 sent。

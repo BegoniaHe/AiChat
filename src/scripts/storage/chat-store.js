@@ -268,6 +268,7 @@ export class ChatStore {
             this.state.sessions[id] = {
                 messages: [],
                 draft: '',
+                pending: [],
                 variables: {},
                 settings: {},
                 detachedSummaries: [],
@@ -280,6 +281,7 @@ export class ChatStore {
         const s = this.state.sessions[id];
         if (!s.messages) s.messages = [];
         if (typeof s.draft !== 'string') s.draft = '';
+        if (!Array.isArray(s.pending)) s.pending = [];
         if (!s.variables) s.variables = {};
         if (!s.settings) s.settings = {};
         if (!Array.isArray(s.detachedSummaries)) s.detachedSummaries = [];
@@ -1100,5 +1102,72 @@ export class ChatStore {
         session.detachedSummaries = [];
         this._persist();
         return true;
+    }
+
+    // ============ Pending Messages Management ============
+
+    /**
+     * Add a pending message to the queue (cached, not sent to AI yet)
+     */
+    addPendingMessage(message, id = this.currentId) {
+        this._ensureSession(id);
+        const msg = ensureId({ ...message, status: 'pending' });
+        this.state.sessions[id].pending.push(msg);
+        this._persist();
+        return msg;
+    }
+
+    /**
+     * Get all pending messages for a session
+     */
+    getPendingMessages(id = this.currentId) {
+        this._ensureSession(id);
+        return this.state.sessions[id].pending || [];
+    }
+
+    /**
+     * Remove a specific pending message
+     */
+    removePendingMessage(msgId, id = this.currentId) {
+        const session = this.state.sessions[id];
+        if (!session || !Array.isArray(session.pending)) return false;
+        const targetId = String(msgId || '').trim();
+        if (!targetId) return false;
+        const before = session.pending.length;
+        session.pending = session.pending.filter(m => String(m?.id || '') !== targetId);
+        const changed = session.pending.length !== before;
+        if (changed) this._persist();
+        return changed;
+    }
+
+    /**
+     * Update a pending message's content
+     */
+    updatePendingMessage(msgId, newContent, id = this.currentId) {
+        const session = this.state.sessions[id];
+        if (!session || !Array.isArray(session.pending)) return null;
+        const idx = session.pending.findIndex(m => String(m?.id || '') === String(msgId));
+        if (idx === -1) return null;
+        session.pending[idx] = { ...session.pending[idx], content: newContent, timestamp: Date.now() };
+        this._persist();
+        return session.pending[idx];
+    }
+
+    /**
+     * Clear all pending messages for a session
+     */
+    clearPendingMessages(id = this.currentId) {
+        const session = this.state.sessions[id];
+        if (!session) return false;
+        session.pending = [];
+        this._persist();
+        return true;
+    }
+
+    /**
+     * Get count of pending messages
+     */
+    getPendingCount(id = this.currentId) {
+        return this.getPendingMessages(id).length;
     }
 }
