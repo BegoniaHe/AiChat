@@ -2765,6 +2765,7 @@ ${listPart || '-（无）'}
 
         ui.showTyping(assistantAvatar);
         const resultRaw = await window.appBridge.generate(text, llmContext(text));
+        sendSucceeded = true;
         ui.hideTyping();
         chatStore.setLastRawResponse(resultRaw, sessionId);
         const { summary: protocolSummary } = extractSummaryBlock(resultRaw);

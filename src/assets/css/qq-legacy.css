@@ -891,7 +891,7 @@
 
 /* sending 状态：略微减少透明度 */
 .message-pending[data-status="sending"] {
-    opacity: 0.6;
+    opacity: 1;
 }
 
 /* 添加"待发送"标签（可选，视觉提示） */
