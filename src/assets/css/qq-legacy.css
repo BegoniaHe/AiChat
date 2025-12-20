@@ -908,3 +908,60 @@
     border-radius: 10px;
     pointer-events: none;
 }
+
+/* pending 浮层提示（输入框上方） */
+.pending-float {
+    position: absolute;
+    right: 12px;
+    bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+    width: 260px;
+    max-width: 72%;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(25, 154, 255, 0.25);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+    border-radius: 14px;
+    padding: 8px 10px;
+    display: none;
+    z-index: 120;
+}
+
+.pending-float.is-active {
+    display: block;
+}
+
+.pending-float-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1f3b5c;
+    margin-bottom: 6px;
+}
+
+.pending-float-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pending-float-item {
+    border: 1px solid rgba(25, 154, 255, 0.18);
+    background: rgba(25, 154, 255, 0.08);
+    color: #1a2b3b;
+    border-radius: 12px;
+    padding: 6px 10px;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pending-float-item:active {
+    opacity: 0.85;
+}
+
+.pending-float-more {
+    font-size: 11px;
+    color: rgba(30, 64, 175, 0.7);
+    text-align: right;
+}

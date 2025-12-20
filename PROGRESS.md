@@ -1361,3 +1361,11 @@
   - 缓存消息修复：非流式模式下发送成功会提前标记 `sendSucceeded`，确保 pending 最终变回不透明。
 - 2025-12-20 01:01
   - 发送中消息改为不透明（sending 状态 opacity = 1），确保点发送后立即变为正常气泡。
+- 2025-12-20 01:12
+  - 缓存消息浮层：当 pending 不在消息尾部时（例如部分发送后 AI 回覆），在输入框上方显示待发送悬浮列表，可点击跳转到对应消息。
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/assets/css/qq-legacy.css`
+- 2025-12-20 01:28
+  - 缓存消息改为「浮层队列」：AI 回覆后将剩余 pending 从聊天记录移除并转入悬浮区，点击浮层可执行发送/删除。
+  - 修复：发送 prompt 时历史记录不再包含 pending/sending 消息。
+  - 修改：`src/scripts/ui/app.js`

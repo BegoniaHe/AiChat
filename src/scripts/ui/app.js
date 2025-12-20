@@ -680,6 +680,14 @@ ${listPart || '-（无）'}
     return `${base}(${count})`;
   };
 
+  const getPendingCountForSession = sessionId => {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return 0;
+    const inHistory = (chatStore.getMessages(sid) || []).filter(m => m?.status === 'pending').length;
+    const inQueue = (chatStore.getPendingMessages(sid) || []).length;
+    return inHistory + inQueue;
+  };
+
   const renderChatList = () => {
     const el = document.getElementById('chat-list');
     if (!el) return;
@@ -709,7 +717,7 @@ ${listPart || '-（无）'}
           : '';
 
       // 蓝点：显示 pending 消息数量
-      const pendingCount = (chatStore.getMessages(id) || []).filter(m => m.status === 'pending').length;
+      const pendingCount = getPendingCountForSession(id);
       const pendingBadge =
         pendingCount > 0
           ? `<span style="margin-left:8px; min-width:18px; height:18px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; background:#199AFF; color:#fff; font-size:11px; font-weight:800; line-height:18px;">${pendingCount}</span>`
@@ -752,7 +760,7 @@ ${listPart || '-（无）'}
           : '';
 
       // 蓝点：显示 pending 消息数量
-      const pendingCount = (chatStore.getMessages(id) || []).filter(m => m.status === 'pending').length;
+      const pendingCount = getPendingCountForSession(id);
       const pendingBadge =
         pendingCount > 0
           ? `<span style="margin-left:8px; min-width:18px; height:18px; padding:0 6px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; background:#199AFF; color:#fff; font-size:11px; font-weight:800; line-height:18px;">${pendingCount}</span>`
@@ -995,6 +1003,58 @@ ${listPart || '-（无）'}
   };
   const chatList = document.getElementById('chat-list');
   const chatRoom = document.getElementById('chat-room');
+  let pendingFloatActive = null;
+  const pendingFloat = (() => {
+    if (!chatRoom) return null;
+    const wrap = document.createElement('div');
+    wrap.id = 'pending-float';
+    wrap.className = 'pending-float';
+    wrap.innerHTML = `
+      <div class="pending-float-title"></div>
+      <div class="pending-float-list"></div>
+    `;
+    const titleEl = wrap.querySelector('.pending-float-title');
+    const listEl = wrap.querySelector('.pending-float-list');
+    wrap.addEventListener('click', event => {
+      const target = event?.target?.closest ? event.target.closest('[data-msg-id]') : null;
+      const msgId = target?.dataset?.msgId || '';
+      if (!msgId) return;
+      event.stopPropagation();
+      const sid = chatStore.getCurrent();
+      const pending = (chatStore.getPendingMessages(sid) || []).find(m => String(m?.id || '') === String(msgId));
+      if (!pending) return;
+      pendingFloatActive = pending;
+      if (pendingFloatMenu) toggleSheetAt(pendingFloatMenu, target, { alignRight: true, kind: 'pending-float' });
+    });
+    chatRoom.appendChild(wrap);
+    return { el: wrap, titleEl, listEl };
+  })();
+  const pendingFloatMenu = (() => {
+    const menu = document.createElement('div');
+    menu.id = 'pending-float-menu';
+    menu.className = 'sheet hidden';
+    menu.innerHTML = `
+      <button data-action="send">发送</button>
+      <button data-action="delete">删除</button>
+    `;
+    menu.addEventListener('click', async event => {
+      event.stopPropagation();
+      const action = event?.target?.closest ? event.target.closest('button')?.dataset?.action : '';
+      if (!action || !pendingFloatActive) return;
+      const sid = chatStore.getCurrent();
+      if (action === 'send') {
+        await sendPendingFromFloat(pendingFloatActive, sid);
+      } else if (action === 'delete') {
+        chatStore.removePendingMessage(pendingFloatActive.id, sid);
+        pendingFloatActive = null;
+        updatePendingFloat(sid);
+        refreshChatAndContacts();
+      }
+      hideMenus();
+    });
+    document.body.appendChild(menu);
+    return menu;
+  })();
   let activePage = 'chat';
   const UI_STATE_KEY = 'phone_ui_state_v1';
   const UI_STATE_KV = 'phone_ui_state_v1';
@@ -1382,6 +1442,7 @@ ${listPart || '-（无）'}
     document.getElementById('chat-title-menu')?.classList.add('hidden');
     const gd = document.getElementById('group-management-dropdown');
     if (gd) gd.style.display = 'none';
+    pendingFloatMenu?.classList.add('hidden');
   };
 
   const positionSheet = (menuEl, anchorEl, offsetX = 0, offsetY = 0, alignRight = false) => {
@@ -1626,6 +1687,90 @@ ${listPart || '-（无）'}
   let chatOriginPage = 'chat';
   const chatRenderState = new Map(); // sessionId -> { start }
   const isChatRoomVisible = () => Boolean(chatRoom) && !chatRoom.classList.contains('hidden');
+  const updatePendingFloat = (sessionId = chatStore.getCurrent()) => {
+    if (!pendingFloat?.el) return;
+    if (!isChatRoomVisible()) {
+      pendingFloat.el.classList.remove('is-active');
+      return;
+    }
+    const sid = String(sessionId || '').trim();
+    if (!sid) {
+      pendingFloat.el.classList.remove('is-active');
+      return;
+    }
+    const pending = chatStore.getPendingMessages(sid) || [];
+    if (!pending.length) {
+      pendingFloatActive = null;
+      pendingFloat.el.classList.remove('is-active');
+      return;
+    }
+    const maxItems = 3;
+    pendingFloat.titleEl.textContent = `待发送 ${pending.length} 条`;
+    pendingFloat.listEl.innerHTML = '';
+    pending.slice(-maxItems).forEach(m => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'pending-float-item';
+      item.dataset.msgId = String(m?.id || '');
+      const raw = String(m?.content ?? '').replace(/\s+/g, ' ').trim();
+      item.textContent = raw.length > 40 ? `${raw.slice(0, 40)}…` : (raw || '(空)');
+      pendingFloat.listEl.appendChild(item);
+    });
+    if (pending.length > maxItems) {
+      const more = document.createElement('div');
+      more.className = 'pending-float-more';
+      more.textContent = `还有 ${pending.length - maxItems} 条`;
+      pendingFloat.listEl.appendChild(more);
+    }
+    pendingFloat.el.classList.add('is-active');
+  };
+  const movePendingFromHistoryToQueue = (sessionId = chatStore.getCurrent()) => {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return [];
+    const messages = chatStore.getMessages(sid) || [];
+    const pending = messages.filter(m => m?.status === 'pending');
+    if (!pending.length) return [];
+    const existing = new Set((chatStore.getPendingMessages(sid) || []).map(m => String(m?.id || '')));
+    pending.forEach(m => {
+      const id = String(m?.id || '').trim();
+      if (!id) return;
+      if (!existing.has(id)) {
+        chatStore.addPendingMessage(m, sid);
+        existing.add(id);
+      }
+      chatStore.deleteMessage(id, sid);
+      ui.removeMessage(id);
+    });
+    refreshChatAndContacts();
+    return pending;
+  };
+  const sendPendingFromFloat = async (pendingMsg, sessionId = chatStore.getCurrent()) => {
+    const sid = String(sessionId || '').trim();
+    if (!sid || !pendingMsg) return false;
+    const content = String(pendingMsg?.content ?? '').trim();
+    if (!content) {
+      window.toastr?.warning?.('未找到缓存内容');
+      return false;
+    }
+    const draft = ui.getInputText();
+    if (draft) ui.setInputText('');
+    const removed = chatStore.removePendingMessage(pendingMsg.id, sid);
+    pendingFloatActive = null;
+    updatePendingFloat(sid);
+    refreshChatAndContacts();
+    let ok = false;
+    try {
+      ok = await handleSend(null, { overrideText: content, ignorePending: true });
+    } finally {
+      if (!ok && removed) {
+        chatStore.addPendingMessage(pendingMsg, sid);
+        updatePendingFloat(sid);
+        refreshChatAndContacts();
+      }
+      if (draft) ui.setInputText(draft);
+    }
+    return ok;
+  };
   const autoMarkReadIfActive = (sessionId, messageId = '') => {
     try {
       const sid = String(sessionId || '').trim();
@@ -1690,6 +1835,7 @@ ${listPart || '-（无）'}
     }
     ui.setSessionLabel(sessionId);
     if (uiStateArmed) saveUiState();
+    updatePendingFloat(sessionId);
     uiLog('enterChatRoom', { sessionId, originPage: chatOriginPage });
   };
 
@@ -1707,6 +1853,7 @@ ${listPart || '-（无）'}
       switchPage(chatOriginPage);
     }
     chatOriginPage = 'chat';
+    updatePendingFloat();
     if (uiStateArmed) saveUiState();
     uiLog('exitChatRoom', { activePage, sessionId: chatStore.getCurrent() });
   };
@@ -2114,21 +2261,32 @@ ${listPart || '-（无）'}
 
     // 刷新聊天列表（更新蓝点）
     refreshChatAndContacts();
+    updatePendingFloat(sessionId);
   };
 
   // Send handler (发送 pending 消息)
   /**
    * @param {string} targetMessageId - 可选，点击的 pending 消息 ID（发送到这里）
    */
-  const handleSend = async (targetMessageId = null) => {
+  const handleSend = async (targetMessageId = null, options = {}) => {
     if (targetMessageId && typeof targetMessageId === 'object') {
-      targetMessageId = null;
+      if (typeof targetMessageId.preventDefault === 'function') {
+        targetMessageId = null;
+        options = {};
+      } else {
+        options = targetMessageId;
+        targetMessageId = null;
+      }
     }
+    if (!options || typeof options !== 'object') options = {};
+    const overrideTextRaw = typeof options.overrideText === 'string' ? options.overrideText : '';
+    const overrideText = overrideTextRaw.trim() ? overrideTextRaw : '';
+    const ignorePending = Boolean(options.ignorePending);
     const sessionId = chatStore.getCurrent();
     const allMessages = chatStore.getMessages(sessionId);
 
     // 找到所有 pending 消息
-    const pendingMessages = allMessages.filter(m => m.status === 'pending');
+    const pendingMessages = ignorePending ? [] : allMessages.filter(m => m.status === 'pending');
 
     // 用于追踪哪些消息需要在发送成功后标记为 sent
     let pendingMessagesToConfirm = [];
@@ -2145,7 +2303,7 @@ ${listPart || '-（无）'}
         const targetIndex = pendingMessages.findIndex(m => m.id === targetMessageId);
         if (targetIndex === -1) {
           window.toastr?.error?.('未找到指定消息');
-          return;
+          return false;
         }
         messagesToSend = pendingMessages.slice(0, targetIndex + 1);
       } else {
@@ -2178,7 +2336,7 @@ ${listPart || '-（无）'}
 
       if (!text) {
         window.toastr?.warning?.('没有可发送的消息');
-        return;
+        return false;
       }
 
       // 标记这些消息为"发送中"（保持半透明，等待 AI 响应）
@@ -2188,8 +2346,8 @@ ${listPart || '-（无）'}
       });
     } else {
       // 没有 pending 消息，使用输入框内容（兼容旧行为）
-      text = ui.getInputText();
-      if (!text) return;
+      text = overrideText || ui.getInputText();
+      if (!text) return false;
     }
     const contact = contactsStore.getContact(sessionId);
     const characterName =
@@ -2356,13 +2514,14 @@ ${listPart || '-（无）'}
 
 	    const buildHistoryForLLM = pendingUserText => {
 	      const all = chatStore.getMessages(sessionId) || [];
-	      const history = all
-	        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-	        .map(m => ({
-	          role: m.role,
-	          content: typeof m.raw === 'string' ? m.raw : m.content,
-	          name: typeof m.name === 'string' ? m.name : '',
-	        }));
+      const history = all
+        .filter(m => m && m.status !== 'pending' && m.status !== 'sending')
+        .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+        .map(m => ({
+          role: m.role,
+          content: typeof m.raw === 'string' ? m.raw : m.content,
+          name: typeof m.name === 'string' ? m.name : '',
+        }));
 	      const last = history[history.length - 1];
 	      if (
 	        pendingUserText &&
@@ -2431,7 +2590,7 @@ ${listPart || '-（无）'}
       const handled = runCommand(text, { chatStore, ui, sessionPanel, worldPanel, appBridge: window.appBridge });
       if (handled) {
         ui.clearInput();
-        return;
+        return true;
       }
     }
 
@@ -2439,12 +2598,12 @@ ${listPart || '-（无）'}
       ui.showErrorBanner('未配置 API，請先填寫 Base URL / Key / 模型');
       window.toastr?.warning('请先配置 API 信息', '未配置');
       configPanel.show();
-      return;
+      return false;
     }
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       ui.showErrorBanner('當前離線，請連接網絡後再試');
       window.toastr?.warning('離線狀態，無法發送');
-      return;
+      return false;
     }
 
     // 只有在没有 pending 消息时，才创建新的用户消息气泡
@@ -3006,14 +3165,19 @@ ${listPart || '-（无）'}
       });
       window.toastr?.error(error.message || '发送失败', '错误');
     } finally {
-      if (sendSucceeded && pendingMessagesToConfirm && pendingMessagesToConfirm.length > 0) {
-        pendingMessagesToConfirm.forEach(m => {
-          chatStore.updateMessage(m.id, { status: 'sent' }, sessionId);
-          ui.updateMessage(m.id, { ...m, status: 'sent' });
-        });
+      if (sendSucceeded) {
+        if (pendingMessagesToConfirm && pendingMessagesToConfirm.length > 0) {
+          pendingMessagesToConfirm.forEach(m => {
+            chatStore.updateMessage(m.id, { status: 'sent' }, sessionId);
+            ui.updateMessage(m.id, { ...m, status: 'sent' });
+          });
+        }
+        movePendingFromHistoryToQueue(sessionId);
       }
+      updatePendingFloat(sessionId);
       ui.setSendingState(false);
       activeGeneration = null;
+      return sendSucceeded;
     }
   };
 
