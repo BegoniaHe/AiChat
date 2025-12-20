@@ -1369,3 +1369,10 @@
   - 缓存消息改为「浮层队列」：AI 回覆后将剩余 pending 从聊天记录移除并转入悬浮区，点击浮层可执行发送/删除。
   - 修复：发送 prompt 时历史记录不再包含 pending/sending 消息。
   - 修改：`src/scripts/ui/app.js`
+- 2025-12-20 01:46
+  - 贴图面板：输入框左侧改为「+」，点击后隐藏键盘并展示贴图选择区，点击贴图会插入 `[bqb-关键词]` 到输入框。
+  - 发送/缓存贴图：用户输入的贴图 token 会以 sticker 气泡显示，pending 发送时使用 token 进入上下文。
+  - 修改：`src/index.html`
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/utils/media-assets.js`

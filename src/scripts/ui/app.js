@@ -4,7 +4,7 @@ import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { logger } from '../utils/logger.js';
-import { initMediaAssets } from '../utils/media-assets.js';
+import { initMediaAssets, listMediaAssets } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
 import './bridge.js';
 import { ChatUI } from './chat/chat-ui.js';
@@ -688,6 +688,95 @@ ${listPart || '-（无）'}
     return inHistory + inQueue;
   };
 
+  const parseStickerToken = value => {
+    const raw = String(value || '').trim();
+    const match = raw.match(/^\[bqb-([\s\S]+)\]$/i);
+    if (!match) return '';
+    return String(match[1] || '').trim();
+  };
+
+  const buildStickerToken = keyword => `[bqb-${keyword}]`;
+
+  const getMessageSendText = message => {
+    if (!message || typeof message !== 'object') return '';
+    const raw = typeof message.raw === 'string' ? message.raw.trim() : '';
+    if (raw) return raw;
+    if (message.type === 'sticker') {
+      const key = String(message.content || '').trim();
+      return key ? buildStickerToken(key) : '';
+    }
+    return String(message.content || '').trim();
+  };
+
+  const insertStickerToken = keyword => {
+    if (!composerInput) return;
+    const key = String(keyword || '').trim();
+    if (!key) return;
+    const token = buildStickerToken(key);
+    const start = Number.isFinite(composerInput.selectionStart) ? composerInput.selectionStart : composerInput.value.length;
+    const end = Number.isFinite(composerInput.selectionEnd) ? composerInput.selectionEnd : composerInput.value.length;
+    const before = composerInput.value.slice(0, start);
+    const after = composerInput.value.slice(end);
+    const needsLeftSpace = Boolean(before) && !/\s$/.test(before);
+    const needsRightSpace = Boolean(after) && !/^\s/.test(after);
+    const next = `${before}${needsLeftSpace ? ' ' : ''}${token}${needsRightSpace ? ' ' : ''}${after}`;
+    composerInput.value = next;
+    const caret = (before + (needsLeftSpace ? ' ' : '') + token).length + (needsRightSpace ? 1 : 0);
+    try {
+      composerInput.selectionStart = composerInput.selectionEnd = caret;
+    } catch {}
+    try {
+      composerInput.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch {}
+  };
+
+  const renderStickerPanel = () => {
+    if (!stickerPanel?.grid) return;
+    const items = listMediaAssets('sticker');
+    stickerPanel.grid.innerHTML = '';
+    if (!items.length) {
+      stickerPanel.grid.innerHTML = '<div class="sticker-empty">暂无贴图</div>';
+      return;
+    }
+    items.forEach(item => {
+      const keyword = String(item?.id || item?.label || '').trim();
+      if (!keyword) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sticker-item';
+      btn.dataset.keyword = keyword;
+      btn.setAttribute('aria-label', keyword);
+      if (item?.url) {
+        const img = document.createElement('img');
+        img.src = item.url;
+        img.alt = keyword;
+        btn.appendChild(img);
+      } else {
+        btn.textContent = keyword;
+      }
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        insertStickerToken(keyword);
+      });
+      stickerPanel.grid.appendChild(btn);
+    });
+  };
+
+  const setStickerPanelOpen = open => {
+    if (!stickerPanel?.el || !chatRoom) return;
+    const next = Boolean(open);
+    stickerPanelOpen = next;
+    if (next) {
+      renderStickerPanel();
+      stickerPanel.el.classList.add('is-active');
+      chatRoom.classList.add('sticker-panel-open');
+      composerInput?.blur();
+    } else {
+      stickerPanel.el.classList.remove('is-active');
+      chatRoom.classList.remove('sticker-panel-open');
+    }
+  };
+
   const renderChatList = () => {
     const el = document.getElementById('chat-list');
     if (!el) return;
@@ -1003,6 +1092,8 @@ ${listPart || '-（无）'}
   };
   const chatList = document.getElementById('chat-list');
   const chatRoom = document.getElementById('chat-room');
+  const composerInput = document.getElementById('composer-input');
+  const stickerToggleBtn = document.querySelector('.voice-btn');
   let pendingFloatActive = null;
   const pendingFloat = (() => {
     if (!chatRoom) return null;
@@ -1028,6 +1119,16 @@ ${listPart || '-（无）'}
     });
     chatRoom.appendChild(wrap);
     return { el: wrap, titleEl, listEl };
+  })();
+  let stickerPanelOpen = false;
+  const stickerPanel = (() => {
+    if (!chatRoom) return null;
+    const panel = document.createElement('div');
+    panel.id = 'sticker-panel';
+    panel.className = 'sticker-panel';
+    panel.innerHTML = '<div class="sticker-grid"></div>';
+    chatRoom.appendChild(panel);
+    return { el: panel, grid: panel.querySelector('.sticker-grid') };
   })();
   const pendingFloatMenu = (() => {
     const menu = document.createElement('div');
@@ -1192,6 +1293,17 @@ ${listPart || '-（无）'}
 
   // 搜索框初始化（仅联系人页）
   initContactSearch();
+
+  if (stickerToggleBtn) {
+    stickerToggleBtn.textContent = '+';
+    stickerToggleBtn.setAttribute('aria-label', '表情包');
+    stickerToggleBtn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      setStickerPanelOpen(!stickerPanelOpen);
+    });
+  }
+  composerInput?.addEventListener('focus', () => setStickerPanelOpen(false));
 
   // Mirror composer draft to sessionStorage to avoid losing the last few keystrokes on reload/update.
   try {
@@ -1785,6 +1897,7 @@ ${listPart || '-（无）'}
     chatOriginPage = originPage || 'chat';
     chatList?.classList.add('hidden');
     chatRoom?.classList.remove('hidden');
+    setStickerPanelOpen(false);
 
     // 隐藏消息界面顶部和底部导航栏
     const messageTopbar = document.getElementById('message-topbar');
@@ -1842,6 +1955,7 @@ ${listPart || '-（无）'}
   const exitChatRoom = () => {
     chatRoom?.classList.add('hidden');
     chatList?.classList.remove('hidden');
+    setStickerPanelOpen(false);
 
     // 恢复显示消息界面顶部和底部导航栏
     const messageTopbar = document.getElementById('message-topbar');
@@ -2234,12 +2348,14 @@ ${listPart || '-（无）'}
 
     const sessionId = chatStore.getCurrent();
     const activePersona = getEffectivePersona(sessionId);
+    const stickerKey = parseStickerToken(text);
 
     // 创建 pending 消息（status: 'pending'）
     const pendingMessage = {
       role: 'user',
-      type: 'text',
-      content: text,
+      type: stickerKey ? 'sticker' : 'text',
+      content: stickerKey || text,
+      raw: stickerKey ? text : undefined,
       status: 'pending', // 标记为待发送
       avatar: avatars.user,
       name: activePersona.name || '我',
@@ -2314,10 +2430,12 @@ ${listPart || '-（无）'}
         const currentInput = ui.getInputText().trim();
         if (currentInput) {
           const activePersona = getEffectivePersona(sessionId);
+          const stickerKey = parseStickerToken(currentInput);
           const newPendingMsg = {
             role: 'user',
-            type: 'text',
-            content: currentInput,
+            type: stickerKey ? 'sticker' : 'text',
+            content: stickerKey || currentInput,
+            raw: stickerKey ? currentInput : undefined,
             status: 'pending',
             avatar: avatars.user,
             name: activePersona.name || '我',
@@ -2331,7 +2449,7 @@ ${listPart || '-（无）'}
       }
 
       // 合并消息内容（换行分隔）
-      text = messagesToSend.map(m => m.content || '').filter(Boolean).join('\n');
+      text = messagesToSend.map(getMessageSendText).filter(Boolean).join('\n');
       pendingMessagesToConfirm = messagesToSend;
 
       if (!text) {
@@ -2609,17 +2727,30 @@ ${listPart || '-（无）'}
     // 只有在没有 pending 消息时，才创建新的用户消息气泡
     let userMsg = null;
     if (!pendingMessagesToConfirm || pendingMessagesToConfirm.length === 0) {
-      const storedUser = window.appBridge.applyInputStoredRegex(text, { isEdit: false });
-      const displayUser = window.appBridge.applyInputDisplayRegex(storedUser, { isEdit: false, depth: 0 });
-      userMsg = {
-        role: 'user',
-        type: 'text',
-        content: displayUser,
-        raw: storedUser,
-        name: userName,
-        avatar: avatars.user,
-        time: formatNowTime(),
-      };
+      const stickerKey = parseStickerToken(text);
+      if (stickerKey) {
+        userMsg = {
+          role: 'user',
+          type: 'sticker',
+          content: stickerKey,
+          raw: text,
+          name: userName,
+          avatar: avatars.user,
+          time: formatNowTime(),
+        };
+      } else {
+        const storedUser = window.appBridge.applyInputStoredRegex(text, { isEdit: false });
+        const displayUser = window.appBridge.applyInputDisplayRegex(storedUser, { isEdit: false, depth: 0 });
+        userMsg = {
+          role: 'user',
+          type: 'text',
+          content: displayUser,
+          raw: storedUser,
+          name: userName,
+          avatar: avatars.user,
+          time: formatNowTime(),
+        };
+      }
       ui.addMessage(userMsg);
       chatStore.appendMessage(userMsg, sessionId);
       activeGeneration = { sessionId, userMsgId: userMsg.id, streamCtrl: null, cancelled: false };

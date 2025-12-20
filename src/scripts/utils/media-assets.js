@@ -271,4 +271,26 @@ export const resolveMediaAsset = (kind, value) => {
     return null;
 };
 
+export const listMediaAssets = (kind) => {
+    const k = normalizeKind(kind);
+    if (!k) return [];
+    const items = normalizeManifestItems(STATE.manifest)
+        .filter((raw) => normalizeKind(raw?.kind) === k);
+    return items.map((raw) => {
+        const file = String(raw?.file || raw?.path || '').trim();
+        const idRaw = raw?.id || raw?.key || raw?.name || raw?.label || file;
+        const id = String(idRaw || '').trim();
+        const label = String(raw?.label || raw?.name || raw?.id || raw?.key || '').trim();
+        const aliases = Array.isArray(raw?.aliases) ? raw.aliases.slice() : [];
+        const item = {
+            kind: k,
+            id: id || normalizeKey(file),
+            file,
+            label,
+            aliases,
+        };
+        return { ...item, url: resolveItemUrl(item) };
+    });
+};
+
 export { isLikelyUrl, isAssetRef };
