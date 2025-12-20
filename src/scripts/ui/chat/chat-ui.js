@@ -63,6 +63,67 @@ export class ChatUI {
             .replace(/<br\s*\/?>/gi, '\n');
     }
 
+    renderTextWithStickers(bubble, text) {
+        const raw = String(text ?? '');
+        const re = /\[bqb-([\s\S]+?)\]/gi;
+        let match = null;
+        let lastIndex = 0;
+        let hasToken = false;
+        const frag = document.createDocumentFragment();
+
+        const appendText = (segment) => {
+            if (!segment) return;
+            const parts = segment.split(/\n/);
+            parts.forEach((part, idx) => {
+                if (part) frag.appendChild(document.createTextNode(part));
+                if (idx < parts.length - 1) frag.appendChild(document.createElement('br'));
+            });
+        };
+
+        const ensureBreak = () => {
+            const last = frag.lastChild;
+            if (last && last.nodeName !== 'BR') frag.appendChild(document.createElement('br'));
+        };
+
+        while ((match = re.exec(raw))) {
+            hasToken = true;
+            const before = raw.slice(lastIndex, match.index);
+            appendText(before);
+
+            const keyword = String(match[1] || '').trim();
+            if (frag.childNodes.length) ensureBreak();
+            const resolved = resolveMediaAsset('sticker', keyword) || resolveMediaAsset('image', keyword);
+            if (resolved?.url) {
+                const img = document.createElement('img');
+                img.src = resolved.url;
+                img.alt = keyword || 'sticker';
+                img.className = 'previewable sticker-image sticker-inline';
+                img.addEventListener('click', () => this.openLightbox(resolved.url));
+                img.onerror = () => {
+                    img.classList.add('broken');
+                    img.alt = '表情包加載失敗';
+                    toastOnce('表情包加載失敗');
+                };
+                frag.appendChild(img);
+            } else {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.textContent = keyword ? `表情包：${keyword}` : '表情包';
+                frag.appendChild(chip);
+            }
+            const remaining = raw.slice(match.index + match[0].length);
+            if (remaining && !remaining.startsWith('\n')) frag.appendChild(document.createElement('br'));
+            lastIndex = match.index + match[0].length;
+        }
+
+        if (!hasToken) return false;
+        appendText(raw.slice(lastIndex));
+        bubble.innerHTML = '';
+        bubble.appendChild(frag);
+        bubble.style.whiteSpace = 'pre-wrap';
+        return true;
+    }
+
     bindIframeLongPressForwarding() {
         if (this.__chatappIframePressBound) return;
         this.__chatappIframePressBound = true;
@@ -525,12 +586,15 @@ export class ChatUI {
                 // Safe rich rendering (code fences + html iframe preview)
                 // renderRichText(bubble, message.content, { messageId: message.id });
                 // === 对话模式（纯文本）===
-                if (message.role === 'assistant') {
-                    bubble.textContent = this.normalizeAssistantLineBreaks(message.content);
-                } else {
-                    bubble.textContent = String(message.content ?? '');
+                {
+                    const baseText = typeof message.raw === 'string' ? message.raw : message.content;
+                    const normalized =
+                        message.role === 'assistant' ? this.normalizeAssistantLineBreaks(baseText) : String(baseText ?? '');
+                    if (!this.renderTextWithStickers(bubble, normalized)) {
+                        bubble.textContent = normalized;
+                        bubble.style.whiteSpace = 'pre-wrap';
+                    }
                 }
-                bubble.style.whiteSpace = 'pre-wrap';
         }
 
         // 时间戳

@@ -299,6 +299,13 @@
     max-height: 140px;
 }
 
+.QQ_chat_msgdiv img.previewable.sticker-inline {
+    max-width: 96px;
+    max-height: 96px;
+    margin: 4px 0;
+    display: block;
+}
+
 /* 我的消息气泡（如有自定义背景色） */
 .QQ_chat_mymsg .QQ_chat_msgdiv {
     text-align: left;  /* 保持文本左对齐 */

@@ -1382,3 +1382,7 @@
   - 修改：`src/index.html`
   - 修改：`src/assets/css/qq-legacy.css`
   - 修改：`src/scripts/ui/app.js`
+- 2025-12-20 02:18
+  - 贴图混排渲染：气泡内出现 `[bqb-关键词]` 时会替换为贴图并自动换行，文本与贴图可混排显示。
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+  - 修改：`src/assets/css/qq-legacy.css`
