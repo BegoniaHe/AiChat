@@ -4,7 +4,7 @@ import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { logger } from '../utils/logger.js';
-import { initMediaAssets, listMediaAssets } from '../utils/media-assets.js';
+import { initMediaAssets, listMediaAssets, resolveMediaAsset } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
 import './bridge.js';
 import { ChatUI } from './chat/chat-ui.js';
@@ -31,6 +31,17 @@ import { WorldInfoIndicator } from './worldinfo-indicator.js';
 
 const initApp = async () => {
   const ui = new ChatUI();
+  let updateStickerPreview = () => {};
+  const originalSetInputText = ui.setInputText.bind(ui);
+  ui.setInputText = (val) => {
+    originalSetInputText(val);
+    updateStickerPreview(val);
+  };
+  const originalClearInput = ui.clearInput.bind(ui);
+  ui.clearInput = () => {
+    originalClearInput();
+    updateStickerPreview('');
+  };
   const configPanel = new ConfigPanel();
   const presetPanel = new PresetPanel();
   const regexPanel = new RegexPanel();
@@ -43,6 +54,8 @@ const initApp = async () => {
   const groupStore = new GroupStore();
   const momentsStore = new MomentsStore();
   const personaStore = new PersonaStore();
+  let lastMomentRawReply = '';
+  let lastMomentRawMeta = null;
   const worldPanel = new WorldPanel({ contactsStore, getSessionId: () => chatStore.getCurrent() });
   await chatStore.ready;
   await contactsStore.ready;
@@ -456,6 +469,7 @@ ${listPart || '-（无）'}
         const config = window.appBridge.config.get();
         const parser = new DialogueStreamParser({ userName: '我' });
         let sawMomentReply = false;
+        let fullRaw = '';
 
         const p = personaStore.getActive?.() || {};
         const persona = getEffectivePersona(originSessionId);
@@ -482,15 +496,25 @@ ${listPart || '-（无）'}
         if (config.stream) {
           const stream = await window.appBridge.generate(userComment, ctx);
           for await (const chunk of stream) {
+            fullRaw += chunk;
             const events = parser.push(chunk);
             const res = applyEvents(events);
             if (res?.touchedMoments) sawMomentReply = true;
           }
+          if (fullRaw) {
+            lastMomentRawReply = fullRaw;
+            lastMomentRawMeta = { momentId: id, author: authorName, time: m?.time || '', comment: userComment };
+          }
         } else {
           const raw = await window.appBridge.generate(userComment, ctx);
+          fullRaw = raw;
           const events = parser.push(raw);
           const res = applyEvents(events);
           if (res?.touchedMoments) sawMomentReply = true;
+          if (fullRaw) {
+            lastMomentRawReply = fullRaw;
+            lastMomentRawMeta = { momentId: id, author: authorName, time: m?.time || '', comment: userComment };
+          }
         }
 
         if (sawMomentReply) {
@@ -697,6 +721,17 @@ ${listPart || '-（无）'}
 
   const buildStickerToken = keyword => `[bqb-${keyword}]`;
 
+  const extractStickerTokens = (text = '') => {
+    const tokens = [];
+    const re = /\[bqb-([\s\S]+?)\]/gi;
+    let match = null;
+    while ((match = re.exec(String(text || '')))) {
+      const key = String(match[1] || '').trim();
+      if (key) tokens.push(key);
+    }
+    return tokens;
+  };
+
   const getMessageSendText = message => {
     if (!message || typeof message !== 'object') return '';
     const raw = typeof message.raw === 'string' ? message.raw.trim() : '';
@@ -762,6 +797,34 @@ ${listPart || '-（无）'}
     });
   };
 
+  updateStickerPreview = (text = '') => {
+    if (!stickerPreview?.el || !stickerPreview.list) return;
+    const tokens = extractStickerTokens(text || composerInput?.value || '');
+    if (!tokens.length) {
+      stickerPreview.el.classList.remove('is-active');
+      chatRoom?.classList.remove('sticker-preview-active');
+      stickerPreview.list.innerHTML = '';
+      return;
+    }
+    stickerPreview.list.innerHTML = '';
+    tokens.forEach((keyword, idx) => {
+      const resolved = resolveMediaAsset('sticker', keyword) || resolveMediaAsset('image', keyword);
+      const item = document.createElement('div');
+      item.className = 'sticker-preview-item';
+      if (resolved?.url) {
+        const img = document.createElement('img');
+        img.src = resolved.url;
+        img.alt = keyword;
+        item.appendChild(img);
+      } else {
+        item.textContent = keyword || `贴图${idx + 1}`;
+      }
+      stickerPreview.list.appendChild(item);
+    });
+    stickerPreview.el.classList.add('is-active');
+    chatRoom?.classList.add('sticker-preview-active');
+  };
+
   const setStickerPanelOpen = open => {
     if (!stickerPanel?.el || !chatRoom) return;
     const next = Boolean(open);
@@ -775,6 +838,7 @@ ${listPart || '-（无）'}
       stickerPanel.el.classList.remove('is-active');
       chatRoom.classList.remove('sticker-panel-open');
     }
+    updateStickerPreview(composerInput?.value || '');
   };
 
   const renderChatList = () => {
@@ -1130,6 +1194,15 @@ ${listPart || '-（无）'}
     chatRoom.appendChild(panel);
     return { el: panel, grid: panel.querySelector('.sticker-grid') };
   })();
+  const stickerPreview = (() => {
+    if (!chatRoom) return null;
+    const panel = document.createElement('div');
+    panel.id = 'sticker-preview';
+    panel.className = 'sticker-preview';
+    panel.innerHTML = '<div class="sticker-preview-list"></div>';
+    chatRoom.appendChild(panel);
+    return { el: panel, list: panel.querySelector('.sticker-preview-list') };
+  })();
   const pendingFloatMenu = (() => {
     const menu = document.createElement('div');
     menu.id = 'pending-float-menu';
@@ -1405,7 +1478,7 @@ ${listPart || '-（无）'}
       });
     };
 
-    const show = (text, meta) => {
+  const show = (text, meta) => {
       ensure();
       if (metaEl) metaEl.textContent = meta || '';
       if (textarea) {
@@ -1421,6 +1494,19 @@ ${listPart || '-（无）'}
 
     return { show, hide };
   })();
+
+  const showMomentRawReply = () => {
+    const raw = String(lastMomentRawReply || '').trim();
+    if (!raw) {
+      window.toastr?.warning?.('暂无动态原始回复');
+      return;
+    }
+    const metaParts = [];
+    if (lastMomentRawMeta?.author) metaParts.push(String(lastMomentRawMeta.author));
+    if (lastMomentRawMeta?.time) metaParts.push(String(lastMomentRawMeta.time));
+    const meta = metaParts.length ? `动态评论 · ${metaParts.join(' ')}` : '动态评论';
+    rawReplyModal.show(raw, meta);
+  };
 
   /* ---------------- Prompt 预览面板（调试） ---------------- */
   const promptPreviewModal = (() => {
@@ -1532,6 +1618,25 @@ ${listPart || '-（无）'}
   const plusBtns = document.querySelectorAll('.qq-message-topbar .icon-button');
   const chatMenuBtn = document.getElementById('chat-menu-btn');
   const chatroomMenu = document.getElementById('chatroom-menu');
+  const momentsSettingsBtn = document.getElementById('moments-settings-btn');
+  const momentsMenu = (() => {
+    const menu = document.createElement('div');
+    menu.id = 'moments-menu';
+    menu.className = 'sheet hidden';
+    menu.innerHTML = `
+      <div class="sheet-header">动态菜单</div>
+      <div class="sheet-desc">动态相关操作</div>
+      <button data-action="raw-reply">🧾 原始回复</button>
+    `;
+    menu.addEventListener('click', e => {
+      const action = e?.target?.closest ? e.target.closest('button')?.dataset?.action : '';
+      if (!action) return;
+      if (action === 'raw-reply') showMomentRawReply();
+      hideMenus();
+    });
+    document.body.appendChild(menu);
+    return menu;
+  })();
 
   // Chat settings modal elements
   const chatSettingsModal = document.getElementById('chat-settings-modal');
@@ -1551,6 +1656,7 @@ ${listPart || '-（无）'}
     settingsMenu?.classList.add('hidden');
     quickMenu?.classList.add('hidden');
     chatroomMenu?.classList.add('hidden');
+    momentsMenu?.classList.add('hidden');
     document.getElementById('chat-title-menu')?.classList.add('hidden');
     const gd = document.getElementById('group-management-dropdown');
     if (gd) gd.style.display = 'none';
@@ -1579,11 +1685,13 @@ ${listPart || '-（无）'}
 
   let lastSettingsAnchor = null;
   let lastQuickAnchor = null;
+  let lastMomentsAnchor = null;
 
   const toggleSheetAt = (menuEl, anchorEl, { alignRight = false, kind = 'generic' } = {}) => {
     if (!menuEl || !anchorEl) return;
     const isVisible = !menuEl.classList.contains('hidden');
-    const lastAnchor = kind === 'settings' ? lastSettingsAnchor : kind === 'quick' ? lastQuickAnchor : null;
+    const lastAnchor =
+      kind === 'settings' ? lastSettingsAnchor : kind === 'quick' ? lastQuickAnchor : kind === 'moments' ? lastMomentsAnchor : null;
     const sameAnchor = lastAnchor === anchorEl;
     hideMenus();
     positionSheet(menuEl, anchorEl, 0, 4, alignRight);
@@ -1595,6 +1703,7 @@ ${listPart || '-（无）'}
     }
     if (kind === 'settings') lastSettingsAnchor = anchorEl;
     if (kind === 'quick') lastQuickAnchor = anchorEl;
+    if (kind === 'moments') lastMomentsAnchor = anchorEl;
   };
 
   avatarBtns.forEach(btn => {
@@ -1610,6 +1719,12 @@ ${listPart || '-（无）'}
       toggleSheetAt(quickMenu, btn, { alignRight: true, kind: 'quick' });
     });
   });
+  if (momentsSettingsBtn) {
+    momentsSettingsBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      toggleSheetAt(momentsMenu, momentsSettingsBtn, { alignRight: true, kind: 'moments' });
+    });
+  }
 
   // Mount moments list renderer
   try {
@@ -3318,7 +3433,10 @@ ${listPart || '-（无）'}
     onSendButton: handleSend
   });
 
-  ui.onInputChange(text => chatStore.setDraft(text, chatStore.getCurrent()));
+  ui.onInputChange(text => {
+    chatStore.setDraft(text, chatStore.getCurrent());
+    updateStickerPreview(text);
+  });
   ui.onMessageAction(async (action, message, payload) => {
     const sessionId = chatStore.getCurrent();
 

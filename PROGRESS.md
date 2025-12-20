@@ -1376,3 +1376,9 @@
   - 修改：`src/assets/css/qq-legacy.css`
   - 修改：`src/scripts/ui/app.js`
   - 修改：`src/scripts/utils/media-assets.js`
+- 2025-12-20 02:05
+  - 贴图输入预览：输入框内的 `[bqb-关键词]` 自动在输入框上方渲染小图预览（提示词保持不变）。
+  - 动态菜单：动态页右上角 ⚙ 菜单增加「原始回复」，查看本次动态评论的完整 AI 原文。
+  - 修改：`src/index.html`
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/ui/app.js`
