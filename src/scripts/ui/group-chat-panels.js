@@ -269,6 +269,7 @@ export class GroupSettingsPanel {
         this.groupId = '';
         this.avatar = '';
         this.members = [];
+        this.archivesList = null;
         this.summariesList = null;
         this.compactedList = null;
         this.summaryBatchMode = false;
@@ -292,6 +293,7 @@ export class GroupSettingsPanel {
         if (!this.panel) this.createUI();
         this.groupId = id;
         this.populate();
+        this.renderArchives();
         this.renderSummaries();
         this.renderCompactedSummary();
         this.overlay.style.display = 'block';
@@ -353,6 +355,15 @@ export class GroupSettingsPanel {
 	                </div>
 
                     <div style="margin-top:18px; border-top:1px solid rgba(0,0,0,0.06); padding-top:14px;">
+                        <div style="font-weight:800; color:#0f172a; margin-bottom:8px;">聊天管理</div>
+                        <button id="group-new-chat" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; background:#fff; color:#019aff; font-weight:700; margin-bottom:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px;">
+                            <span>✨</span> 开启新聊天（存档当前）
+                        </button>
+                        <div style="font-size:12px; color:#64748b; margin-bottom:6px;">历史存档（点击加载）</div>
+                        <div id="group-archives-list" style="max-height:160px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#f9f9f9; padding:0;"></div>
+                    </div>
+
+                    <div style="margin-top:18px; border-top:1px solid rgba(0,0,0,0.06); padding-top:14px;">
                         <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
                             <div style="font-weight:800; color:#0f172a;">摘要</div>
                             <div style="display:flex; align-items:center; gap:8px;">
@@ -409,6 +420,7 @@ export class GroupSettingsPanel {
         document.body.appendChild(this.overlay);
         document.body.appendChild(this.panel);
         document.body.appendChild(this.fileInput);
+        this.archivesList = this.panel.querySelector('#group-archives-list');
         this.summariesList = this.panel.querySelector('#group-summaries-list');
         this.compactedList = this.panel.querySelector('#group-compacted-summary');
         this.summariesBatchBar = this.panel.querySelector('#group-summaries-batchbar');
@@ -421,6 +433,7 @@ export class GroupSettingsPanel {
         };
         this.panel.querySelector('#group-settings-add').onclick = () => this.openAddMembers();
         this.panel.querySelector('#group-settings-save').onclick = () => this.save();
+        this.panel.querySelector('#group-new-chat').onclick = () => this.startNewChat();
         this.panel.querySelector('#group-summaries-clear').onclick = () => {
             const sid = this.groupId;
             if (!sid) return;
@@ -867,6 +880,58 @@ export class GroupSettingsPanel {
         this.compactedList.appendChild(row);
     }
 
+    renderArchives() {
+        if (!this.archivesList || !this.chatStore) return;
+        const sid = this.groupId;
+        const archives = this.chatStore.getArchives(sid);
+        const currentId = this.chatStore.state.sessions[sid]?.currentArchiveId;
+        this.archivesList.innerHTML = '';
+
+        if (!archives.length) {
+            this.archivesList.innerHTML = '<div style="padding:12px; color:#94a3b8; text-align:center; font-size:12px;">暂无历史存档</div>';
+            return;
+        }
+
+        archives.forEach(arc => {
+            const dateStr = new Date(arc.timestamp).toLocaleString();
+            const msgCount = Array.isArray(arc.messages) ? arc.messages.length : 0;
+            const isCurrent = arc.id === currentId;
+            const row = document.createElement('div');
+            row.style.cssText = `display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; background:${isCurrent ? '#eff6ff' : '#fff'}; border-left:${isCurrent ? '3px solid #019aff' : 'none'};`;
+
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1; cursor:pointer; min-width:0;';
+            info.innerHTML = `
+                <div style="font-weight:600; color:#334155; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${arc.name || '未命名存档'} ${isCurrent ? '(当前)' : ''}</div>
+                <div style="color:#94a3b8; font-size:11px;">${dateStr} · ${msgCount}条消息</div>
+            `;
+            info.onclick = () => {
+                if (isCurrent) return;
+                if (confirm(`确定要加载存档「${arc.name}」吗？\n当前聊天将被自动保存。`)) {
+                    this.chatStore.loadArchivedMessages(arc.id, sid);
+                    window.toastr?.success('已加载存档');
+                    this.onSaved?.({ id: sid, forceRefresh: true });
+                    this.hide();
+                }
+            };
+
+            const delBtn = document.createElement('button');
+            delBtn.textContent = '×';
+            delBtn.style.cssText = 'padding:4px 8px; border:none; background:transparent; color:#94a3b8; font-size:16px; cursor:pointer; margin-left:6px;';
+            delBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (confirm('确定要删除这条存档吗？')) {
+                    this.chatStore.deleteArchive(arc.id, sid);
+                    this.renderArchives();
+                }
+            };
+
+            row.appendChild(info);
+            row.appendChild(delBtn);
+            this.archivesList.appendChild(row);
+        });
+    }
+
     updateAvatarPreview() {
         const img = this.panel?.querySelector('#group-settings-avatar-preview');
         if (!img) return;
@@ -1036,6 +1101,18 @@ export class GroupSettingsPanel {
         });
     }
 
+    startNewChat() {
+        if (!this.chatStore) return;
+        const sid = this.groupId;
+        const raw = prompt('请输入当前聊天的存档名称（留空将自动命名）：');
+        if (raw === null) return;
+
+        this.chatStore.startNewChat(sid, raw.trim());
+        window.toastr?.success('已开启新聊天');
+        this.onSaved?.({ id: sid, forceRefresh: true });
+        this.hide();
+    }
+
     save() {
         try {
             const prev = this.contactsStore?.getContact?.(this.groupId);
@@ -1061,22 +1138,26 @@ export class GroupSettingsPanel {
             });
 
             const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            let didAppendSystem = false;
             if (nextName !== prev.name) {
                 this.chatStore?.appendMessage?.({ role: 'system', type: 'meta', content: `群聊名称已更新：${prev.name} → ${nextName}`, name: '系统', time }, this.groupId);
+                didAppendSystem = true;
             }
             const added = afterMembers.filter(x => !beforeMembers.includes(x));
             const removed = beforeMembers.filter(x => !afterMembers.includes(x));
             if (added.length) {
                 const names = added.map(mid => this.contactsStore?.getContact?.(mid)?.name || mid).join('、');
                 this.chatStore?.appendMessage?.({ role: 'system', type: 'meta', content: `成员加入：${names}`, name: '系统', time }, this.groupId);
+                didAppendSystem = true;
             }
             if (removed.length) {
                 const names = removed.map(mid => this.contactsStore?.getContact?.(mid)?.name || mid).join('、');
                 this.chatStore?.appendMessage?.({ role: 'system', type: 'meta', content: `成员已移除：${names}`, name: '系统', time }, this.groupId);
+                didAppendSystem = true;
             }
 
             window.toastr?.success?.('已保存群聊设置');
-            this.onSaved?.({ id: this.groupId });
+            this.onSaved?.({ id: this.groupId, forceRefresh: didAppendSystem });
             this.hide();
         } catch (err) {
             logger.error('保存群聊设置失败', err);

@@ -121,13 +121,18 @@ const initApp = async () => {
   const groupSettingsPanel = new GroupSettingsPanel({
     contactsStore,
     chatStore,
-    onSaved: ({ id }) => {
+    onSaved: ({ id, forceRefresh } = {}) => {
       try {
         refreshChatAndContacts();
       } catch {}
       const c = contactsStore.getContact(id);
       const cur = chatStore.getCurrent();
       if (cur === id && currentChatTitle) currentChatTitle.textContent = formatSessionName(id, c) || c?.name || id;
+      if (forceRefresh && cur === id) {
+        const msgs = chatStore.getMessages(id);
+        ui.clearMessages();
+        ui.preloadHistory(decorateMessagesForDisplay(msgs, { sessionId: id }));
+      }
     },
   });
 
@@ -515,6 +520,47 @@ ${listPart || '-（无）'}
             lastMomentRawReply = fullRaw;
             lastMomentRawMeta = { momentId: id, author: authorName, time: m?.time || '', comment: userComment };
           }
+        }
+
+        if (!sawMomentReply && fullRaw) {
+          try {
+            const sanitizeThinkingForMoment = (text) => {
+              const raw = String(text ?? '');
+              const lower = raw.toLowerCase();
+              const closeThinking = '</thinking>';
+              const closeThink = '</think>';
+              const i1 = lower.lastIndexOf(closeThinking);
+              const i2 = lower.lastIndexOf(closeThink);
+              const idx = Math.max(i1, i2);
+              if (idx === -1) return raw;
+              const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
+              return raw.slice(cut);
+            };
+            const normalizeMiPhoneMarkersForMoment = (text) => {
+              const raw = String(text ?? '');
+              if (!raw) return raw;
+              return raw
+                .replace(/&lt;\s*\/?\s*MiPhone_(start|end)\s*\/?\s*&gt;/gi, (_, token) => `MiPhone_${token}`)
+                .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
+            };
+
+            const retryText = sanitizeThinkingForMoment(fullRaw);
+            if (retryText && retryText !== fullRaw) {
+              const retryParser = new DialogueStreamParser({ userName: '我' });
+              const retryEvents = retryParser.push(retryText);
+              const res = applyEvents(retryEvents);
+              if (res?.touchedMoments) sawMomentReply = true;
+            }
+            if (!sawMomentReply) {
+              const miPhoneText = normalizeMiPhoneMarkersForMoment(sanitizeThinkingForMoment(fullRaw));
+              if (miPhoneText && miPhoneText !== fullRaw) {
+                const retryParser = new DialogueStreamParser({ userName: '我' });
+                const retryEvents = retryParser.push(miPhoneText);
+                const res = applyEvents(retryEvents);
+                if (res?.touchedMoments) sawMomentReply = true;
+              }
+            }
+          } catch {}
         }
 
         if (sawMomentReply) {
@@ -2593,6 +2639,13 @@ ${listPart || '-（无）'}
     const normalizeKey = s => normalizeName(s).toLowerCase().replace(/\s+/g, '');
     // keep only letters/numbers/CJK to avoid emoji/punctuation differences
     const normalizeLoose = s => normalizeKey(s).replace(/[^a-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
+    const isSystemSpeaker = speakerName => {
+      const raw = normalizeName(speakerName).replace(/[：:]/g, '').trim();
+      if (!raw) return false;
+      const key = normalizeLoose(raw);
+      const lower = key.toLowerCase();
+      return key === '系统' || key === '系统消息' || key === '系统提示' || lower === 'system' || lower === 'systemmessage' || lower === 'systemmsg';
+    };
     const resolvePrivateChatTargetSessionId = otherName => {
       const other = normalizeName(otherName);
       if (!other) return sessionId;
@@ -2743,6 +2796,13 @@ ${listPart || '-（无）'}
       if (idx === -1) return raw;
       const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
       return raw.slice(cut);
+    };
+    const normalizeMiPhoneMarkers = text => {
+      const raw = String(text ?? '');
+      if (!raw) return raw;
+      return raw
+        .replace(/&lt;\s*\/?\s*MiPhone_(start|end)\s*\/?\s*&gt;/gi, (_, token) => `MiPhone_${token}`)
+        .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
     };
 
 	    const buildHistoryForLLM = pendingUserText => {
@@ -2939,6 +2999,18 @@ ${listPart || '-（无）'}
                 (ev.messages || []).forEach(m => {
                   const speaker = normalizeName(m?.speaker);
                   const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                  if (isSystemSpeaker(speaker)) {
+                    const parsed = {
+                      role: 'system',
+                      type: 'meta',
+                      content: sanitizeAssistantReplyText(content, userName),
+                      name: '系统',
+                      time: m?.time || formatNowTime(),
+                    };
+                    if (targetGroupId === sessionId) ui.addMessage(parsed);
+                    chatStore.appendMessage(parsed, targetGroupId);
+                    return;
+                  }
                   const isMe =
                     speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
                   const role = isMe ? 'user' : 'assistant';
@@ -3049,6 +3121,18 @@ ${listPart || '-（无）'}
                     (ev.messages || []).forEach(m => {
                       const speaker = normalizeName(m?.speaker);
                       const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                      if (isSystemSpeaker(speaker)) {
+                        const parsed = {
+                          role: 'system',
+                          type: 'meta',
+                          content: sanitizeAssistantReplyText(content, userName),
+                          name: '系统',
+                          time: m?.time || formatNowTime(),
+                        };
+                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+                        chatStore.appendMessage(parsed, targetGroupId);
+                        return;
+                      }
                       const isMe =
                         speaker === userName ||
                         normalizeLoose(speaker) === normalizeLoose(userName) ||
@@ -3102,6 +3186,107 @@ ${listPart || '-（无）'}
                 refreshChatAndContacts();
               }
             } catch {}
+            if (!didAnything) {
+              try {
+                const baseText = sanitizeThinkingForProtocolParse(fullRaw);
+                const miPhoneText = normalizeMiPhoneMarkers(baseText);
+                if (miPhoneText && miPhoneText !== baseText) {
+                  const retryParser = new DialogueStreamParser({ userName });
+                  const retryEvents = retryParser.push(miPhoneText);
+                  retryEvents.forEach(ev => {
+                    if (ev?.type === 'moments') {
+                      try {
+                        momentsStore.addMany(ingestMoments(ev.moments || []));
+                        mutatedMoments = true;
+                        didAnything = true;
+                        if (activePage === 'moments') momentsPanel.render();
+                      } catch {}
+                      return;
+                    }
+                    if (ev?.type === 'moment_reply') {
+                      try {
+                        const mid = String(ev.momentId || '').trim();
+                        if (!mid) return;
+                        momentsStore.addComments(mid, ev.comments || []);
+                        mutatedMoments = true;
+                        didAnything = true;
+                        if (activePage === 'moments') momentsPanel.render();
+                      } catch {}
+                      return;
+                    }
+                    if (ev?.type === 'group_chat') {
+                      const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+                      if (!targetGroupId) return;
+                      summarySessionIds.add(targetGroupId);
+                      (ev.messages || []).forEach(m => {
+                        const speaker = normalizeName(m?.speaker);
+                        const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                        if (isSystemSpeaker(speaker)) {
+                          const parsed = {
+                            role: 'system',
+                            type: 'meta',
+                            content: sanitizeAssistantReplyText(content, userName),
+                            name: '系统',
+                            time: m?.time || formatNowTime(),
+                          };
+                          if (targetGroupId === sessionId) ui.addMessage(parsed);
+                          chatStore.appendMessage(parsed, targetGroupId);
+                          return;
+                        }
+                        const isMe =
+                          speaker === userName ||
+                          normalizeLoose(speaker) === normalizeLoose(userName) ||
+                          speaker === '用户';
+                        const role = isMe ? 'user' : 'assistant';
+                        const c = isMe ? null : resolveContactByDisplayName(speaker);
+                        const parsed = {
+                          role,
+                          type: 'text',
+                          ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
+                          name: role === 'user' ? userName : speaker || '成员',
+                          avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
+                          time: m?.time || formatNowTime(),
+                          meta: role === 'assistant' ? { showName: true } : undefined,
+                        };
+                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+                        const saved = chatStore.appendMessage(parsed, targetGroupId);
+                        if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
+                      });
+                      didAnything = true;
+                      refreshChatAndContacts();
+                      return;
+                    }
+                    if (ev?.type === 'private_chat') {
+                      const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+                      if (!targetSessionId) return;
+                      summarySessionIds.add(targetSessionId);
+                      (ev.messages || []).forEach(msgText => {
+                        const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                        const parsed = {
+                          role: 'assistant',
+                          type: 'text',
+                          ...parseSpecialMessage(cleaned),
+                          name: '助手',
+                          avatar: getAssistantAvatarForSession(targetSessionId),
+                          time: formatNowTime(),
+                        };
+                        if (targetSessionId === sessionId) ui.addMessage(parsed);
+                        const saved = chatStore.appendMessage(parsed, targetSessionId);
+                        autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                      });
+                      didAnything = true;
+                      refreshChatAndContacts();
+                    }
+                  });
+                  if (mutatedMoments) {
+                    try {
+                      await momentsStore.flush();
+                    } catch {}
+                  }
+                  refreshChatAndContacts();
+                }
+              } catch {}
+            }
             if (!didAnything) {
               window.toastr?.warning?.('未解析到有效对话标签，已丢弃（可在“三 > 原始回复”查看）');
             }
@@ -3205,6 +3390,19 @@ ${listPart || '-（无）'}
               (ev.messages || []).forEach(m => {
                 const speaker = normalizeName(m?.speaker);
                 const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                if (isSystemSpeaker(speaker)) {
+                  const parsed = {
+                    role: 'system',
+                    type: 'meta',
+                    content: sanitizeAssistantReplyText(content, userName),
+                    name: '系统',
+                    time: m?.time || formatNowTime(),
+                  };
+                  if (targetGroupId === sessionId) ui.addMessage(parsed);
+                  chatStore.appendMessage(parsed, targetGroupId);
+                  didAnything = true;
+                  return;
+                }
                 const isMe =
                   speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
                 const role = isMe ? 'user' : 'assistant';
@@ -3293,6 +3491,19 @@ ${listPart || '-（无）'}
                   (ev.messages || []).forEach(m => {
                     const speaker = normalizeName(m?.speaker);
                     const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                    if (isSystemSpeaker(speaker)) {
+                      const parsed = {
+                        role: 'system',
+                        type: 'meta',
+                        content: sanitizeAssistantReplyText(content, userName),
+                        name: '系统',
+                        time: m?.time || formatNowTime(),
+                      };
+                      if (targetGroupId === sessionId) ui.addMessage(parsed);
+                      chatStore.appendMessage(parsed, targetGroupId);
+                      didAnything = true;
+                      return;
+                    }
                     const isMe =
                       speaker === userName ||
                       normalizeLoose(speaker) === normalizeLoose(userName) ||
@@ -3336,6 +3547,92 @@ ${listPart || '-（无）'}
               });
             }
           } catch {}
+          if (!didAnything) {
+            try {
+              const baseText = sanitizeThinkingForProtocolParse(resultRaw);
+              const miPhoneText = normalizeMiPhoneMarkers(baseText);
+              if (miPhoneText && miPhoneText !== baseText) {
+                const retryParser = new DialogueStreamParser({ userName });
+                const retryEvents = retryParser.push(miPhoneText);
+                retryEvents.forEach(ev => {
+                  if (ev?.type === 'moments') {
+                    momentsStore.addMany(ingestMoments(ev.moments || []));
+                    didAnything = true;
+                    mutatedMoments = true;
+                    return;
+                  }
+                  if (ev?.type === 'moment_reply') {
+                    const mid = String(ev.momentId || '').trim();
+                    if (!mid) return;
+                    momentsStore.addComments(mid, ev.comments || []);
+                    didAnything = true;
+                    mutatedMoments = true;
+                    return;
+                  }
+                  if (ev?.type === 'group_chat') {
+                    const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
+                    if (!targetGroupId) return;
+                    summarySessionIds.add(targetGroupId);
+                    (ev.messages || []).forEach(m => {
+                      const speaker = normalizeName(m?.speaker);
+                      const content = String(m?.content || '').replace(/<br\s*\/?>/gi, '\n');
+                      if (isSystemSpeaker(speaker)) {
+                        const parsed = {
+                          role: 'system',
+                          type: 'meta',
+                          content: sanitizeAssistantReplyText(content, userName),
+                          name: '系统',
+                          time: m?.time || formatNowTime(),
+                        };
+                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+                        chatStore.appendMessage(parsed, targetGroupId);
+                        didAnything = true;
+                        return;
+                      }
+                      const isMe =
+                        speaker === userName ||
+                        normalizeLoose(speaker) === normalizeLoose(userName) ||
+                        speaker === '用户';
+                      const role = isMe ? 'user' : 'assistant';
+                      const c = isMe ? null : resolveContactByDisplayName(speaker);
+                      const parsed = {
+                        role,
+                        ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
+                        name: role === 'user' ? userName : speaker || '成员',
+                        avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
+                        time: m?.time || formatNowTime(),
+                        meta: role === 'assistant' ? { showName: true } : undefined,
+                      };
+                      if (targetGroupId === sessionId) ui.addMessage(parsed);
+                      const saved = chatStore.appendMessage(parsed, targetGroupId);
+                      if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
+                      didAnything = true;
+                    });
+                    return;
+                  }
+                  if (ev?.type === 'private_chat') {
+                    const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
+                    if (!targetSessionId) return;
+                    summarySessionIds.add(targetSessionId);
+                    (ev.messages || []).forEach(msgText => {
+                      const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                      const parsed = {
+                        role: 'assistant',
+                        ...parseSpecialMessage(cleaned),
+                        name: '助手',
+                        avatar: getAssistantAvatarForSession(targetSessionId),
+                        time: formatNowTime(),
+                      };
+                      if (targetSessionId === sessionId) ui.addMessage(parsed);
+                      const saved = chatStore.appendMessage(parsed, targetSessionId);
+                      autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                      didAnything = true;
+                    });
+                  }
+                });
+              }
+            } catch {}
+          }
           if (didAnything) {
             if (protocolSummary) {
               try {

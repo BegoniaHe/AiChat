@@ -63,6 +63,50 @@ const findMatchingCloseTag = (s, tagName, fromIdx) => {
     }
 };
 
+const GROUP_CHAT_BR_MARK = '\u000b';
+
+const splitSpeakerSegments = (line) => {
+    const raw = String(line ?? '');
+    if (!raw.includes('--')) return [];
+    const parts = raw.split('--').map(p => String(p || '').trim()).filter(Boolean);
+    if (parts.length < 2) return [];
+    if (parts.length === 2) return [{ speaker: parts[0], content: parts[1] }];
+    const segments = [];
+    let i = 0;
+    while (i < parts.length - 1) {
+        const speaker = String(parts[i] || '').trim();
+        if (!speaker) {
+            i += 1;
+            continue;
+        }
+        const remaining = parts.length - i;
+        if (remaining % 2 === 1) {
+            const content = parts.slice(i + 1).join('--').trim();
+            if (content) segments.push({ speaker, content });
+            break;
+        }
+        const content = String(parts[i + 1] || '').trim();
+        if (content) segments.push({ speaker, content });
+        i += 2;
+    }
+    return segments;
+};
+
+const splitMultiLineSegments = (text) => {
+    const raw = String(text ?? '').trim();
+    if (!raw.includes('--')) return [];
+    const lines = raw.split(/[\n\u000b]+/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return [];
+    if (lines.some(line => !line.includes('--'))) return [];
+    const segments = [];
+    for (const line of lines) {
+        const segs = splitSpeakerSegments(line);
+        if (!segs.length) return [];
+        segments.push(...segs);
+    }
+    return segments;
+};
+
 const parsePrivateChatMessages = (innerText) => {
     const text = normalizeNewlines(innerText);
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -77,8 +121,17 @@ const parsePrivateChatMessages = (innerText) => {
             messages.push(String(m[2] || '').trim().replace(/<br\s*\/?>/gi, '\n'));
             continue;
         }
+        const normalized = line.replace(/<br\s*\/?>/gi, '\n');
+        const segments = splitSpeakerSegments(normalized);
+        if (segments.length) {
+            segments.forEach(seg => {
+                if (!seg?.content) return;
+                messages.push(String(seg.content || '').trim().replace(/<br\s*\/?>/gi, '\n'));
+            });
+            continue;
+        }
         // Fallback: treat as a single message line
-        messages.push(line.replace(/<br\s*\/?>/gi, '\n'));
+        messages.push(normalized);
     }
     return messages.filter(Boolean);
 };
@@ -117,20 +170,20 @@ const parseGroupChatBlock = (innerText) => {
     // Strategy:
     // - Preserve "<br>" as an internal marker while extracting message segments.
     // - Only convert it to "\n" AFTER we have parsed each message's speaker/content/time.
-    const BR_MARK = '\u000b'; // vertical tab as internal line-break marker
     const normalized = normalizeNewlines(chatRaw);
     const textMarked = normalized
-        .replace(/&lt;br\s*\/?&gt;/gi, BR_MARK)
-        .replace(/<br\s*\/?>/gi, BR_MARK);
+        .replace(/&lt;br\s*\/?&gt;/gi, GROUP_CHAT_BR_MARK)
+        .replace(/<br\s*\/?>/gi, GROUP_CHAT_BR_MARK);
 
     const messages = [];
-    const unmark = (s) => String(s ?? '').replaceAll(BR_MARK, '\n');
+    const unmark = (s) => String(s ?? '').replaceAll(GROUP_CHAT_BR_MARK, '\n');
 
     // First pass: extract repeated "speaker--content--HH:MM" segments even if the model uses <br> to separate them.
     // We scan by the time terminator to avoid being confused by internal <br> markers.
     {
         const src2 = textMarked;
         let idx = 0;
+        let tailStart = 0;
         const timeRe = /--\s*(\d{1,2}:\d{2})\s*/g;
         while (idx < src2.length) {
             timeRe.lastIndex = idx;
@@ -147,12 +200,49 @@ const parseGroupChatBlock = (innerText) => {
             if (lastSep === -1) continue;
             const time = String(segment.slice(lastSep + 2) || '').trim();
             const pre = String(segment.slice(0, lastSep) || '').trim();
+            const multiSegments = splitMultiLineSegments(pre);
+            if (multiSegments.length) {
+                multiSegments.forEach((seg, index) => {
+                    const speaker = String(seg?.speaker || '').trim();
+                    const content = unmark(String(seg?.content || '').trim()).trim();
+                    if (!speaker || !content) return;
+                    messages.push({ speaker, content, time: index === multiSegments.length - 1 ? time : '' });
+                });
+                continue;
+            }
             const firstSep = pre.indexOf('--');
             if (firstSep === -1) continue;
             const speaker = String(pre.slice(0, firstSep) || '').trim();
             const content = String(pre.slice(firstSep + 2) || '').trim();
             if (!speaker || !content) continue;
             messages.push({ speaker, content: unmark(content).trim(), time });
+        }
+        tailStart = idx;
+
+        if (messages.length && tailStart < src2.length) {
+            const tail = String(src2.slice(tailStart) || '').trim();
+            if (tail) {
+                const tailLines = tail.split(/[\n\u000b]+/).map(l => l.trim()).filter(Boolean);
+                for (const line of tailLines) {
+                    const hasTimeSuffix = /--\s*\d{1,2}:\d{2}\s*$/.test(line);
+                    if (!hasTimeSuffix) {
+                        const segments = splitSpeakerSegments(line);
+                        if (segments.length) {
+                            segments.forEach(seg => {
+                                const speaker = String(seg?.speaker || '').trim();
+                                const content = unmark(String(seg?.content || '').trim()).trim();
+                                if (!speaker || !content) return;
+                                messages.push({ speaker, content, time: '' });
+                            });
+                            continue;
+                        }
+                    }
+                    const parts = line.split('--').map(p => p.trim()).filter(Boolean);
+                    if (parts.length >= 2) {
+                        messages.push({ speaker: parts[0], content: unmark(parts.slice(1).join('--')).trim(), time: '' });
+                    }
+                }
+            }
         }
     }
 
@@ -168,6 +258,19 @@ const parseGroupChatBlock = (innerText) => {
                     time: String(m[3] || '').trim(),
                 });
                 continue;
+            }
+            const hasTimeSuffix = /--\s*\d{1,2}:\d{2}\s*$/.test(line);
+            if (!hasTimeSuffix) {
+                const segments = splitSpeakerSegments(line);
+                if (segments.length) {
+                    segments.forEach(seg => {
+                        const speaker = String(seg?.speaker || '').trim();
+                        const content = unmark(String(seg?.content || '').trim()).trim();
+                        if (!speaker || !content) return;
+                        messages.push({ speaker, content, time: '' });
+                    });
+                    continue;
+                }
             }
             const parts = line.split('--').map(p => p.trim()).filter(Boolean);
             if (parts.length >= 2) {

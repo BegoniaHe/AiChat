@@ -1386,3 +1386,19 @@
   - 贴图混排渲染：气泡内出现 `[bqb-关键词]` 时会替换为贴图并自动换行，文本与贴图可混排显示。
   - 修改：`src/scripts/ui/chat/chat-ui.js`
   - 修改：`src/assets/css/qq-legacy.css`
+- 2025-12-20 02:34
+  - 对话解析兜底：解析失败时追加 MiPhone 标签去括号重试；缺失时间的 `speaker--content` 片段支持拆分成独立气泡。
+  - 动态评论解析兜底：动态评论回覆未解析时同样追加去括号重试。
+  - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-20 02:48
+  - 群聊解析补强：当缺失时间的多条 `speaker--content` 夹在有时间的片段之间，改为拆分成多条气泡；尾部缺失时间片段也会被补解析。
+  - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+- 2025-12-20 03:05
+  - 群聊新增聊天管理：支持「开启新聊天」并展示/加载历史存档，逻辑与私聊一致。
+  - 修改：`src/scripts/ui/group-chat-panels.js`
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-20 03:18
+  - 群聊 AI 角色名为“系统/系统消息”时转为系统消息样式；群聊保存成员变更后立即刷新显示系统消息。
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/group-chat-panels.js`
