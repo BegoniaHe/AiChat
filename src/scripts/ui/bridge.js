@@ -145,6 +145,7 @@ class AppBridge {
     this.chatStore = null; // Injected
     this.macroEngine = null; // Initialized on setChatStore
     this.contactsStore = null; // Injected
+    this.momentSummaryStore = null; // Injected
     this.hydrateWorldSessionMap();
     this.hydrateGlobalWorldId();
   }
@@ -156,6 +157,10 @@ class AppBridge {
 
   setContactsStore(store) {
     this.contactsStore = store;
+  }
+
+  setMomentSummaryStore(store) {
+    this.momentSummaryStore = store;
   }
 
   processTextMacros(text, extraContext = {}) {
@@ -982,6 +987,34 @@ class AppBridge {
 	      return { role: 'system', content: rendered };
 	    };
 
+	    const buildMomentSummaryBlock = () => {
+	      if (Boolean(context?.meta?.disableMomentSummary)) return null;
+	      if (!this.momentSummaryStore?.getSummaries) return null;
+	      const list = this.momentSummaryStore.getSummaries() || [];
+	      const arr = Array.isArray(list) ? list : [];
+	      if (!arr.length) return null;
+	      const latest = arr.slice(-3);
+	      const rows = [];
+	      try {
+	        const compacted = this.momentSummaryStore.getCompactedSummary?.();
+	        const compactedText = String(compacted?.text || '').trim();
+	        if (compactedText) rows.push(`- 大总结：${compactedText}`);
+	      } catch {}
+	      latest.forEach((it, idx) => {
+	        const text = String((typeof it === 'string') ? it : it?.text || '').trim();
+	        if (!text) return;
+	        const at = (typeof it === 'object' && it && it.at) ? Number(it.at) : 0;
+	        const isNewest = idx === latest.length - 1;
+	        const when = (isNewest && at) ? formatSinceInParens(at) : '';
+	        rows.push(`- ${text}${when ? `（${when}）` : ''}`);
+	      });
+	      if (!rows.length) return null;
+	      return {
+	        role: 'system',
+	        content: `以下为动态摘要回顾（仅供理解上下文）：\n${rows.join('\n')}`.trim(),
+	      };
+	    };
+
 	    const buildGroupMemberPrivateSummaryBlock = () => {
 	      if (!isGroupChat) return null;
 	      const memberIds = groupMemberIds.slice();
@@ -1181,6 +1214,8 @@ class AppBridge {
 	        const blocks = [{ role: 'system', content: HISTORY_RECALL_NOTICE }];
 	        const momentData = buildMomentCommentDataBlock();
 	        if (momentData) blocks.push(momentData);
+	        const momentSummary = buildMomentSummaryBlock();
+	        if (momentSummary) blocks.push(momentSummary);
 	        try {
 	          const compactedText = String(sessionSummary?.compacted?.text || '').trim();
 	          const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
@@ -1439,6 +1474,10 @@ class AppBridge {
 	    try {
 	      const momentData = buildMomentCommentDataBlock();
 	      if (momentData) messages.push(momentData);
+	    } catch {}
+	    try {
+	      const momentSummary = buildMomentSummaryBlock();
+	      if (momentSummary) messages.push(momentSummary);
 	    } catch {}
 	    try {
 	      const sessionSummary = getSessionSummaryItems(sessionIdForSummary, {

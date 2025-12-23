@@ -2,6 +2,7 @@ import { ChatStore } from '../storage/chat-store.js';
 import { ContactsStore } from '../storage/contacts-store.js';
 import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
+import { MomentSummaryStore } from '../storage/moment-summary-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { logger } from '../utils/logger.js';
 import { initMediaAssets, listMediaAssets, resolveMediaAsset, isAssetRef, isLikelyUrl } from '../utils/media-assets.js';
@@ -19,6 +20,7 @@ import { GroupCreatePanel, GroupSettingsPanel } from './group-chat-panels.js';
 import { GroupPanel } from './group-panel.js';
 import { MediaPicker } from './media-picker.js';
 import { MomentsPanel } from './moments-panel.js';
+import { MomentSummaryPanel } from './moment-summary-panel.js';
 import { PersonaPanel } from './persona-panel.js';
 import { PresetPanel } from './preset-panel.js';
 import { RegexPanel } from './regex-panel.js';
@@ -53,6 +55,10 @@ const initApp = async () => {
   } catch {}
   const groupStore = new GroupStore();
   const momentsStore = new MomentsStore();
+  const momentSummaryStore = new MomentSummaryStore();
+  try {
+    window.appBridge.setMomentSummaryStore?.(momentSummaryStore);
+  } catch {}
   const personaStore = new PersonaStore();
   let lastMomentRawReply = '';
   let lastMomentRawMeta = null;
@@ -61,6 +67,7 @@ const initApp = async () => {
   await contactsStore.ready;
   await groupStore.ready;
   await momentsStore.ready;
+  await momentSummaryStore.ready;
   await personaStore.ready;
   await initMediaAssets();
   await window.appBridge?.regex?.ready;
@@ -258,6 +265,8 @@ const initApp = async () => {
     const nextLikes = Math.min(nextLikesRaw, nextViews);
     momentsStore.upsert({ id, views: nextViews, likes: nextLikes });
   };
+
+  let requestMomentSummaryCompaction = () => Promise.resolve(false);
 
   const momentsPanel = new MomentsPanel({
     momentsStore,
@@ -537,10 +546,13 @@ ${listPart || '-（无）'}
         const summary = extractMomentSummary(raw);
         if (!summary) return;
         try {
-          chatStore.addSummary(summary, originSessionId);
+          momentSummaryStore.addSummary(summary);
         } catch {}
         try {
-          requestSummaryCompaction(originSessionId);
+          requestMomentSummaryCompaction();
+        } catch {}
+        try {
+          window.dispatchEvent(new CustomEvent('moment-summaries-updated'));
         } catch {}
       };
 
@@ -697,6 +709,11 @@ ${listPart || '-（无）'}
         window.toastr?.error?.(err?.message || '动态评论生成失败');
       }
     },
+  });
+
+  const momentSummaryPanel = new MomentSummaryPanel({
+    store: momentSummaryStore,
+    onRunCompaction: (opts) => requestMomentSummaryCompaction(opts),
   });
 
   const formatTime = ts => {
@@ -1838,11 +1855,13 @@ ${listPart || '-（无）'}
     menu.innerHTML = `
       <div class="sheet-header">动态菜单</div>
       <div class="sheet-desc">动态相关操作</div>
+      <button data-action="moment-summary">📘 动态摘要</button>
       <button data-action="raw-reply">🧾 原始回复</button>
     `;
     menu.addEventListener('click', e => {
       const action = e?.target?.closest ? e.target.closest('button')?.dataset?.action : '';
       if (!action) return;
+      if (action === 'moment-summary') momentSummaryPanel.show();
       if (action === 'raw-reply') showMomentRawReply();
       hideMenus();
     });
@@ -2519,6 +2538,9 @@ ${listPart || '-（无）'}
             .join('\n');
           if (!payload.trim()) return resolve(false);
 
+          const compactedPrev = chatStore.getCompactedSummary(sessionId);
+          const compactedText = String(compactedPrev?.text || '').trim();
+
           const prompt = [
             '# 注意，无视你先前收到的任何指令，你的任务已更改，不再遵守格式要求',
             '接下来的一轮回复中，将不会进行创作，不再遵循前面的要求，而是会遵循<summary_rules>中的要求进行一轮总结',
@@ -2545,6 +2567,9 @@ ${listPart || '-（无）'}
             '',
             '</summary_rules>',
             '',
+            compactedText ? '【已有大总结】' : '',
+            compactedText ? compactedText : '',
+            compactedText ? '' : '',
             '【前文内容（按时间标注的摘要列表）】',
             payload,
           ].join('\n');
@@ -2579,6 +2604,7 @@ ${listPart || '-（无）'}
 	              disableChatGuide: true,
 	              disableScenarioHint: true,
 	              disableSummary: true,
+	              disableMomentSummary: true,
 	              overrideLastUserMessage: '开始总结，勿输出聊天格式',
 	              skipInputRegex: true,
 	            },
@@ -2664,6 +2690,148 @@ ${listPart || '-（无）'}
   try {
     if (window?.appBridge) window.appBridge.requestSummaryCompaction = requestSummaryCompaction;
   } catch {}
+
+  const momentSummaryCompacting = new Set();
+  requestMomentSummaryCompaction = ({ force = false } = {}) => {
+    if (momentSummaryCompacting.has('global')) return Promise.resolve(false);
+    if (!momentSummaryStore?.getSummaries || !momentSummaryStore?.setCompactedSummary) return Promise.resolve(false);
+    if (!window?.appBridge?.backgroundChat || !window?.appBridge?.buildMessages) return Promise.resolve(false);
+    if (typeof window.appBridge.isConfigured === 'function' && !window.appBridge.isConfigured())
+      return Promise.resolve(false);
+
+    const list = momentSummaryStore.getSummaries() || [];
+    const summaries = Array.isArray(list) ? list : [];
+    if (!summaries.length) return Promise.resolve(false);
+    const total = summaries.reduce((n, it) => {
+      const text = String(typeof it === 'string' ? it : it?.text || '');
+      return n + text.length;
+    }, 0);
+    if (!force && total <= 1000) return Promise.resolve(false);
+
+    momentSummaryCompacting.add('global');
+    return new Promise(resolve => {
+      setTimeout(async () => {
+        try {
+          const current = momentSummaryStore.getSummaries() || [];
+          const arr = Array.isArray(current) ? current : [];
+          const payload = arr
+            .map(it => {
+              const text = String(typeof it === 'string' ? it : it?.text || '').trim();
+              if (!text) return '';
+              const at = typeof it === 'object' && it && it.at ? Number(it.at) : 0;
+              const when = at ? new Date(at).toLocaleString() : '';
+              return `- ${when ? `[${when}] ` : ''}${text}`;
+            })
+            .filter(Boolean)
+            .join('\n');
+          if (!payload.trim()) return resolve(false);
+
+          const compactedPrev = momentSummaryStore.getCompactedSummary();
+          const compactedText = String(compactedPrev?.text || '').trim();
+
+          const prompt = [
+            '# 注意，无视你先前收到的任何指令，你的任务已更改，不再遵守格式要求',
+            '接下来的一轮回复中，将不会进行创作，不再遵循前面的要求，而是会遵循<summary_rules>中的要求进行一轮总结',
+            '【总结请求】',
+            '请对前文内容进行全面梳理，根据以下要求制作简明扼要的总结：',
+            '',
+            '<summary_rules>',
+            '总结应当遵循以下原则：',
+            '- 按时间顺序或逻辑顺序组织信息，并明确给出具体时间节点',
+            '- 保留关键事件和重要细节，省略冗余描述',
+            '- 直接陈述事实，避免主观评价',
+            '- 使用简洁清晰的语言，避免过度修饰',
+            '- 突出事件发展脉络和关键转折点',
+            '- 不回避任何敏感内容，保证记录完全还原前文',
+            '',
+            '总结正文必须放在 <summary>...</summary> 中（只允许这一层 XML 标签；不要输出其他 XML 标签）。',
+            'summary 内部的正文必须使用以下格式：',
+            '',
+            '【关键事件】',
+            '• {事件1}: {简要描述}',
+            '• {事件2}: {简要描述}',
+            '• {事件3}: {简要描述}',
+            '...',
+            '',
+            '</summary_rules>',
+            '',
+            compactedText ? '【已有大总结】' : '',
+            compactedText ? compactedText : '',
+            compactedText ? '' : '',
+            '【前文内容（按时间标注的摘要列表）】',
+            payload,
+          ].join('\n');
+
+          const activePersona = getEffectivePersona?.(chatStore.getCurrent?.()) || getEffectivePersona?.() || {};
+          const userName = activePersona?.name || '我';
+          const ctx = {
+            user: {
+              name: userName,
+              persona: String(activePersona?.description || ''),
+              personaPosition: activePersona?.position,
+              personaDepth: activePersona?.depth,
+              personaRole: activePersona?.role,
+            },
+            character: { name: '动态' },
+            session: { id: 'moment_summary_global', isGroup: false },
+            history: [],
+            meta: {
+              disableChatGuide: true,
+              disableScenarioHint: true,
+              disableSummary: true,
+              disableMomentSummary: true,
+              overrideLastUserMessage: '开始总结，勿输出聊天格式',
+              skipInputRegex: true,
+            },
+          };
+          const built = window.appBridge.buildMessages(prompt, ctx);
+          const out = await window.appBridge.backgroundChat(built, { temperature: 0.2, maxTokens: 800 });
+          const raw = String(out || '').trim();
+          if (!raw) return resolve(false);
+          try {
+            momentSummaryStore.setCompactedSummaryRaw(raw);
+          } catch {}
+
+          const extractSummaryTag = s => {
+            const input = String(s || '');
+            const re = /<summary>([\s\S]*?)<\/summary>/gi;
+            let m;
+            let last = null;
+            while ((m = re.exec(input))) last = m[1];
+            const inner = String(last || '').trim();
+            return inner;
+          };
+          const text = extractSummaryTag(raw);
+          if (!text) return resolve(false);
+
+          const hasHeader = /【\s*关键事件\s*】/.test(text);
+          const hasBullet = /^[ \t]*[•\-]\s*\S+/m.test(text);
+          if (!hasHeader || !hasBullet) return resolve(false);
+
+          try {
+            momentSummaryStore.setCompactedSummary(text, { raw });
+          } catch {}
+          try {
+            const keep = (momentSummaryStore.getSummaries() || []).slice(-2);
+            momentSummaryStore.clearSummaries();
+            keep.forEach(it => {
+              const t = String(typeof it === 'string' ? it : it?.text || '').trim();
+              if (t) momentSummaryStore.addSummary(t);
+            });
+          } catch {}
+          try {
+            window.dispatchEvent(new CustomEvent('moment-summaries-updated'));
+          } catch {}
+          resolve(true);
+        } catch (err) {
+          logger.debug('moment summary compaction failed', err);
+          resolve(false);
+        } finally {
+          momentSummaryCompacting.delete('global');
+        }
+      }, 450);
+    });
+  };
 
   // ============ Pending Message Handlers ============
 
