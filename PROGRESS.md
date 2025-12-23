@@ -1402,3 +1402,14 @@
   - 群聊 AI 角色名为“系统/系统消息”时转为系统消息样式；群聊保存成员变更后立即刷新显示系统消息。
   - 修改：`src/scripts/ui/app.js`
   - 修改：`src/scripts/ui/group-chat-panels.js`
+- 2025-12-22 20:02
+  - 预设绑定正则：仅在对应预设启用时生效；切换预设会自动同步启用状态。
+  - MiPhone 兜底解析：未命中 `<content>` 时优先匹配 `MiPhone_start/end` 再继续解析。
+  - 修改：`src/scripts/ui/bridge.js`
+  - 修改：`src/scripts/ui/chat/dialogue-stream-parser.js`
+- 2025-12-22 20:30
+  - Prompt 占位符补齐：OpenAI prompt block、角色描述与 scenario/personality 格式支持 {{user}}/{{char}}/{{group}}/{{members}} 等宏替换。
+  - 修改：`src/scripts/ui/bridge.js`
+- 2025-12-22 21:05
+  - Prompt 结构调整：<chat_guide> 与世界书同位置注入；世界书不再重复；清理块之间多余空行。
+  - 修改：`src/scripts/ui/bridge.js`

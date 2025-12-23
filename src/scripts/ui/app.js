@@ -2414,6 +2414,7 @@ ${listPart || '-（无）'}
 	              disableScenarioHint: true,
 	              disableSummary: true,
 	              overrideLastUserMessage: '开始总结，勿输出聊天格式',
+	              skipInputRegex: true,
 	            },
 	          };
 	          const built = window.appBridge.buildMessages(prompt, ctx);

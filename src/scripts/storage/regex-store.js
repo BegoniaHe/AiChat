@@ -485,7 +485,7 @@ export class RegexStore {
             const allow =
                 (mdOnly && isMarkdown) ||
                 (prOnly && isPrompt) ||
-                (!mdOnly && !prOnly && !isMarkdown && !isPrompt);
+                (!mdOnly && !prOnly && (isPrompt || (!isMarkdown && !isPrompt)));
             if (!allow) continue;
 
             if (isEdit && !s.runOnEdit) continue;

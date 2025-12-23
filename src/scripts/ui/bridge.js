@@ -339,6 +339,17 @@ class AppBridge {
 
   getRegexContext() {
     const presetState = this.presets?.getState?.() || {};
+    const activePresets = (() => {
+      const active = presetState?.active || {};
+      const enabled = presetState?.enabled || {};
+      const out = {};
+      for (const [type, id] of Object.entries(active)) {
+        if (!id) continue;
+        if (enabled && enabled[type] === false) continue;
+        out[type] = id;
+      }
+      return out;
+    })();
     const worldIds = [];
     if (this.globalWorldId) worldIds.push(String(this.globalWorldId));
     if (this.currentWorldId) worldIds.push(String(this.currentWorldId));
@@ -346,7 +357,7 @@ class AppBridge {
       sessionId: this.activeSessionId,
       worldId: this.currentWorldId,
       worldIds,
-      activePresets: presetState?.active || {},
+      activePresets,
     };
   }
 
@@ -354,7 +365,18 @@ class AppBridge {
     try {
       await this.presets?.ready;
       await this.regex?.ready;
-      const active = this.presets?.getState?.()?.active || {};
+      const presetState = this.presets?.getState?.() || {};
+      const active = (() => {
+        const activePresets = presetState?.active || {};
+        const enabled = presetState?.enabled || {};
+        const out = {};
+        for (const [type, id] of Object.entries(activePresets)) {
+          if (!id) continue;
+          if (enabled && enabled[type] === false) continue;
+          out[type] = id;
+        }
+        return out;
+      })();
       const changed = await this.regex.syncPresetBindings?.(active);
       if (changed) {
         window.dispatchEvent(new CustomEvent('regex-changed'));
@@ -476,7 +498,7 @@ class AppBridge {
         isEdit: false,
         depth: 0,
       });
-      const promptInput = this.regex.apply(directInput, ctx, regex_placement.USER_INPUT, {
+      const promptInput = this.regex.apply(userMessage, ctx, regex_placement.USER_INPUT, {
         // Product requirement: as long as enabled, input regex should apply to outgoing prompt.
         // So, include markdownOnly scripts too when building outgoing prompt.
         isMarkdown: true,
@@ -484,7 +506,15 @@ class AppBridge {
         isEdit: false,
         depth: 0,
       });
-      const messages = this.buildMessages(promptInput, context);
+      const nextContext = {
+        ...(context || {}),
+        meta: {
+          ...(context?.meta || {}),
+          rawUserMessage: originalInput,
+          userMessageProcessed: true,
+        },
+      };
+      const messages = this.buildMessages(promptInput, nextContext);
       const config = this.config.get();
       const genOptions = this.getGenerationOptions();
       const requestOptions = { ...(genOptions || {}), signal: this.abortController.signal };
@@ -615,7 +645,11 @@ class AppBridge {
     const name1 = context?.user?.name || 'user';
     const name2 = context?.character?.name || 'assistant';
     const sessionIdForSummary = String(context?.session?.id || this.activeSessionId || 'default');
-    const pendingUserTextRaw = String(userMessage ?? '').trim();
+    const rawUserMessage = (typeof context?.meta?.rawUserMessage === 'string')
+      ? String(context.meta.rawUserMessage)
+      : String(userMessage ?? '');
+    const pendingUserTextRaw = String(rawUserMessage ?? '').trim();
+    const appendUserToHistory = context?.meta?.appendUserToHistory !== false;
     const isMomentCommentTask = String(context?.task?.type || '').toLowerCase() === 'moment_comment';
     const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
     const disableScenarioHint = Boolean(context?.meta?.disableScenarioHint);
@@ -635,10 +669,29 @@ class AppBridge {
       : pendingUserTextRaw;
     const effectiveLastUserMessage = overrideLastUserMessageRaw.trim() ? overrideLastUserMessageRaw.trim() : pendingUserText;
     const lastUserMessageRe = /{{\s*(?:lastUserMessage|userLastMessage|user_last_message)\s*}}/i;
+    const hasLastUserMessagePlaceholder = (raw) => lastUserMessageRe.test(String(raw || ''));
     let usedLastUserMessageForPendingInput = false;
+    const pendingUserPrompt = (() => {
+      if (!pendingUserTextRaw) return '';
+      if (context?.meta?.userMessageProcessed === true) return String(userMessage ?? '');
+      if (context?.meta?.skipInputRegex === true) return String(rawUserMessage ?? '');
+      return this.regex.apply(rawUserMessage, this.getRegexContext(), regex_placement.USER_INPUT, {
+        isMarkdown: true,
+        isPrompt: true,
+        isEdit: false,
+        depth: 0,
+      });
+    })();
     const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
       const raw = String(rawText ?? '');
       return raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: effectiveLastUserMessage }) : '';
+    };
+    const trimEdgeBlankLines = (text) =>
+      String(text ?? '').replace(/^(?:[ \t]*\r?\n)+/, '').replace(/(?:\r?\n[ \t]*)+$/, '');
+    const joinPromptBlocks = (blocks = []) => {
+      const parts = Array.isArray(blocks) ? blocks : [blocks];
+      const cleaned = parts.map(trimEdgeBlankLines).filter(s => String(s || '').trim().length > 0);
+      return cleaned.join('\n\n');
     };
     // SillyTavern-like persona settings (subset)
     const personaRaw = String(context?.user?.persona || '');
@@ -891,8 +944,8 @@ class AppBridge {
 	    // - 不混入历史数组（不会落入 <history>）
 	    // - 用 <chat_guide> 包裹，便于模型区分“聊天指南”与历史回顾
 	    // - 保证摘要提示词在所有聊天提示词下方
-	    const buildChatPromptBlocks = () => {
-	      if (Boolean(context?.meta?.disableChatGuide)) return [];
+	    const buildChatGuideContent = () => {
+	      if (Boolean(context?.meta?.disableChatGuide)) return '';
 	      const parts = [];
 	      if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
 	        parts.push(dialogueRules);
@@ -907,9 +960,9 @@ class AppBridge {
 	        parts.push(momentCommentRules);
 	      }
 	      if (summaryRules) parts.push(summaryRules);
-	      const content = parts.map(t => String(t || '').trim()).filter(Boolean).join('\n\n').trim();
-	      if (!content) return [];
-	      return [{ role: 'system', content: `<chat_guide>\n${content}\n</chat_guide>` }];
+	      const content = joinPromptBlocks(parts);
+	      if (!content) return '';
+	      return `<chat_guide>\n${content}\n</chat_guide>`;
 	    };
 
 	    const buildMomentCommentDataBlock = () => {
@@ -1005,7 +1058,7 @@ class AppBridge {
 	    };
 
 		    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
-	      const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
+      const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
       // ST promptOnly scripts: apply to outgoing prompt only
       const history = historyRaw.map((m, idx) => {
         const role = m?.role === 'user' ? 'user' : 'assistant';
@@ -1024,8 +1077,24 @@ class AppBridge {
         return { role, content: withSpeakerPrefix(out, speaker) };
       });
 
-		      // 聊天提示词：已迁移到 system 深度=1（历史前）的独立 system 区块（见 buildChatPromptBlocks）
-	      // 动态提示词已迁移到 <chat_guide>（紧跟 chat history 之后），不再按 position/depth 混入历史或 prompt 开头。
+      const pendingUserHistoryEntry = pendingUserPrompt
+        ? { role: 'user', content: pendingUserPrompt }
+        : null;
+      let pendingUserInsertIndex = -1;
+      const insertPendingUserIntoHistory = () => {
+        if (!appendUserToHistory || usedLastUserMessageForPendingInput || !pendingUserHistoryEntry) return;
+        if (pendingUserInsertIndex >= 0) return;
+        pendingUserInsertIndex = messages.length;
+        messages.push(pendingUserHistoryEntry);
+      };
+      const removePendingUserFromHistory = () => {
+        if (pendingUserInsertIndex < 0) return;
+        messages.splice(pendingUserInsertIndex, 1);
+        pendingUserInsertIndex = -1;
+      };
+
+      // 聊天提示词：统一打包为 <chat_guide>，与世界书放在同一位置（worldInfo marker）。
+      // 不再按 position/depth 混入历史或 prompt 开头。
 
       // Persona Description (SillyTavern-like): AT_DEPTH=4 injects into chat history
       if (personaText && personaPosition === 4) {
@@ -1046,12 +1115,19 @@ class AppBridge {
         scenario: context?.character?.scenario || '',
         personality: context?.character?.personality || '',
       };
-      const formatScenario = processTextMacrosWithPendingFlag(scenarioFormat, { scenario: macroVars.scenario });
-      const formatPersonality = processTextMacrosWithPendingFlag(personalityFormat, {
+      const macroContext = {
+        user: name1,
+        char: name2,
+        group: groupName || name2,
+        members: membersText,
+        scenario: macroVars.scenario,
         personality: macroVars.personality,
-      });
+      };
+      const formatScenario = processTextMacrosWithPendingFlag(scenarioFormat, macroContext);
+      const formatPersonality = processTextMacrosWithPendingFlag(personalityFormat, macroContext);
       // WORLD_INFO placement for prompt stage (supports promptOnly scripts)
-      let worldForPrompt = worldPrompt || '';
+      const chatGuideContent = buildChatGuideContent();
+      let worldForPrompt = joinPromptBlocks([worldPrompt, chatGuideContent]);
       if (worldForPrompt) {
         worldForPrompt = this.regex.apply(worldForPrompt, this.getRegexContext(), regex_placement.WORLD_INFO, {
           isMarkdown: false,
@@ -1061,14 +1137,17 @@ class AppBridge {
         });
       }
       const formatWorld = worldForPrompt ? wiFormat.replace('{0}', worldForPrompt) : '';
+      let worldInserted = false;
 
       const resolveMarker = identifier => {
         switch (identifier) {
           case 'worldInfoBefore':
           case 'worldInfoAfter':
+            if (!formatWorld || worldInserted) return '';
+            worldInserted = true;
             return formatWorld;
           case 'charDescription':
-            return context?.character?.description || '';
+            return processTextMacrosWithPendingFlag(context?.character?.description || '', macroContext);
           case 'charPersonality':
             return formatPersonality || '';
           case 'scenario':
@@ -1154,7 +1233,7 @@ class AppBridge {
 		        if (identifier === 'chatHistory') {
 		          messages.push(...historyRecallBlocks);
 		          if (history.length) messages.push(...history);
-		          messages.push(...buildChatPromptBlocks());
+              insertPendingUserIntoHistory();
 		          historyInserted = true;
 		          continue;
 		        }
@@ -1189,13 +1268,14 @@ class AppBridge {
           else if (context.systemPrompt) content = context.systemPrompt;
         }
         const rawHadLastUser = lastUserMessageRe.test(String(content || ''));
-        content = processTextMacrosWithPendingFlag(content, { user: name1, char: name2 });
+        content = processTextMacrosWithPendingFlag(content, macroContext);
         if (!content) continue;
 
         const role = String(pr?.role || 'system').toLowerCase();
         const mappedRole = role === 'user' || role === 'assistant' || role === 'system' ? role : 'system';
         if (!usedLastUserMessageForPendingInput && rawHadLastUser) {
           usedLastUserMessageForPendingInput = true;
+          removePendingUserFromHistory();
         }
         messages.push({ role: mappedRole, content });
       }
@@ -1203,35 +1283,55 @@ class AppBridge {
 	      if (!historyInserted) {
 	        messages.push(...historyRecallBlocks);
 	        if (history.length) messages.push(...history);
-	        messages.push(...buildChatPromptBlocks());
+          insertPendingUserIntoHistory();
 	      }
 
-	      // 摘要提示词已移入 buildChatPromptBlocks（系统深度=1），不在此处追加。
+	      // 摘要提示词包含在 <chat_guide> 内，与世界书一起注入。
 
       // Append current user message (unless already injected via {{lastUserMessage}} in prompt blocks)
-      if (!usedLastUserMessageForPendingInput) {
-        messages.push({ role: 'user', content: userMessage });
+      const pendingUserInserted = pendingUserInsertIndex >= 0;
+      if (!usedLastUserMessageForPendingInput && !pendingUserInserted && pendingUserPrompt) {
+        messages.push({ role: 'user', content: pendingUserPrompt });
       }
       return messages;
     }
+
+    const chatGuideContent = buildChatGuideContent();
+    const worldPromptCombined = joinPromptBlocks([worldPrompt, chatGuideContent]);
 
     const vars = {
       user: name1,
       char: name2,
       system: (() => {
-        if (useSysprompt && sysp?.content)
-          return processTextMacrosWithPendingFlag(sysp.content, { user: name1, char: name2 });
+        if (useSysprompt && sysp?.content) {
+          return processTextMacrosWithPendingFlag(sysp.content, {
+            user: name1,
+            char: name2,
+            group: groupName || name2,
+            members: membersText,
+          });
+        }
         return context.systemPrompt || '';
       })(),
       description: context?.character?.description || '',
       personality: processTextMacrosWithPendingFlag(personalityFormat, {
+        user: name1,
+        char: name2,
+        group: groupName || name2,
+        members: membersText,
         personality: context?.character?.personality || '',
       }),
-      scenario: processTextMacrosWithPendingFlag(scenarioFormat, { scenario: context?.character?.scenario || '' }),
+      scenario: processTextMacrosWithPendingFlag(scenarioFormat, {
+        user: name1,
+        char: name2,
+        group: groupName || name2,
+        members: membersText,
+        scenario: context?.character?.scenario || '',
+      }),
       persona: personaPosition === 0 ? personaText : '',
-      wiBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
+      wiBefore: worldPromptCombined ? wiFormat.replace('{0}', worldPromptCombined) : '',
       wiAfter: '',
-      loreBefore: worldPrompt ? wiFormat.replace('{0}', worldPrompt) : '',
+      loreBefore: worldPromptCombined ? wiFormat.replace('{0}', worldPromptCombined) : '',
       loreAfter: '',
       anchorBefore: '',
       anchorAfter: '',
@@ -1267,13 +1367,7 @@ class AppBridge {
       messages.push({ role: 'system', content: combinedStoryString });
     }
 
-	    // 动态评论提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
-
-	    // A) 私聊提示词：BEFORE_PROMPT / IN_PROMPT（仅非群聊/非动态评论）
-	    // （已迁移：统一放到世界书风格、system 深度=1 的历史注入）
-	    // 群聊提示词：BEFORE_PROMPT / IN_PROMPT 都视为系统开头注入（仅群聊）
-	    // （已迁移：统一放到世界书风格、system 深度=1 的历史注入）
-	    // 动态发布决策提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
+	    // 聊天提示词（私聊/群聊/动态/摘要）统一放入 <chat_guide>，与世界书同位置注入。
 
     // If context preset disabled, fall back to legacy system prompt building
     if (!useContext) {
@@ -1283,8 +1377,8 @@ class AppBridge {
       if (vars.system) {
         messages.push({ role: 'system', content: vars.system });
       }
-      if (worldPrompt) {
-        messages.push({ role: 'system', content: wiFormat.replace('{0}', worldPrompt) });
+      if (worldPromptCombined) {
+        messages.push({ role: 'system', content: wiFormat.replace('{0}', worldPromptCombined) });
       }
       if (context.character) {
         let characterPrompt = `你正在扮演: ${context.character.name}`;
@@ -1331,9 +1425,13 @@ class AppBridge {
       const idx = Math.max(0, history.length - injectDepth);
       history.splice(idx, 0, { role, content: combinedStoryString });
     }
-	    // 动态评论提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
-		    // 聊天提示词已迁移为独立 system 区块（系统深度=1），不再插入历史数组（避免落入 <history>）。
-	    // 动态发布决策提示词已迁移到 <chat_guide>（紧跟 chat history 之后）
+	    // 聊天提示词已由 <chat_guide> 统一承载，不再插入历史数组（避免落入 <history>）。
+    const postHistoryRaw = useSysprompt ? sysp?.post_history || '' : '';
+    const extraPromptBlocksRaw = Array.isArray(context?.meta?.extraPromptBlocks) ? context.meta.extraPromptBlocks : [];
+    const extraHasLastUser = extraPromptBlocksRaw.some(b => hasLastUserMessagePlaceholder(b?.content));
+    if (!usedLastUserMessageForPendingInput && (extraHasLastUser || hasLastUserMessagePlaceholder(postHistoryRaw))) {
+      usedLastUserMessageForPendingInput = true;
+    }
 
 		    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
 	    try {
@@ -1395,9 +1493,7 @@ class AppBridge {
 	    if (history.length > 0) {
 	      messages.push(...history);
 	    }
-		    messages.push(...buildChatPromptBlocks());
-
-	    // 摘要提示词已移入 buildChatPromptBlocks（系统深度=1），不在此处追加。
+	    // 摘要提示词包含在 <chat_guide> 内，与世界书一起注入。
 
     // 4) Post-history instructions (sysprompt.post_history)
     const postHistory = useSysprompt ? sysp?.post_history || '' : '';
@@ -1435,8 +1531,8 @@ class AppBridge {
     } catch {}
 
     // 5) Current user message
-    if (!usedLastUserMessageForPendingInput) {
-      messages.push({ role: 'user', content: pendingUserTextRaw ? pendingUserText : userMessage });
+    if (!usedLastUserMessageForPendingInput && pendingUserPrompt) {
+      messages.push({ role: 'user', content: pendingUserPrompt });
     }
     return messages;
   }
@@ -1715,7 +1811,9 @@ class AppBridge {
       return oa - ob;
     });
 
-    const parts = entries.map(e => String(e.content || '')).filter(t => t.trim().length > 0);
+    const trimEdgeBlankLines = (text) =>
+      String(text ?? '').replace(/^(?:[ \t]*\r?\n)+/, '').replace(/(?:\r?\n[ \t]*)+$/, '');
+    const parts = entries.map(e => trimEdgeBlankLines(e.content)).filter(t => String(t || '').trim().length > 0);
     if (!parts.length) return '';
     return parts.join('\n\n');
   }

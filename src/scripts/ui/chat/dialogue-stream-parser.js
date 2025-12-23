@@ -63,6 +63,22 @@ const findMatchingCloseTag = (s, tagName, fromIdx) => {
     }
 };
 
+const findMiPhoneStart = (s) => {
+    const src = String(s ?? '');
+    const re = /<\s*MiPhone_start\s*>|MiPhone_start/i;
+    const m = re.exec(src);
+    if (!m) return null;
+    return { index: m.index, length: m[0].length };
+};
+
+const findMiPhoneEnd = (s) => {
+    const src = String(s ?? '');
+    const re = /<\s*MiPhone_end\s*>|MiPhone_end/i;
+    const m = re.exec(src);
+    if (!m) return null;
+    return { index: m.index, length: m[0].length };
+};
+
 const GROUP_CHAT_BR_MARK = '\u000b';
 
 const splitSpeakerSegments = (line) => {
@@ -409,6 +425,7 @@ export class DialogueStreamParser {
         this.inContent = false;
         this.contentBuffer = '';
         this.ended = false;
+        this.contentWrapper = '';
     }
 
     push(chunk) {
@@ -426,24 +443,41 @@ export class DialogueStreamParser {
                 const start = this.preBuffer.toLowerCase().indexOf(m[0].toLowerCase());
                 const after = start + m[0].length;
                 this.inContent = true;
+                this.contentWrapper = 'content';
                 this.contentBuffer += this.preBuffer.slice(after);
                 this.preBuffer = '';
-            } else if (hasImplicitContentSignal(this.preBuffer)) {
-                // Fallback: some models may omit <content> wrapper but still output tags we can parse.
-                this.inContent = true;
-                this.contentBuffer += this.preBuffer;
-                this.preBuffer = '';
             } else {
-                // keep bounded to avoid memory growth before content
-                if (this.preBuffer.length > 80_000) this.preBuffer = this.preBuffer.slice(-40_000);
-                return events;
+                const miStart = findMiPhoneStart(this.preBuffer);
+                if (miStart) {
+                    const after = miStart.index + miStart.length;
+                    this.inContent = true;
+                    this.contentWrapper = 'miphone';
+                    this.contentBuffer += this.preBuffer.slice(after);
+                    this.preBuffer = '';
+                } else if (hasImplicitContentSignal(this.preBuffer)) {
+                    // Fallback: some models may omit <content> wrapper but still output tags we can parse.
+                    this.inContent = true;
+                    this.contentWrapper = 'implicit';
+                    this.contentBuffer += this.preBuffer;
+                    this.preBuffer = '';
+                } else {
+                    // keep bounded to avoid memory growth before content
+                    if (this.preBuffer.length > 80_000) this.preBuffer = this.preBuffer.slice(-40_000);
+                    return events;
+                }
             }
         } else {
             this.contentBuffer += text;
         }
 
         // If content ended, only parse within it
-        const endIdx = this.contentBuffer.toLowerCase().indexOf('</content>');
+        let endIdx = -1;
+        if (this.contentWrapper === 'content') {
+            endIdx = this.contentBuffer.toLowerCase().indexOf('</content>');
+        } else if (this.contentWrapper === 'miphone') {
+            const miEnd = findMiPhoneEnd(this.contentBuffer);
+            if (miEnd) endIdx = miEnd.index;
+        }
         let scanText = this.contentBuffer;
         if (endIdx !== -1) {
             scanText = this.contentBuffer.slice(0, endIdx);
