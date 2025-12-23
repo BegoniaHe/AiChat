@@ -9,7 +9,7 @@
 1. 打开 GitHub Pages 下载页（示例）：
    - `https://<owner>.github.io/<repo>/`
 2. 下载最新版 APK：
-   - `https://github.com/<owner>/<repo>/releases/latest/download/app-universal-release.apk`
+   - `https://github.com/dghiffjd7/AiChat/releases/latest/download/app-universal-release.apk`
 3. 如果手机里已安装开发版（`npm run dev` 安装的 Debug 包）或签名不同，先卸载旧版。
 4. 在手机系统中允许“安装未知来源应用”。
 5. 点击 APK 完成安装。
