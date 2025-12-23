@@ -667,21 +667,23 @@ class AppBridge {
     const pendingUserText = pendingUserTextRaw && !disableScenarioHint
       ? `${pendingUserTextRaw}（${scenarioHint}）`
       : pendingUserTextRaw;
-    const effectiveLastUserMessage = overrideLastUserMessageRaw.trim() ? overrideLastUserMessageRaw.trim() : pendingUserText;
     const lastUserMessageRe = /{{\s*(?:lastUserMessage|userLastMessage|user_last_message)\s*}}/i;
     const hasLastUserMessagePlaceholder = (raw) => lastUserMessageRe.test(String(raw || ''));
     let usedLastUserMessageForPendingInput = false;
     const pendingUserPrompt = (() => {
       if (!pendingUserTextRaw) return '';
-      if (context?.meta?.userMessageProcessed === true) return String(userMessage ?? '');
-      if (context?.meta?.skipInputRegex === true) return String(rawUserMessage ?? '');
-      return this.regex.apply(rawUserMessage, this.getRegexContext(), regex_placement.USER_INPUT, {
+      const baseText = disableScenarioHint ? String(rawUserMessage ?? '') : pendingUserText;
+      if (context?.meta?.skipInputRegex === true) return String(baseText ?? '');
+      return this.regex.apply(baseText, this.getRegexContext(), regex_placement.USER_INPUT, {
         isMarkdown: true,
         isPrompt: true,
         isEdit: false,
         depth: 0,
       });
     })();
+    const effectiveLastUserMessage = overrideLastUserMessageRaw.trim()
+      ? overrideLastUserMessageRaw.trim()
+      : pendingUserPrompt;
     const processTextMacrosWithPendingFlag = (rawText, extraContext) => {
       const raw = String(rawText ?? '');
       return raw ? this.processTextMacros(raw, { ...(extraContext || {}), lastUserMessage: effectiveLastUserMessage }) : '';

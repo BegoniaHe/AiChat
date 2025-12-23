@@ -2806,16 +2806,47 @@ ${listPart || '-（无）'}
         .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
     };
 
-	    const buildHistoryForLLM = pendingUserText => {
-	      const all = chatStore.getMessages(sessionId) || [];
+    const resolveStickerKeywordForHistory = message => {
+      if (!message || typeof message !== 'object') return '';
+      const raw = typeof message.raw === 'string' ? message.raw.trim() : '';
+      const rawKey = parseStickerToken(raw);
+      if (rawKey) return rawKey;
+      const meta = (message.meta && typeof message.meta === 'object') ? message.meta : null;
+      const metaLabel = String(meta?.assetLabel || '').trim();
+      if (metaLabel) return metaLabel;
+      const metaId = String(meta?.assetId || '').trim();
+      if (metaId) return metaId;
+      const content = typeof message.content === 'string' ? message.content.trim() : '';
+      if (!content) return '';
+      const contentKey = parseStickerToken(content);
+      if (contentKey) return contentKey;
+      const resolved = resolveMediaAsset('sticker', content) || resolveMediaAsset('image', content);
+      const resolvedLabel = String(resolved?.item?.label || '').trim();
+      if (resolvedLabel) return resolvedLabel;
+      const resolvedId = String(resolved?.item?.id || '').trim();
+      if (resolvedId) return resolvedId;
+      const base = content.split(/[\\/]/).pop() || '';
+      const file = base.split('?')[0].split('#')[0];
+      return file.replace(/\.[a-z0-9]+$/i, '').trim();
+    };
+
+    const buildHistoryForLLM = pendingUserText => {
+      const all = chatStore.getMessages(sessionId) || [];
       const history = all
         .filter(m => m && m.status !== 'pending' && m.status !== 'sending')
         .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .map(m => ({
-          role: m.role,
-          content: typeof m.raw === 'string' ? m.raw : m.content,
-          name: typeof m.name === 'string' ? m.name : '',
-        }));
+        .map(m => {
+          let content = typeof m.raw === 'string' ? m.raw : m.content;
+          if (m?.type === 'sticker') {
+            const key = resolveStickerKeywordForHistory(m);
+            if (key) content = buildStickerToken(key);
+          }
+          return {
+            role: m.role,
+            content,
+            name: typeof m.name === 'string' ? m.name : '',
+          };
+        });
 	      const last = history[history.length - 1];
 	      if (
 	        pendingUserText &&
