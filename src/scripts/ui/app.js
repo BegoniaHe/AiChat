@@ -763,6 +763,7 @@ ${listPart || '-（无）'}
     };
 
     let out = String(text ?? '');
+    out = out.replace(/<!--[\s\S]*?-->/g, '');
     out = stripXmlBlocks(out);
     out = stripLeadingUserSpeakerLines(out, userName);
     out = out.replace(/\n{4,}/g, '\n\n\n');

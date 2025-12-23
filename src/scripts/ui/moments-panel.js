@@ -7,30 +7,51 @@ import { resolveMediaAsset, isLikelyUrl, isAssetRef } from '../utils/media-asset
 
 const esc = s =>
   String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const htmlText = s => {
-  // Escape first, then allow only <br> to render as line breaks.
-  return esc(s)
-    .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
-    .replace(/\n/g, '<br>');
-};
-
 const normalizeInlineBreaks = (s) => String(s ?? '')
   .replace(/&lt;br\s*\/?&gt;/gi, '\n')
   .replace(/<br\s*\/?>/gi, '\n');
 
-const appendTextWithBreaks = (el, text) => {
-  const parts = String(text || '').split('\n');
-  parts.forEach((part, idx) => {
-    if (idx) el.appendChild(document.createElement('br'));
-    if (part) el.appendChild(document.createTextNode(part));
-  });
+const renderTextWithStickers = (raw = '') => {
+  const input = normalizeInlineBreaks(raw);
+  if (!input) return '';
+  const TOKEN_RE = /\[bqb-([\s\S]+?)\]/gi;
+  let output = '';
+  let lastIndex = 0;
+
+  const appendText = (text) => {
+    if (!text) return;
+    output += esc(text).replace(/\n/g, '<br>');
+  };
+
+  const appendSticker = (payload, fallback) => {
+    const resolved = resolveMediaAsset('sticker', payload);
+    const url = resolved?.url || '';
+    if (!url) {
+      appendText(fallback);
+      return;
+    }
+    if (output && !output.endsWith('<br>')) output += '<br>';
+    output += `<span class="moment-sticker-wrap"><img class="moment-sticker" src="${esc(url)}" alt="${esc(payload)}"></span>`;
+    output += '<br>';
+  };
+
+  let match;
+  while ((match = TOKEN_RE.exec(input))) {
+    appendText(input.slice(lastIndex, match.index));
+    const payload = String(match[1] || '').trim();
+    if (payload) appendSticker(payload, match[0]);
+    else appendText(match[0]);
+    lastIndex = TOKEN_RE.lastIndex;
+  }
+  appendText(input.slice(lastIndex));
+  return output;
 };
 
 const extractMomentMedia = (raw = '') => {
   const text = normalizeInlineBreaks(raw);
   const images = [];
   const audios = [];
-  const TOKEN_RE = /\[(img|bqb|yy)-([\s\S]+?)\]|<img\s+[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  const TOKEN_RE = /\[(img|yy)-([\s\S]+?)\]|<img\s+[^>]*src=["']([^"']+)["'][^>]*>/gi;
   let output = '';
   let lastIndex = 0;
 
@@ -71,7 +92,7 @@ const extractMomentMedia = (raw = '') => {
       if (!ok) output += match[0];
       continue;
     }
-    const ok = pushImage(payload, type === 'bqb' ? 'sticker' : 'image');
+    const ok = pushImage(payload, 'image');
     if (!ok) output += match[0];
   }
   output += text.slice(lastIndex);
@@ -371,7 +392,7 @@ export class MomentsPanel {
               return `
                         <div class="moment-comment moment-comment-reply" data-comment-id="${esc(rid)}" style="margin-left:20px; padding-left:10px; border-left:2px solid rgba(0,0,0,0.08);">
                             <span class="comment-user"><span class="comment-author" role="button" tabindex="0" data-comment-id="${esc(rid)}" style="cursor:pointer; font-weight:800;">${esc(rauthor)}</span> 回复 <span class="comment-replyto" style="font-weight:800;">${esc(toName)}</span>：</span>
-                            <span class="comment-text">${htmlText(rcontent)}</span>
+                            <span class="comment-text">${renderTextWithStickers(rcontent)}</span>
                         </div>
                     `;
             })
@@ -379,7 +400,7 @@ export class MomentsPanel {
           return `
                         <div class="moment-comment" data-comment-id="${esc(cid)}">
                             <span class="comment-user"><span class="comment-author" role="button" tabindex="0" data-comment-id="${esc(cid)}" style="cursor:pointer; font-weight:800;">${esc(author)}</span>：</span>
-                            <span class="comment-text">${htmlText(content)}</span>
+                            <span class="comment-text">${renderTextWithStickers(content)}</span>
                         </div>
                         ${replyHtml}
                     `;
@@ -395,7 +416,7 @@ export class MomentsPanel {
                     <button class="moment-more" aria-label="更多" title="更多">⋯</button>
                 </div>
                 <div class="moment-content">
-                    <div class="moment-text">${htmlText(m.content || '')}</div>
+                    <div class="moment-text"></div>
                 </div>
                 <div class="moment-stats">
                     <span>👁 浏览${Number(m.views || 0)}次</span>
@@ -447,13 +468,9 @@ export class MomentsPanel {
       const textEl = card.querySelector('.moment-text');
       if (textEl) {
         textEl.innerHTML = '';
-        const textValue = String(media.text || '').trim();
-        if (textValue) {
-          appendTextWithBreaks(textEl, textValue);
-          textEl.style.display = '';
-        } else {
-          textEl.style.display = 'none';
-        }
+        const html = renderTextWithStickers(media.text || '');
+        textEl.innerHTML = html;
+        textEl.style.display = html ? '' : 'none';
       }
       const contentEl = card.querySelector('.moment-content');
       if (contentEl) {
@@ -753,7 +770,7 @@ export class MomentsPanel {
                         <div style="color:#64748b; font-size:12px; margin-top:2px;">${esc(m.time || '')} · 👁 ${Number(
         m.views || 0,
       )} · 👍 ${Number(m.likes || 0)}</div>
-                        <div class="moment-detail-text" style="margin-top:10px; overflow-wrap:anywhere;">${htmlText(m.content || '')}</div>
+                        <div class="moment-detail-text" style="margin-top:10px; overflow-wrap:anywhere;"></div>
                     </div>
                 </div>
                 <div style="margin-top:14px; font-weight:800;">评论</div>
@@ -765,7 +782,7 @@ export class MomentsPanel {
                               c => `
                         <div class="moment-detail-comment" data-comment-id="${esc(c.id || '')}" style="border:1px solid #e5e7eb; border-radius:12px; padding:10px;">
                             <div class="moment-detail-author" role="button" tabindex="0" data-comment-id="${esc(c.id || '')}" style="font-weight:800; font-size:13px; cursor:pointer;">${esc(c.author || '')}</div>
-                            <div style="margin-top:6px; overflow-wrap:anywhere;">${htmlText(c.content || '')}</div>
+                            <div style="margin-top:6px; overflow-wrap:anywhere;">${renderTextWithStickers(c.content || '')}</div>
                         </div>
                     `,
                             )
@@ -778,11 +795,10 @@ export class MomentsPanel {
       const detailText = body.querySelector('.moment-detail-text');
       if (detailText) {
         detailText.innerHTML = '';
-        const textValue = String(media.text || '').trim();
-        if (textValue) appendTextWithBreaks(detailText, textValue);
+        const html = renderTextWithStickers(media.text || '');
+        detailText.innerHTML = html;
         const hasMedia = media.images.length || media.audios.length;
-        if (!textValue && !hasMedia) detailText.style.display = 'none';
-        else detailText.style.display = '';
+        detailText.style.display = html || hasMedia ? '' : 'none';
       }
       if (media.images.length) {
         const grid = document.createElement('div');

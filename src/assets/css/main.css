@@ -885,6 +885,26 @@ body,
   margin-bottom: 10px;
 }
 
+.moment-sticker-wrap {
+  display: block;
+  margin: 6px 0;
+}
+
+.moment-sticker {
+  display: block;
+  width: 140px;
+  max-width: 70%;
+  height: auto;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.moment-comment .moment-sticker,
+.moment-detail-comment .moment-sticker {
+  width: 48px;
+  max-width: 48px;
+}
+
 .moment-images {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
