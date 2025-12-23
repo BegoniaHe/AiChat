@@ -1,5 +1,7 @@
 # ChatApp
 
+本项目启发于 SillyTavern，灵感多数来自 Discord 的“类脑”相关讨论。
+
 一个基于 Tauri 的聊天应用，支持多模型对话、流式回复、动态与群聊，并提供贴图与多媒体渲染。
 
 ## 下载与安装（Android）
@@ -7,7 +9,7 @@
 1. 打开 GitHub Pages 下载页（示例）：
    - `https://<owner>.github.io/<repo>/`
 2. 下载最新版 APK：
-   - `app-universal-release.apk`
+   - `https://github.com/<owner>/<repo>/releases/latest/download/app-universal-release.apk`
 3. 如果手机里已安装开发版（`npm run dev` 安装的 Debug 包）或签名不同，先卸载旧版。
 4. 在手机系统中允许“安装未知来源应用”。
 5. 点击 APK 完成安装。
