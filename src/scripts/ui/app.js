@@ -769,6 +769,48 @@ ${listPart || '-（无）'}
     return out.trimStart();
   };
 
+  const normalizeEchoText = (text = '') => {
+    const raw = String(text || '');
+    return raw
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+  };
+
+  const createUserEchoGuard = (sentText, userName) => {
+    const sentNorm = normalizeEchoText(sentText);
+    const sentLoose = sentNorm.replace(/\s+/g, '');
+    const parts = sentNorm.split('\n').map(s => s.trim()).filter(Boolean);
+    const partLoose = new Set(parts.map(s => s.replace(/\s+/g, '')));
+    let seenNonEcho = false;
+
+    const isUserSpeaker = (speaker) => {
+      const raw = String(speaker || '').trim().replace(/[：:]/g, '');
+      if (!raw) return false;
+      const lower = raw.toLowerCase();
+      const user = String(userName || '').trim();
+      if (user && raw === user) return true;
+      return raw === '我' || raw === '用户' || lower === 'user';
+    };
+
+    return {
+      shouldDrop: (content, speaker = '') => {
+        if (seenNonEcho) return false;
+        const text = normalizeEchoText(content);
+        const loose = text.replace(/\s+/g, '');
+        if (!text) return true;
+        const matchesFull = (sentNorm && (text === sentNorm || loose === sentLoose));
+        const matchesPart = partLoose.size && partLoose.has(loose);
+        const speakerOk = speaker ? isUserSpeaker(speaker) : true;
+        if (speakerOk && (matchesFull || matchesPart)) return true;
+        seenNonEcho = true;
+        return false;
+      },
+    };
+  };
+
   const normalizeLooseName = (s) => {
     const raw = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
     return raw.replace(/[^a-z0-9\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, '');
@@ -2968,6 +3010,7 @@ ${listPart || '-（无）'}
       contact?.name || (sessionId.startsWith('group:') ? sessionId.replace(/^group:/, '') : sessionId) || 'assistant';
     const activePersona = getEffectivePersona(sessionId);
     const userName = activePersona.name || '我';
+    const userEchoGuard = createUserEchoGuard(text, userName);
     const isGroupChat = Boolean(contact?.isGroup) || sessionId.startsWith('group:');
     const groupMembers = isGroupChat ? (Array.isArray(contact?.members) ? contact.members : []) : [];
     const normalizeName = s => String(s || '').trim();
@@ -3353,6 +3396,7 @@ ${listPart || '-（无）'}
                   }
                   const isMe =
                     speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+                  if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                   const role = isMe ? 'user' : 'assistant';
                   const c = isMe ? null : resolveContactByDisplayName(speaker);
                   const parsed = {
@@ -3385,7 +3429,9 @@ ${listPart || '-（无）'}
               summarySessionIds.add(targetSessionId);
 
               ev.messages.forEach(msgText => {
-                const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                const rawMsg = String(msgText || '');
+                if (userEchoGuard.shouldDrop(rawMsg)) return;
+                const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
                 const parsed = {
                   role: 'assistant',
                   type: 'text',
@@ -3477,6 +3523,7 @@ ${listPart || '-（无）'}
                         speaker === userName ||
                         normalizeLoose(speaker) === normalizeLoose(userName) ||
                         speaker === '用户';
+                      if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                       const role = isMe ? 'user' : 'assistant';
                       const c = isMe ? null : resolveContactByDisplayName(speaker);
                       const parsed = {
@@ -3501,7 +3548,9 @@ ${listPart || '-（无）'}
                     if (!targetSessionId) return;
                     summarySessionIds.add(targetSessionId);
                     (ev.messages || []).forEach(msgText => {
-                      const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                      const rawMsg = String(msgText || '');
+                      if (userEchoGuard.shouldDrop(rawMsg)) return;
+                      const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
                       const parsed = {
                         role: 'assistant',
                         type: 'text',
@@ -3577,6 +3626,7 @@ ${listPart || '-（无）'}
                           speaker === userName ||
                           normalizeLoose(speaker) === normalizeLoose(userName) ||
                           speaker === '用户';
+                        if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                         const role = isMe ? 'user' : 'assistant';
                         const c = isMe ? null : resolveContactByDisplayName(speaker);
                         const parsed = {
@@ -3601,7 +3651,9 @@ ${listPart || '-（无）'}
                       if (!targetSessionId) return;
                       summarySessionIds.add(targetSessionId);
                       (ev.messages || []).forEach(msgText => {
-                        const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                        const rawMsg = String(msgText || '');
+                        if (userEchoGuard.shouldDrop(rawMsg)) return;
+                        const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
                         const parsed = {
                           role: 'assistant',
                           type: 'text',
@@ -3745,6 +3797,7 @@ ${listPart || '-（无）'}
                 }
                 const isMe =
                   speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+                if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                 const role = isMe ? 'user' : 'assistant';
                 const c = isMe ? null : resolveContactByDisplayName(speaker);
                 const parsed = {
@@ -3770,7 +3823,9 @@ ${listPart || '-（无）'}
               }
               summarySessionIds.add(targetSessionId);
               (ev.messages || []).forEach(msgText => {
-                const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                const rawMsg = String(msgText || '');
+                if (userEchoGuard.shouldDrop(rawMsg)) return;
+                const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
                 const parsed = {
                   role: 'assistant',
                   ...parseSpecialMessage(cleaned),
@@ -3848,6 +3903,7 @@ ${listPart || '-（无）'}
                       speaker === userName ||
                       normalizeLoose(speaker) === normalizeLoose(userName) ||
                       speaker === '用户';
+                    if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                     const role = isMe ? 'user' : 'assistant';
                     const c = isMe ? null : resolveContactByDisplayName(speaker);
                     const parsed = {
@@ -3870,7 +3926,9 @@ ${listPart || '-（无）'}
                   if (!targetSessionId) return;
                   summarySessionIds.add(targetSessionId);
                   (ev.messages || []).forEach(msgText => {
-                    const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                    const rawMsg = String(msgText || '');
+                    if (userEchoGuard.shouldDrop(rawMsg)) return;
+                    const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
                     const parsed = {
                       role: 'assistant',
                       ...parseSpecialMessage(cleaned),
@@ -3933,6 +3991,7 @@ ${listPart || '-（无）'}
                         speaker === userName ||
                         normalizeLoose(speaker) === normalizeLoose(userName) ||
                         speaker === '用户';
+                      if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                       const role = isMe ? 'user' : 'assistant';
                       const c = isMe ? null : resolveContactByDisplayName(speaker);
                       const parsed = {
@@ -3955,7 +4014,9 @@ ${listPart || '-（无）'}
                     if (!targetSessionId) return;
                     summarySessionIds.add(targetSessionId);
                     (ev.messages || []).forEach(msgText => {
-                      const cleaned = sanitizeAssistantReplyText(String(msgText || ''), userName);
+                      const rawMsg = String(msgText || '');
+                      if (userEchoGuard.shouldDrop(rawMsg)) return;
+                      const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
                       const parsed = {
                         role: 'assistant',
                         ...parseSpecialMessage(cleaned),
