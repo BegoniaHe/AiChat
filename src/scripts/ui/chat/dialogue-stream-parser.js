@@ -37,11 +37,16 @@ const parseOpenTag = (s, startIdx) => {
     const raw = s.slice(startIdx + 1, gt).trim();
     const isClosing = raw.startsWith('/');
     let core = isClosing ? raw.slice(1).trim() : raw;
-    const selfClosing = core.endsWith('/') || raw.endsWith('/'); // <br/> or <tag .../>
+    let selfClosing = core.endsWith('/') || raw.endsWith('/'); // <br/> or <tag .../>
     if (core.endsWith('/')) core = core.slice(0, -1).trim();
     // NOTE: Our protocol tag names may contain spaces (e.g. "我和Lara croft的私聊"),
     // so we intentionally do NOT split by whitespace (attributes are not expected in these tags).
     const tagName = core;
+    const tagLower = tagName.toLowerCase();
+    if (!selfClosing) {
+        const voidTags = ['br', 'img', 'hr', 'input', 'meta', 'link'];
+        selfClosing = voidTags.some(t => tagLower === t || tagLower.startsWith(`${t} `));
+    }
     return { tagName, isClosing, selfClosing, endIdx: gt + 1 };
 };
 

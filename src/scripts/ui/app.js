@@ -4,7 +4,7 @@ import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { logger } from '../utils/logger.js';
-import { initMediaAssets, listMediaAssets, resolveMediaAsset } from '../utils/media-assets.js';
+import { initMediaAssets, listMediaAssets, resolveMediaAsset, isAssetRef, isLikelyUrl } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
 import './bridge.js';
 import { ChatUI } from './chat/chat-ui.js';
@@ -353,7 +353,8 @@ const initApp = async () => {
         return tail
           .map(c => {
             const a = String(c?.author || '').trim();
-            const content = String(c?.content || '').replace(/\n/g, '<br>');
+            const normalized = normalizeStickerTextForPrompt(c?.content || '');
+            const content = String(normalized || '').replace(/\n/g, '<br>');
             const rta = String(c?.replyToAuthor || '').trim();
             const parts = [
               a ? `author::${a}` : '',
@@ -374,7 +375,7 @@ const initApp = async () => {
       const promptData = `
 【QQ空间动态评论回复（数据）】
 发布者: ${authorName}
-动态内容: ${String(m.content || '').trim()}
+动态内容: ${String(normalizeStickerTextForPrompt(m.content || '') || '').trim()}
 动态时间: ${String(m.time || '').trim() || '（未知）'}
 
 【用户评论】
@@ -384,7 +385,7 @@ ${
   isReplyToComment
     ? `【回复上下文】
 reply_to_author: ${replyTo.author}
-reply_to_content: ${String(replyTo.content || '').trim()}
+reply_to_content: ${String(normalizeStickerTextForPrompt(replyTo.content || '') || '').trim()}
 `
     : ''
 }
@@ -416,8 +417,43 @@ ${listPart || '-（无）'}
             return;
           }
           if (ev.type === 'moment_reply') {
-            const mid = String(ev.momentId || '').trim() || id;
+            const requestedId = String(ev.momentId || '').trim();
+            let mid = requestedId || id;
             const incoming = Array.isArray(ev.comments) ? ev.comments : [];
+            let targetMoment = momentsStore.get(mid);
+            if (!targetMoment && id && id !== mid) {
+              const fallbackMoment = momentsStore.get(id);
+              if (fallbackMoment) {
+                try {
+                  logger.warn(
+                    'moment_reply target not found; fallback to current',
+                    JSON.stringify({
+                      momentId: mid,
+                      fallbackId: id,
+                      commentCount: incoming.length,
+                    }),
+                  );
+                } catch {}
+                mid = id;
+                targetMoment = fallbackMoment;
+              }
+            }
+            if (!targetMoment) {
+              try {
+                const list = (momentsStore.list?.() || []).map(m => String(m?.id || '')).filter(Boolean);
+                logger.warn(
+                  'moment_reply target not found',
+                  JSON.stringify({
+                    momentId: mid,
+                    requestedId,
+                    commentCount: incoming.length,
+                    knownCount: list.length,
+                    knownSample: list.slice(0, 6),
+                  }),
+                );
+              } catch {}
+              return;
+            }
             const patched = (() => {
               if (!isReplyToComment || !replyTo?.id) return incoming;
               return incoming.map(c => {
@@ -432,7 +468,19 @@ ${listPart || '-（无）'}
                 return { ...c, replyTo: String(replyTo.id || ''), replyToAuthor: String(replyTo.author || '') };
               });
             })();
-            momentsStore.addComments(mid, patched);
+            const saved = momentsStore.addComments(mid, patched);
+            if (!saved) {
+              try {
+                logger.warn(
+                  'moment_reply addComments failed',
+                  JSON.stringify({
+                    momentId: mid,
+                    commentCount: patched.length,
+                  }),
+                );
+              } catch {}
+              return;
+            }
             try {
               bumpMomentEngagement(mid, n);
             } catch {}
@@ -468,6 +516,50 @@ ${listPart || '-（无）'}
           } catch {}
         }
         return { touchedMoments, touchedChats };
+      };
+
+      const extractMomentSummary = text => {
+        const raw = String(text ?? '');
+        const re = /<details>\s*<summary>\s*摘要\s*<\/summary>\s*([\s\S]*?)<\/details>/gi;
+        let m;
+        let last = null;
+        while ((m = re.exec(raw))) last = m[1];
+        if (!last) return '';
+        const plain = String(last || '').replace(/<[^>]+>/g, ' ');
+        return plain
+          .trim()
+          .replace(/\s+/g, ' ')
+          .replace(/[A-Za-z]+/g, '')
+          .trim();
+      };
+
+      const applyMomentSummary = raw => {
+        const summary = extractMomentSummary(raw);
+        if (!summary) return;
+        try {
+          chatStore.addSummary(summary, originSessionId);
+        } catch {}
+        try {
+          requestSummaryCompaction(originSessionId);
+        } catch {}
+      };
+
+      const extractMomentReplySegments = text => {
+        const raw = String(text ?? '');
+        const lower = raw.toLowerCase();
+        const startMark = 'moment_reply_start';
+        const endMark = 'moment_reply_end';
+        const chunks = [];
+        let idx = 0;
+        while (true) {
+          const startIdx = lower.indexOf(startMark, idx);
+          if (startIdx === -1) break;
+          const endIdx = lower.indexOf(endMark, startIdx + startMark.length);
+          if (endIdx === -1) break;
+          chunks.push(raw.slice(startIdx, endIdx + endMark.length));
+          idx = endIdx + endMark.length;
+        }
+        return chunks.join('\n');
       };
 
       try {
@@ -536,28 +628,42 @@ ${listPart || '-（无）'}
               const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
               return raw.slice(cut);
             };
-            const normalizeMiPhoneMarkersForMoment = (text) => {
-              const raw = String(text ?? '');
-              if (!raw) return raw;
-              return raw
-                .replace(/&lt;\s*\/?\s*MiPhone_(start|end)\s*\/?\s*&gt;/gi, (_, token) => `MiPhone_${token}`)
-                .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
+            const parseMomentReplyFrom = (text) => {
+              if (!text) return false;
+              const retryParser = new DialogueStreamParser({ userName: '我' });
+              const retryEvents = retryParser.push(text);
+              const res = applyEvents(retryEvents);
+              if (res?.touchedMoments) sawMomentReply = true;
+              return Boolean(res?.touchedMoments);
             };
 
             const retryText = sanitizeThinkingForMoment(fullRaw);
             if (retryText && retryText !== fullRaw) {
-              const retryParser = new DialogueStreamParser({ userName: '我' });
-              const retryEvents = retryParser.push(retryText);
-              const res = applyEvents(retryEvents);
-              if (res?.touchedMoments) sawMomentReply = true;
+              try {
+                logger.debug(
+                  'moment_reply retry: stripped thinking',
+                  JSON.stringify({
+                    originalLen: String(fullRaw || '').length,
+                    retryLen: String(retryText || '').length,
+                  }),
+                );
+              } catch {}
+              parseMomentReplyFrom(retryText);
             }
             if (!sawMomentReply) {
-              const miPhoneText = normalizeMiPhoneMarkersForMoment(sanitizeThinkingForMoment(fullRaw));
-              if (miPhoneText && miPhoneText !== fullRaw) {
-                const retryParser = new DialogueStreamParser({ userName: '我' });
-                const retryEvents = retryParser.push(miPhoneText);
-                const res = applyEvents(retryEvents);
-                if (res?.touchedMoments) sawMomentReply = true;
+              const extracted = extractMomentReplySegments(retryText || fullRaw);
+              try {
+                logger.debug(
+                  'moment_reply retry: extracted segments',
+                  JSON.stringify({
+                    extractedLen: String(extracted || '').length,
+                    hasStart: String((retryText || fullRaw) || '').toLowerCase().includes('moment_reply_start'),
+                    hasEnd: String((retryText || fullRaw) || '').toLowerCase().includes('moment_reply_end'),
+                  }),
+                );
+              } catch {}
+              if (extracted) {
+                parseMomentReplyFrom(extracted);
               }
             }
           } catch {}
@@ -568,7 +674,23 @@ ${listPart || '-（无）'}
             await momentsStore.flush();
           } catch {}
         } else {
+          try {
+            logger.warn(
+              'moment_reply parse failed',
+              JSON.stringify({
+                momentId: id,
+                hasStart: String(fullRaw || '').toLowerCase().includes('moment_reply_start'),
+                hasEnd: String(fullRaw || '').toLowerCase().includes('moment_reply_end'),
+                rawLen: String(fullRaw || '').length,
+              }),
+            );
+          } catch {}
           window.toastr?.warning?.('未解析到动态评论回复（可能格式不正确）');
+        }
+        if (fullRaw) {
+          try {
+            applyMomentSummary(fullRaw);
+          } catch {}
         }
       } catch (err) {
         logger.error('动态评论生成失败', err);
@@ -776,6 +898,50 @@ ${listPart || '-（无）'}
       if (key) tokens.push(key);
     }
     return tokens;
+  };
+
+  const resolveStickerKeywordFromText = (value, { allowLabel = false } = {}) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const tokenKey = parseStickerToken(raw);
+    if (tokenKey) return tokenKey;
+    const assetish =
+      isLikelyUrl(raw) ||
+      isAssetRef(raw) ||
+      /[\\/]/.test(raw) ||
+      /\.(png|jpe?g|webp|gif)$/i.test(raw);
+    if (!allowLabel && !assetish) return '';
+    const resolved = resolveMediaAsset('sticker', raw);
+    if (resolved?.item && resolved.item.kind !== 'sticker') return '';
+    const label = String(resolved?.item?.label || '').trim();
+    if (label && (allowLabel || assetish)) return label;
+    const id = String(resolved?.item?.id || '').trim();
+    if (id && (allowLabel || assetish)) return id;
+    if (!assetish) return '';
+    const base = raw.split(/[\\/]/).pop() || '';
+    const file = base.split('?')[0].split('#')[0];
+    return file.replace(/\.[a-z0-9]+$/i, '').trim();
+  };
+
+  const resolveStickerKeywordForMessage = message => {
+    if (!message || typeof message !== 'object') return '';
+    const raw = typeof message.raw === 'string' ? message.raw.trim() : '';
+    const rawKey = parseStickerToken(raw);
+    if (rawKey) return rawKey;
+    const meta = (message.meta && typeof message.meta === 'object') ? message.meta : null;
+    const metaLabel = String(meta?.assetLabel || '').trim();
+    if (metaLabel) return metaLabel;
+    const metaId = String(meta?.assetId || '').trim();
+    if (metaId) return metaId;
+    const content = typeof message.content === 'string' ? message.content.trim() : '';
+    return resolveStickerKeywordFromText(content, { allowLabel: message.type === 'sticker' });
+  };
+
+  const normalizeStickerTextForPrompt = text => {
+    const raw = String(text || '').trim();
+    if (!raw) return '';
+    const key = resolveStickerKeywordFromText(raw, { allowLabel: false });
+    return key ? buildStickerToken(key) : raw;
   };
 
   const getMessageSendText = message => {
@@ -2806,30 +2972,6 @@ ${listPart || '-（无）'}
         .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
     };
 
-    const resolveStickerKeywordForHistory = message => {
-      if (!message || typeof message !== 'object') return '';
-      const raw = typeof message.raw === 'string' ? message.raw.trim() : '';
-      const rawKey = parseStickerToken(raw);
-      if (rawKey) return rawKey;
-      const meta = (message.meta && typeof message.meta === 'object') ? message.meta : null;
-      const metaLabel = String(meta?.assetLabel || '').trim();
-      if (metaLabel) return metaLabel;
-      const metaId = String(meta?.assetId || '').trim();
-      if (metaId) return metaId;
-      const content = typeof message.content === 'string' ? message.content.trim() : '';
-      if (!content) return '';
-      const contentKey = parseStickerToken(content);
-      if (contentKey) return contentKey;
-      const resolved = resolveMediaAsset('sticker', content) || resolveMediaAsset('image', content);
-      const resolvedLabel = String(resolved?.item?.label || '').trim();
-      if (resolvedLabel) return resolvedLabel;
-      const resolvedId = String(resolved?.item?.id || '').trim();
-      if (resolvedId) return resolvedId;
-      const base = content.split(/[\\/]/).pop() || '';
-      const file = base.split('?')[0].split('#')[0];
-      return file.replace(/\.[a-z0-9]+$/i, '').trim();
-    };
-
     const buildHistoryForLLM = pendingUserText => {
       const all = chatStore.getMessages(sessionId) || [];
       const history = all
@@ -2837,10 +2979,8 @@ ${listPart || '-（无）'}
         .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
         .map(m => {
           let content = typeof m.raw === 'string' ? m.raw : m.content;
-          if (m?.type === 'sticker') {
-            const key = resolveStickerKeywordForHistory(m);
-            if (key) content = buildStickerToken(key);
-          }
+          const key = resolveStickerKeywordForMessage(m);
+          if (key) content = buildStickerToken(key);
           return {
             role: m.role,
             content,
