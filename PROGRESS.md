@@ -8,6 +8,9 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-24 02:45
+  - Android 调试包隔离：debug 使用 applicationIdSuffix `.dev`，可与 release 共存。
+  - 修改：`src-tauri/gen/android/app/build.gradle.kts`
 - 2025-12-24 02:12
   - 发布页模板：新增 GitHub Pages 下载页模板，按钮直链 Releases 最新 APK。
   - 自动发布脚本：新增 `scripts/release.ps1`，支持打包、签名与发布 Release。
