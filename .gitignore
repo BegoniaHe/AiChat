@@ -42,3 +42,8 @@ src-tauri/gen/android/local.properties
 # Environment
 .env
 .env.local
+
+*.keystore
+*.jks
+*.p12
+*.pfx
