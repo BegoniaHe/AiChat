@@ -8,6 +8,9 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-25 19:54
+  - 解析補強：當 <content> 完整但 MiPhone 在其外部時，先去除 </think>/<thinking>，再抽取 MiPhone 區塊解析。
+  - 修改：`src/scripts/ui/app.js`
 - 2025-12-25 17:10
   - chat_history 換行回復：AI 回覆中的換行在送入歷史時會轉回 `<br>`，避免掉格式顯示在提示詞內。
   - 修改：`src/scripts/ui/bridge.js`

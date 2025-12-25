@@ -3197,6 +3197,18 @@ ${listPart || '-（无）'}
         .replace(/&lt;\s*\/?\s*MiPhone_(start|end)\s*\/?\s*&gt;/gi, (_, token) => `MiPhone_${token}`)
         .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
     };
+    const extractMiPhoneBlock = text => {
+      const raw = String(text ?? '');
+      const startRe = /<\s*MiPhone_start\s*>|MiPhone_start/i;
+      const endRe = /<\s*MiPhone_end\s*>|MiPhone_end/i;
+      const start = startRe.exec(raw);
+      if (!start) return '';
+      const afterStart = raw.slice(start.index + start[0].length);
+      const end = endRe.exec(afterStart);
+      if (!end) return raw.slice(start.index);
+      const endIdx = start.index + start[0].length + end.index + end[0].length;
+      return raw.slice(start.index, endIdx);
+    };
 
     const buildHistoryForLLM = pendingUserText => {
       const all = chatStore.getMessages(sessionId) || [];
@@ -3594,9 +3606,10 @@ ${listPart || '-（无）'}
               try {
                 const baseText = sanitizeThinkingForProtocolParse(fullRaw);
                 const miPhoneText = normalizeMiPhoneMarkers(baseText);
-                if (miPhoneText && miPhoneText !== baseText) {
+                const miPhoneBlock = extractMiPhoneBlock(miPhoneText);
+                if (miPhoneBlock) {
                   const retryParser = new DialogueStreamParser({ userName });
-                  const retryEvents = retryParser.push(miPhoneText);
+                  const retryEvents = retryParser.push(miPhoneBlock);
                   retryEvents.forEach(ev => {
                     if (ev?.type === 'moments') {
                       try {
@@ -3964,9 +3977,10 @@ ${listPart || '-（无）'}
             try {
               const baseText = sanitizeThinkingForProtocolParse(resultRaw);
               const miPhoneText = normalizeMiPhoneMarkers(baseText);
-              if (miPhoneText && miPhoneText !== baseText) {
+              const miPhoneBlock = extractMiPhoneBlock(miPhoneText);
+              if (miPhoneBlock) {
                 const retryParser = new DialogueStreamParser({ userName });
-                const retryEvents = retryParser.push(miPhoneText);
+                const retryEvents = retryParser.push(miPhoneBlock);
                 retryEvents.forEach(ev => {
                   if (ev?.type === 'moments') {
                     momentsStore.addMany(ingestMoments(ev.moments || []));
