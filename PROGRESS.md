@@ -8,6 +8,20 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-25 10:32
+  - release.ps1 兼容性：调整为 UTF-8 BOM + CRLF，避免 PowerShell 解析报错。
+- 2025-12-24 15:41
+  - 图标视觉调整：放大羽毛主体并统一背景色调，生成适配桌面与 Android 的新图标资源。
+  - 生成参数默认值：最大上下文 128k、temperature 1、top_p 0.98、top_k 64、最大输出 8192。
+- 2025-12-24 15:17
+  - 应用图标更新：替换 Tauri 桌面图标（PNG/ICO/ICNS）并同步 Android 生成图标资源为新图。
+- 2025-12-24 15:17
+  - 贴图资源替换：用 `maid` 文件夹 69 张贴图替换内置贴图，重新生成 `manifest.json` 并同步 Tauri 资源目录。
+  - 表情包提示词更新：内置世界书表情包列表与示例同步新关键词。
+- 2025-12-24 10:42
+  - 通用设定面板：头像下拉新增「⚙ 设定」，API 设定图标改为 🔌，并新增 Debug 按钮显示开关（默认隐藏）。
+  - 调试按钮策略：Debug 面板默认不自动弹出，仅在启用开关时显示右下角按钮。
+  - 动态评论解析：moment_start 内的评论行允许带时间等附加字段，避免评论被忽略。
 - 2025-12-24 02:45
   - Android 调试包隔离：debug 使用 applicationIdSuffix `.dev`，可与 release 共存。
   - 修改：`src-tauri/gen/android/app/build.gradle.kts`

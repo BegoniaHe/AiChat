@@ -327,6 +327,36 @@ const parseMomentBlock = (innerText) => {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const moments = [];
     let current = null;
+    const isNumeric = (val) => /^-?\d+(?:\.\d+)?$/.test(String(val || '').trim());
+    const looksLikeTime = (val) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(val || '').trim());
+    const parseCommentParts = (parts) => {
+        const author = parts[0] || '';
+        const rest = parts.slice(1);
+        let replyTo = '';
+        let replyToAuthor = '';
+        let time = '';
+        const contentParts = [];
+        for (const seg of rest) {
+            const s = String(seg || '').trim();
+            if (!s) continue;
+            const m1 = s.match(/^reply_to::\s*(.+)\s*$/i);
+            if (m1) {
+                replyTo = String(m1[1] || '').trim();
+                continue;
+            }
+            const m2 = s.match(/^reply_to_author::\s*(.+)\s*$/i);
+            if (m2) {
+                replyToAuthor = String(m2[1] || '').trim();
+                continue;
+            }
+            if (!time && looksLikeTime(s)) {
+                time = s;
+                continue;
+            }
+            contentParts.push(seg);
+        }
+        return { author, content: contentParts.join('--').trim(), replyTo, replyToAuthor, time };
+    };
 
     const commit = () => {
         if (!current) return;
@@ -342,7 +372,8 @@ const parseMomentBlock = (innerText) => {
 
     for (const line of lines) {
         const parts = line.split('--').map(p => p.trim());
-        if (parts.length >= 5) {
+        const isHeader = parts.length >= 5 && isNumeric(parts[3]) && isNumeric(parts[4]);
+        if (isHeader) {
             // New moment header
             commit();
             current = {
@@ -355,8 +386,9 @@ const parseMomentBlock = (innerText) => {
             };
             continue;
         }
-        if (parts.length === 2 && current) {
-            current.comments.push({ author: parts[0] || '', content: parts[1] || '' });
+        if (parts.length >= 2 && current) {
+            const comment = parseCommentParts(parts);
+            if (comment.content) current.comments.push(comment);
             continue;
         }
     }

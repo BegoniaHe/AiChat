@@ -1144,14 +1144,14 @@ export class PresetPanel {
         maxContext.max = '200000';
         maxContext.step = '256';
         maxContext.style.cssText = 'width:100%;';
-        maxContext.value = String(p.openai_max_context ?? 4095);
+        maxContext.value = String(p.openai_max_context ?? 131072);
 
         const maxContextNum = document.createElement('input');
         maxContextNum.id = 'gen-max-context-num';
         maxContextNum.type = 'number';
         maxContextNum.step = '1';
         maxContextNum.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        maxContextNum.value = String(p.openai_max_context ?? 4095);
+        maxContextNum.value = String(p.openai_max_context ?? 131072);
 
         const syncMaxContext = (val) => {
             const n = Number(val);
@@ -1175,21 +1175,21 @@ export class PresetPanel {
         topP.type = 'number';
         topP.step = '0.01';
         topP.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        topP.value = String(p.top_p ?? 1);
+        topP.value = String(p.top_p ?? 0.98);
 
         const topK = document.createElement('input');
         topK.id = 'gen-top-k';
         topK.type = 'number';
         topK.step = '1';
         topK.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        topK.value = String(p.top_k ?? 0);
+        topK.value = String(p.top_k ?? 64);
 
         const maxTokens = document.createElement('input');
         maxTokens.id = 'gen-max-tokens';
         maxTokens.type = 'number';
         maxTokens.step = '1';
         maxTokens.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
-        maxTokens.value = String(p.openai_max_tokens ?? 300);
+        maxTokens.value = String(p.openai_max_tokens ?? 8192);
 
         const presence = document.createElement('input');
         presence.id = 'gen-presence';
@@ -1566,10 +1566,10 @@ export class PresetPanel {
 
         if (this.activeType === 'openai') {
             current.temperature = getNum(root.querySelector('#gen-temperature')?.value, current.temperature ?? 1);
-            current.top_p = getNum(root.querySelector('#gen-top-p')?.value, current.top_p ?? 1);
-            current.top_k = getInt(root.querySelector('#gen-top-k')?.value, current.top_k ?? 0);
-            current.openai_max_context = getInt(root.querySelector('#gen-max-context-num')?.value ?? root.querySelector('#gen-max-context')?.value, current.openai_max_context ?? 4095);
-            current.openai_max_tokens = getInt(root.querySelector('#gen-max-tokens')?.value, current.openai_max_tokens ?? 300);
+            current.top_p = getNum(root.querySelector('#gen-top-p')?.value, current.top_p ?? 0.98);
+            current.top_k = getInt(root.querySelector('#gen-top-k')?.value, current.top_k ?? 64);
+            current.openai_max_context = getInt(root.querySelector('#gen-max-context-num')?.value ?? root.querySelector('#gen-max-context')?.value, current.openai_max_context ?? 131072);
+            current.openai_max_tokens = getInt(root.querySelector('#gen-max-tokens')?.value, current.openai_max_tokens ?? 8192);
             current.presence_penalty = getNum(root.querySelector('#gen-presence')?.value, current.presence_penalty ?? 0);
             current.frequency_penalty = getNum(root.querySelector('#gen-frequency')?.value, current.frequency_penalty ?? 0);
             current.boundProfileId = window.appBridge?.config?.getActiveProfileId?.() || current.boundProfileId || null;

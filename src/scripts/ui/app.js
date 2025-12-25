@@ -16,6 +16,7 @@ import { ConfigPanel } from './config-panel.js';
 import { ContactDragManager } from './contact-drag-manager.js';
 import { ContactGroupRenderer } from './contact-group-renderer.js';
 import { ContactSettingsPanel } from './contact-settings-panel.js';
+import { GeneralSettingsPanel } from './general-settings-panel.js';
 import { GroupCreatePanel, GroupSettingsPanel } from './group-chat-panels.js';
 import { GroupPanel } from './group-panel.js';
 import { MediaPicker } from './media-picker.js';
@@ -45,6 +46,7 @@ const initApp = async () => {
     updateStickerPreview('');
   };
   const configPanel = new ConfigPanel();
+  const generalSettingsPanel = new GeneralSettingsPanel();
   const presetPanel = new PresetPanel();
   const regexPanel = new RegexPanel();
   const chatStore = new ChatStore();
@@ -2017,6 +2019,7 @@ ${listPart || '-（无）'}
   settingsMenu?.querySelectorAll('button').forEach(btn => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.action;
+      if (action === 'settings') generalSettingsPanel.show();
       if (action === 'persona') personaPanel.show();
       if (action === 'session') sessionPanel.show();
       if (action === 'preset') presetPanel.show();

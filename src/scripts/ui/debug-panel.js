@@ -2,6 +2,8 @@
  * Debug panel - show config status on screen for Android debugging
  */
 
+import { appSettings } from '../storage/app-settings.js';
+
 export class DebugPanel {
     constructor() {
         this.panel = null;
@@ -9,6 +11,8 @@ export class DebugPanel {
         this.maxLogs = 30;
         this.isVisible = false;
         this.autoHideTimer = null;
+        this.toggleBtn = null;
+        this.enabled = false;
     }
 
     init() {
@@ -55,16 +59,22 @@ export class DebugPanel {
         `;
         toggleBtn.onclick = () => this.toggle();
         document.body.appendChild(toggleBtn);
+        this.toggleBtn = toggleBtn;
 
-        // APP启动时自动显示5秒，让用户看到加载日志
+        const settings = appSettings.get();
+        this.setEnabled(Boolean(settings.showDebugToggle));
+
+        // APP启动时自动显示5秒，让用户看到加载日志（仅在启用时）
         this.log('=== APP 启动，调试面板已激活 ===', 'info');
-        this.show();
-        this.autoHideTimer = setTimeout(() => {
-            if (this.logs.length < 3) {
-                // 如果日志很少，说明可能没有重要信息，自动隐藏
-                this.hide();
-            }
-        }, 8000); // 8秒后自动隐藏
+        if (this.enabled) {
+            this.show();
+            this.autoHideTimer = setTimeout(() => {
+                if (this.logs.length < 3) {
+                    // 如果日志很少，说明可能没有重要信息，自动隐藏
+                    this.hide();
+                }
+            }, 8000); // 8秒后自动隐藏
+        }
     }
 
     show() {
@@ -83,6 +93,20 @@ export class DebugPanel {
         if (!this.panel) return;
         this.panel.style.display = 'none';
         this.isVisible = false;
+    }
+
+    setEnabled(enabled) {
+        this.enabled = Boolean(enabled);
+        if (this.toggleBtn) {
+            this.toggleBtn.style.display = this.enabled ? 'block' : 'none';
+        }
+        if (!this.enabled) {
+            this.hide();
+            if (this.autoHideTimer) {
+                clearTimeout(this.autoHideTimer);
+                this.autoHideTimer = null;
+            }
+        }
     }
 
     toggle() {
