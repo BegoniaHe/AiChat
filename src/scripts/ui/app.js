@@ -764,10 +764,21 @@ ${listPart || '-（无）'}
       return lines.slice(i).join('\n').replace(/^\s+/, '');
     };
 
+    const stripTrailingLineTimes = (src) => {
+      const lines = String(src ?? '').split(/\r?\n/);
+      return lines
+        .map(line => {
+          const trimmed = line.replace(/\s+$/, '');
+          return trimmed.replace(/\s*--\s*HH[:：]MM\s*$/i, '');
+        })
+        .join('\n');
+    };
+
     let out = String(text ?? '');
     out = out.replace(/<!--[\s\S]*?-->/g, '');
     out = stripXmlBlocks(out);
     out = stripLeadingUserSpeakerLines(out, userName);
+    out = stripTrailingLineTimes(out);
     out = out.replace(/\n{4,}/g, '\n\n\n');
     return out.trimStart();
   };

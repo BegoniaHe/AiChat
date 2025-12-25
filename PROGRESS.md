@@ -8,6 +8,16 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-25 17:10
+  - chat_history 換行回復：AI 回覆中的換行在送入歷史時會轉回 `<br>`，避免掉格式顯示在提示詞內。
+  - 修改：`src/scripts/ui/bridge.js`
+- 2025-12-25 13:04
+  - AI 回覆清理：解析後若每條回覆末尾帶 `--HH:MM`（掉格式的占位符）會自動移除；保留正確的數字時間戳。
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-25 10:53
+  - release.ps1 构建失败保护：android:build 退出码非 0 时直接中止签名流程。
+- 2025-12-25 10:51
+  - release.ps1 构建兼容：支持 `app-universal-release-unsigned.apk` 作为输入并继续签名流程。
 - 2025-12-25 10:32
   - release.ps1 兼容性：调整为 UTF-8 BOM + CRLF，避免 PowerShell 解析报错。
 - 2025-12-24 15:41

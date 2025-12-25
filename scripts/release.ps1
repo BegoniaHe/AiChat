@@ -26,11 +26,19 @@ Set-Location $root
 if (-not $SkipBuild) {
   Write-Host "[1/3] 构建 APK..."
   npm run android:build
+  if ($LASTEXITCODE -ne 0) {
+    throw "构建失败，退出码 $LASTEXITCODE"
+  }
 }
 
-$apkInput = Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release.apk"
-if (-not (Test-Path $apkInput)) {
-  throw "未找到 APK：$apkInput"
+$apkInputCandidates = @(
+  (Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release.apk"),
+  (Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release-unsigned.apk")
+)
+$apkInput = $apkInputCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $apkInput) {
+  $fallback = $apkInputCandidates -join "; "
+  throw "未找到 APK：$fallback"
 }
 
 $distDir = Join-Path $root "dist"

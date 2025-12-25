@@ -81,6 +81,13 @@ const withSpeakerPrefix = (content, speaker) => {
   return `${name}: ${text}`;
 };
 
+const normalizeHistoryLineBreaks = (content, role) => {
+  if (role !== 'assistant') return content;
+  const text = String(content ?? '');
+  if (!text.includes('\n') && !text.includes('\r')) return text;
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '<br>');
+};
+
 const HISTORY_RECALL_NOTICE =
   '以下为聊天历史回顾（仅用于理解上下文）：请不要逐字复述或重复其中内容，只需基于上下文继续对话。';
 const SUMMARY_REQUEST_NOTICE = [
@@ -1109,7 +1116,8 @@ class AppBridge {
         const speaker = role === 'assistant' && isGroupChat
           ? (String(m?.name || '').trim() || name2)
           : (role === 'user' ? name1 : name2);
-        return { role, content: withSpeakerPrefix(out, speaker) };
+        const normalized = normalizeHistoryLineBreaks(out, role);
+        return { role, content: withSpeakerPrefix(normalized, speaker) };
       });
 
       const pendingUserHistoryEntry = pendingUserPrompt
@@ -1443,6 +1451,7 @@ class AppBridge {
         const speaker = m.role === 'assistant' && isGroupChat
           ? (String(m?.name || '').trim() || name2)
           : (m.role === 'user' ? name1 : name2);
+        m.content = normalizeHistoryLineBreaks(m.content, m.role);
         m.content = withSpeakerPrefix(m.content, speaker);
       }
     } catch {}
