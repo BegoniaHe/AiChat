@@ -967,18 +967,20 @@ class AppBridge {
 	    // - 用 <chat_guide> 包裹，便于模型区分“聊天指南”与历史回顾
 	    // - 保证摘要提示词在所有聊天提示词下方
 	    const buildChatGuideContent = () => {
-	      if (Boolean(context?.meta?.disableChatGuide)) return '';
+	      const mode = String(context?.meta?.chatGuideMode || '').trim().toLowerCase();
+	      if (Boolean(context?.meta?.disableChatGuide) || mode === 'none') return '';
+	      const summaryOnly = mode === 'summary-only';
 	      const parts = [];
-	      if (!isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
+	      if (!summaryOnly && !isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
 	        parts.push(dialogueRules);
 	      }
-	      if (!isMomentCommentTask && isGroupChat && groupEnabled && groupRules && groupPosition !== -1) {
+	      if (!summaryOnly && !isMomentCommentTask && isGroupChat && groupEnabled && groupRules && groupPosition !== -1) {
 	        parts.push(groupRules);
 	      }
-	      if (!isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition !== -1) {
+	      if (!summaryOnly && !isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition !== -1) {
 	        parts.push(momentCreateRules);
 	      }
-	      if (isMomentCommentTask && momentCommentEnabled && momentCommentRules && momentCommentPosition !== -1) {
+	      if (!summaryOnly && isMomentCommentTask && momentCommentEnabled && momentCommentRules && momentCommentPosition !== -1) {
 	        parts.push(momentCommentRules);
 	      }
 	      if (summaryRules) parts.push(summaryRules);

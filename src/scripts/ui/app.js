@@ -819,6 +819,18 @@ ${listPart || '-（无）'}
       .replace(/\r/g, '\n')
   );
 
+  const extractContentBody = text => {
+    const raw = String(text ?? '');
+    const re = /<content\b[^>]*>([\s\S]*?)<\/content\s*>/gi;
+    let m;
+    let last = null;
+    while ((m = re.exec(raw))) last = m;
+    if (last && typeof last[1] === 'string') return last[1];
+    const open = raw.match(/<content\b[^>]*>/i);
+    if (open && open.index != null) return raw.slice(open.index + open[0].length);
+    return raw;
+  };
+
   const normalizeEchoText = (text = '') => {
     const raw = String(text || '');
     return raw
@@ -921,13 +933,14 @@ ${listPart || '-（无）'}
       const avatar = m.avatar || resolveAvatarForMessage(m, sessionId);
       const j = convPos.has(i) ? convPos.get(i) : null;
       const depth = j === null ? undefined : total - 1 - j;
+      const creativeBase = m?.meta?.renderRich ? extractContentBody(base) : base;
 
       if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
         if (m?.meta?.renderRich) {
           return {
             ...m,
             avatar,
-            content: normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(base, { depth })),
+            content: normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(creativeBase, { depth })),
             status: m.status,
           };
         }
@@ -955,6 +968,10 @@ ${listPart || '-（无）'}
 
   const snippetFromMessage = msg => {
     if (!msg) return '尚无聊天';
+    if (msg.role === 'assistant' && (msg.type === 'text' || !msg.type)) {
+      const summary = String(msg?.meta?.summary || '').replace(/\s+/g, ' ').trim();
+      if (summary) return summary.slice(0, 32);
+    }
     switch (msg.type) {
       case 'image':
         return '[图片]';
@@ -3256,19 +3273,42 @@ ${listPart || '-（无）'}
 
     const buildHistoryForLLM = pendingUserText => {
       const all = chatStore.getMessages(sessionId) || [];
+      const resolveCreativeHistorySummary = (msg) => {
+        const direct = String(msg?.meta?.summary || '').trim();
+        if (direct) return direct;
+        try {
+          const compacted = chatStore.getCompactedSummary?.(sessionId);
+          const compactedText = String(compacted?.text || '').trim();
+          if (compactedText) return compactedText;
+        } catch {}
+        try {
+          const list = chatStore.getSummaries?.(sessionId) || [];
+          const last = list[list.length - 1];
+          return String((typeof last === 'string') ? last : last?.text || '').trim();
+        } catch {}
+        return '';
+      };
       const history = all
         .filter(m => m && m.status !== 'pending' && m.status !== 'sending')
         .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
         .map(m => {
           let content = typeof m.raw === 'string' ? m.raw : m.content;
-          const key = resolveStickerKeywordForMessage(m);
-          if (key) content = buildStickerToken(key);
+          if (m.role === 'assistant' && m?.meta?.renderRich) {
+            const summary = resolveCreativeHistorySummary(m);
+            if (!summary) return null;
+            content = summary;
+          } else {
+            const key = resolveStickerKeywordForMessage(m);
+            if (key) content = buildStickerToken(key);
+          }
+          if (!String(content || '').trim()) return null;
           return {
             role: m.role,
             content,
             name: typeof m.name === 'string' ? m.name : '',
           };
-        });
+        })
+        .filter(Boolean);
 	      const last = history[history.length - 1];
 	      if (
 	        pendingUserText &&
@@ -3318,10 +3358,11 @@ ${listPart || '-（无）'}
       character: { name: characterName },
       session: { id: sessionId, isGroup: isGroupChat },
       meta: {
-        // Avoid breaking protocol/dialogue parsing modes; only enable summary for normal chat replies.
-        disableSummary: Boolean(disableSummaryForThis || creativeMode),
+        // Keep summary prompt on; creative mode restricts chat guide to summary-only.
+        disableSummary: Boolean(disableSummaryForThis),
         skipInputRegex: Boolean(skipInputRegex),
-        disableChatGuide: Boolean(creativeMode),
+        chatGuideMode: creativeMode ? 'summary-only' : 'full',
+        disableChatGuide: false,
         disableScenarioHint: Boolean(creativeMode),
         disableMomentSummary: Boolean(creativeMode),
         disablePhoneFormat: Boolean(creativeMode),
@@ -3461,14 +3502,20 @@ ${listPart || '-（无）'}
             try {
               chatStore.addSummary(summary, sessionId);
             } catch {}
+            try {
+              requestSummaryCompaction(sessionId);
+            } catch {}
           }
-          let stored = normalizeCreativeLineBreaks(stripped);
+          const contentBody = extractContentBody(stripped);
+          let stored = normalizeCreativeLineBreaks(contentBody);
           let display = stored;
           try {
             stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
             streamCtrl.update(display);
           } catch {}
+          const meta = { renderRich: true };
+          if (summary) meta.summary = summary;
           const parsed = {
             role: 'assistant',
             type: 'text',
@@ -3479,7 +3526,7 @@ ${listPart || '-（无）'}
             rawOriginal: full,
             raw: stored,
             content: display,
-            meta: { renderRich: true },
+            meta,
           };
           streamCtrl.finish(parsed);
           {
@@ -3913,12 +3960,15 @@ ${listPart || '-（无）'}
               requestSummaryCompaction(sessionId);
             } catch {}
           }
-          let stored = normalizeCreativeLineBreaks(stripped);
+          const contentBody = extractContentBody(stripped);
+          let stored = normalizeCreativeLineBreaks(contentBody);
           let display = stored;
           try {
             stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
           } catch {}
+          const meta = { renderRich: true };
+          if (protocolSummary) meta.summary = protocolSummary;
           const parsed = {
             role: 'assistant',
             type: 'text',
@@ -3928,7 +3978,7 @@ ${listPart || '-（无）'}
             rawOriginal: resultRaw,
             raw: stored,
             content: display,
-            meta: { renderRich: true },
+            meta,
           };
           ui.addMessage(parsed);
           {
