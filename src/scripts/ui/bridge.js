@@ -806,10 +806,13 @@ class AppBridge {
         ].join('\n\n'),
       };
     };
+    const disablePhoneFormat = Boolean(context?.meta?.disablePhoneFormat);
     const worldPromptRaw = isMomentCommentTask
       ? ''
       : (() => {
-          const builtinPart = this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText });
+          const builtinPart = disablePhoneFormat
+            ? ''
+            : this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText });
           const globalPart =
             this.globalWorldId && String(this.globalWorldId) !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID
               ? this.formatWorldPrompt(this.globalWorldId, { matchText })

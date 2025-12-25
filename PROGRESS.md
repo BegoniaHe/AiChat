@@ -8,6 +8,36 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-25 23:42
+  - 修复创意写作渲染空白：统一换行函数移到全局可见范围，避免运行时引用错误。
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-25 23:36
+  - 创意写作模式：换行保留，`<br>` 自动还原为真实分段，避免文字挤成一团。
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-25 23:32
+  - 创意写作模式：关闭手机线上格式世界书（<线上格式>）注入，避免聊天格式提示词混入。
+  - 修改：`src/scripts/ui/bridge.js`
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-25 23:28
+  - 创意写作模式：等待动画改用与聊天一致的小气泡；富文本渲染启用（代码块/HTML 预览）。
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+- 2025-12-25 23:16
+  - 发送按钮图标显示修复：不再覆盖按钮内容文本；长按模式浮层横排修正。
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-25 23:15
+  - 发送按钮图标化细节修复：隐藏文字、长按模式浮层改为横排显示并避开图标、创意模式颜色高亮生效。
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/ui/app.js`
+- 2025-12-25 23:02
+  - 发送按钮改为箭头图标，长按呼出模式切换（创意写作/聊天对话），创意写作模式启用输出正则并禁用线上格式提示词。
+  - 新增资源：`src/assets/external/send-icon.png`
+  - 修改：`src/index.html`
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
 - 2025-12-25 20:41
   - 默认头像统一为羽毛图标（含聊天/联系人/群聊/设置/列表等默认回退）。
   - 新增资源：`src/assets/external/feather-default.png`

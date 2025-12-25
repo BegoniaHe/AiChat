@@ -48,6 +48,7 @@ export class ChatUI {
         this.selectionMode = false;
         this.selectedMessageIds = new Set();
         this.selectionBar = null;
+        this.sendClickGuard = null;
 
         setupIframeResizeListener();
         this.bindIframeLongPressForwarding();
@@ -229,6 +230,7 @@ export class ChatUI {
         if (typeof onSendButton === 'function') {
             this.sendBtn.addEventListener('click', (e) => {
                 e.preventDefault();
+                if (typeof this.sendClickGuard === 'function' && this.sendClickGuard()) return;
                 onSendButton();
             });
         }
@@ -242,6 +244,10 @@ export class ChatUI {
                 }
             });
         }
+    }
+
+    setSendClickGuard(guard) {
+        this.sendClickGuard = typeof guard === 'function' ? guard : null;
     }
 
     onConfig(handler) {
@@ -306,10 +312,12 @@ export class ChatUI {
 
     setSendEnabled(enabled) {
         this.sendBtn.disabled = !enabled;
-        if (!enabled) {
-            this.sendBtn.textContent = '離線';
+        const label = enabled ? '发送' : '离线';
+        this.sendBtn.setAttribute('aria-label', label);
+        if (enabled) {
+            this.sendBtn.classList.remove('is-offline');
         } else {
-            this.sendBtn.textContent = '发送';
+            this.sendBtn.classList.add('is-offline');
         }
     }
 
@@ -582,9 +590,12 @@ export class ChatUI {
                 break;
             case 'text':
             default:
-                // === 创意写作模式（暂时停用）===
+                // === 创意写作模式===
                 // Safe rich rendering (code fences + html iframe preview)
-                // renderRichText(bubble, message.content, { messageId: message.id });
+                if (message?.meta?.renderRich) {
+                    renderRichText(bubble, String(message.content ?? ''), { messageId: message.id });
+                    break;
+                }
                 // === 对话模式（纯文本）===
                 {
                     const baseText = typeof message.raw === 'string' ? message.raw : message.content;
@@ -771,11 +782,12 @@ export class ChatUI {
                     try {
                         // Render rich content for the final text
                         const text = String(fm?.content ?? '');
-                        // === 创意写作模式（暂时停用）===
-                        // renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
-                        // === 对话模式（纯文本）===
-                        messageEl.textContent = this.normalizeAssistantLineBreaks(text);
-                        messageEl.style.whiteSpace = 'pre-wrap';
+                        if (fm?.meta?.renderRich) {
+                            renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
+                        } else {
+                            messageEl.textContent = this.normalizeAssistantLineBreaks(text);
+                            messageEl.style.whiteSpace = 'pre-wrap';
+                        }
                     } catch {}
                 }
             },

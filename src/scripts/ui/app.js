@@ -171,6 +171,34 @@ const initApp = async () => {
       './assets/external/feather-default.png',
   };
 
+  const SEND_MODE_KEY = 'chat_send_mode_v1';
+  let sendMode = 'chat';
+  const loadSendMode = () => {
+    try {
+      const raw = localStorage.getItem(SEND_MODE_KEY);
+      if (raw === 'creative' || raw === 'chat') return raw;
+    } catch {}
+    return 'chat';
+  };
+  const applySendModeUI = () => {
+    const btn = document.getElementById('send-button');
+    if (!btn) return;
+    btn.classList.toggle('is-creative', sendMode === 'creative');
+    btn.dataset.mode = sendMode;
+  };
+  const setSendMode = (mode, { silent = false } = {}) => {
+    sendMode = mode === 'creative' ? 'creative' : 'chat';
+    try {
+      localStorage.setItem(SEND_MODE_KEY, sendMode);
+    } catch {}
+    applySendModeUI();
+    if (!silent) {
+      const label = sendMode === 'creative' ? '已切换到创意写作模式' : '已切换到聊天对话模式';
+      window.toastr?.info?.(label);
+    }
+  };
+  setSendMode(loadSendMode(), { silent: true });
+
   const getEffectivePersona = (sessionId = chatStore.getCurrent()) => {
     const sid = String(sessionId || '').trim() || 'default';
     const lockedId = chatStore.getPersonaLock?.(sid) || '';
@@ -783,6 +811,14 @@ ${listPart || '-（无）'}
     return out.trimStart();
   };
 
+  const normalizeCreativeLineBreaks = text => (
+    String(text ?? '')
+      .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+  );
+
   const normalizeEchoText = (text = '') => {
     const raw = String(text || '');
     return raw
@@ -887,10 +923,14 @@ ${listPart || '-（无）'}
       const depth = j === null ? undefined : total - 1 - j;
 
       if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
-        // === 创意写作模式（暂时停用）===
-        // AI 回覆：输出后先经过正则（display），再做富文本/iframe 渲染
-        // return { ...m, content: window.appBridge.applyOutputDisplayRegex(base, { depth }) };
-        // === 对话模式 ===
+        if (m?.meta?.renderRich) {
+          return {
+            ...m,
+            avatar,
+            content: normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(base, { depth })),
+            status: m.status,
+          };
+        }
         return { ...m, avatar, content: base, status: m.status }; // 保留 status 字段
       }
       if (m.role === 'user' && (m.type === 'text' || !m.type)) {
@@ -2954,6 +2994,7 @@ ${listPart || '-（无）'}
     const suppressUserMessage = Boolean(options.suppressUserMessage);
     const existingUserMessageId = typeof options.existingUserMessageId === 'string' ? options.existingUserMessageId : '';
     const skipInputRegex = Boolean(options.skipInputRegex);
+    const creativeMode = sendMode === 'creative';
     const sessionId = chatStore.getCurrent();
     const allMessages = chatStore.getMessages(sessionId);
 
@@ -3193,13 +3234,13 @@ ${listPart || '-（无）'}
       const cut = idx + (idx === i1 ? closeThinking.length : closeThink.length);
       return raw.slice(cut);
     };
-    const normalizeMiPhoneMarkers = text => {
-      const raw = String(text ?? '');
-      if (!raw) return raw;
-      return raw
-        .replace(/&lt;\s*\/?\s*MiPhone_(start|end)\s*\/?\s*&gt;/gi, (_, token) => `MiPhone_${token}`)
-        .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
-    };
+  const normalizeMiPhoneMarkers = text => {
+    const raw = String(text ?? '');
+    if (!raw) return raw;
+    return raw
+      .replace(/&lt;\s*\/?\s*MiPhone_(start|end)\s*\/?\s*&gt;/gi, (_, token) => `MiPhone_${token}`)
+      .replace(/<\s*\/?\s*MiPhone_(start|end)\s*\/?\s*>/gi, (_, token) => `MiPhone_${token}`);
+  };
     const extractMiPhoneBlock = text => {
       const raw = String(text ?? '');
       const startRe = /<\s*MiPhone_start\s*>|MiPhone_start/i;
@@ -3278,8 +3319,12 @@ ${listPart || '-（无）'}
       session: { id: sessionId, isGroup: isGroupChat },
       meta: {
         // Avoid breaking protocol/dialogue parsing modes; only enable summary for normal chat replies.
-        disableSummary: Boolean(disableSummaryForThis),
+        disableSummary: Boolean(disableSummaryForThis || creativeMode),
         skipInputRegex: Boolean(skipInputRegex),
+        disableChatGuide: Boolean(creativeMode),
+        disableScenarioHint: Boolean(creativeMode),
+        disableMomentSummary: Boolean(creativeMode),
+        disablePhoneFormat: Boolean(creativeMode),
       },
       group: isGroupChat
         ? {
@@ -3373,11 +3418,77 @@ ${listPart || '-（无）'}
         const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
         const momentCreateEnabled =
           Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
-        const protocolEnabled = momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+        const protocolEnabled = !creativeMode && (momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled));
         // Always include summary request prompt; summary (if present) will be extracted from raw response.
         disableSummaryForThis = false;
 
-        if (protocolEnabled) {
+        if (creativeMode) {
+          // 创意写作模式：完整长文输出，不解析线上格式
+          ui.showTyping(assistantAvatar);
+          const stream = await window.appBridge.generate(text, llmContext(text));
+          let full = '';
+          streamCtrl = null;
+          for await (const chunk of stream) {
+            if (activeGeneration?.cancelled) break;
+            full += chunk;
+            if (!streamCtrl) {
+              ui.hideTyping();
+              streamCtrl = ui.startAssistantStream({
+                avatar: assistantAvatar,
+                name: '助手',
+                time: formatNowTime(),
+                typing: false,
+              });
+              if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
+            }
+            streamCtrl.update(full);
+          }
+          if (activeGeneration?.cancelled) return;
+          ui.hideTyping();
+          if (!streamCtrl) {
+            streamCtrl = ui.startAssistantStream({
+              avatar: assistantAvatar,
+              name: '助手',
+              time: formatNowTime(),
+              typing: false,
+            });
+            if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
+            streamCtrl.update(full);
+          }
+          chatStore.setLastRawResponse(full, sessionId);
+          const { text: stripped, summary } = extractSummaryBlock(full);
+          if (summary) {
+            try {
+              chatStore.addSummary(summary, sessionId);
+            } catch {}
+          }
+          let stored = normalizeCreativeLineBreaks(stripped);
+          let display = stored;
+          try {
+            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
+            display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
+            streamCtrl.update(display);
+          } catch {}
+          const parsed = {
+            role: 'assistant',
+            type: 'text',
+            name: '助手',
+            avatar: assistantAvatar,
+            time: formatNowTime(),
+            id: streamCtrl?.id,
+            rawOriginal: full,
+            raw: stored,
+            content: display,
+            meta: { renderRich: true },
+          };
+          streamCtrl.finish(parsed);
+          {
+            const saved = chatStore.appendMessage(parsed, sessionId);
+            autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
+          }
+          refreshChatAndContacts();
+          sendSucceeded = true;
+        } else if (protocolEnabled) {
           // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
           ui.showTyping(assistantAvatar);
           const parser = new DialogueStreamParser({ userName });
@@ -3751,7 +3862,7 @@ ${listPart || '-（无）'}
           }
           let stored = sanitizeAssistantReplyText(stripped, userName);
           let display = stored;
-          // === 创意写作模式（暂时停用）===
+          // === 创意写作模式===
           // try {
           //     stored = window.appBridge.applyOutputStoredRegex(full);
           //     display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
@@ -3782,7 +3893,7 @@ ${listPart || '-（无）'}
         const groupEnabled = Boolean(sysp?.group_enabled) && String(sysp?.group_rules || '').trim().length > 0;
         const momentCreateEnabled =
           Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
-        const protocolEnabled = momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled);
+        const protocolEnabled = !creativeMode && (momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled));
         // Always include summary request prompt; summary (if present) will be extracted from raw response.
         disableSummaryForThis = false;
 
@@ -3791,8 +3902,42 @@ ${listPart || '-（无）'}
         sendSucceeded = true;
         ui.hideTyping();
         chatStore.setLastRawResponse(resultRaw, sessionId);
-        const { summary: protocolSummary } = extractSummaryBlock(resultRaw);
+        const { text: stripped, summary: protocolSummary } = extractSummaryBlock(resultRaw);
         const summarySessionIds = new Set([sessionId]);
+        if (creativeMode) {
+          if (protocolSummary) {
+            try {
+              chatStore.addSummary(protocolSummary, sessionId);
+            } catch {}
+            try {
+              requestSummaryCompaction(sessionId);
+            } catch {}
+          }
+          let stored = normalizeCreativeLineBreaks(stripped);
+          let display = stored;
+          try {
+            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
+            display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
+          } catch {}
+          const parsed = {
+            role: 'assistant',
+            type: 'text',
+            name: '助手',
+            avatar: assistantAvatar,
+            time: formatNowTime(),
+            rawOriginal: resultRaw,
+            raw: stored,
+            content: display,
+            meta: { renderRich: true },
+          };
+          ui.addMessage(parsed);
+          {
+            const saved = chatStore.appendMessage(parsed, sessionId);
+            autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
+          }
+          refreshChatAndContacts();
+          return;
+        }
         if (protocolEnabled) {
           const parser = new DialogueStreamParser({ userName });
           const events = parser.push(resultRaw);
@@ -4105,10 +4250,10 @@ ${listPart || '-（无）'}
             for (const sid of summarySessionIds) requestSummaryCompaction(sid);
           } catch {}
         }
-        // === 创意写作模式（暂时停用）===
+        // === 创意写作模式===
         // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
         // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-        const { text: stripped, summary } = extractSummaryBlock(resultRaw);
+        const summary = protocolSummary;
         if (summary) {
           try {
             chatStore.addSummary(summary, sessionId);
@@ -4173,6 +4318,86 @@ ${listPart || '-（无）'}
     onSendButton: handleSend
   });
 
+  // Long-press send button to switch mode
+  (() => {
+    const sendBtn = document.getElementById('send-button');
+    if (!sendBtn) return;
+    let pressTimer = null;
+    let pressTriggered = false;
+    let suppressNextSend = false;
+
+    const popover = document.createElement('div');
+    popover.className = 'send-mode-popover';
+    popover.style.display = 'none';
+    document.body.appendChild(popover);
+
+    const hidePopover = () => {
+      popover.style.display = 'none';
+    };
+    const showPopover = () => {
+      const targetMode = sendMode === 'creative' ? 'chat' : 'creative';
+      popover.textContent = targetMode === 'creative' ? '创意写作模式' : '聊天对话模式';
+      const rect = sendBtn.getBoundingClientRect();
+      popover.style.display = 'block';
+      popover.style.visibility = 'hidden';
+      popover.style.top = '0';
+      popover.style.left = '0';
+      const height = popover.offsetHeight || 32;
+      const top = Math.max(12, rect.top - height - 8);
+      const left = rect.left + rect.width / 2;
+      popover.style.top = `${top}px`;
+      popover.style.left = `${left}px`;
+      popover.style.transform = 'translateX(-50%)';
+      popover.style.visibility = 'visible';
+    };
+
+    popover.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = sendMode === 'creative' ? 'chat' : 'creative';
+      setSendMode(next);
+      hidePopover();
+    });
+
+    const clearTimer = () => {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    };
+
+    sendBtn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      pressTriggered = false;
+      clearTimer();
+      pressTimer = setTimeout(() => {
+        pressTriggered = true;
+        suppressNextSend = true;
+        showPopover();
+      }, 420);
+    });
+
+    sendBtn.addEventListener('pointerup', () => {
+      clearTimer();
+    });
+    sendBtn.addEventListener('pointerleave', clearTimer);
+    sendBtn.addEventListener('pointercancel', clearTimer);
+
+    document.addEventListener('pointerdown', (e) => {
+      if (popover.style.display === 'none') return;
+      if (popover.contains(e.target) || sendBtn.contains(e.target)) return;
+      hidePopover();
+    });
+
+    ui.setSendClickGuard(() => {
+      if (!suppressNextSend) return false;
+      suppressNextSend = false;
+      return true;
+    });
+
+    applySendModeUI();
+  })();
+
   ui.onInputChange(text => {
     chatStore.setDraft(text, chatStore.getCurrent());
     updateStickerPreview(text);
@@ -4229,7 +4454,7 @@ ${listPart || '-（无）'}
     }
     if (action === 'edit-assistant-raw' && message.role === 'assistant') {
       const next = String(payload?.text ?? '');
-      // === 创意写作模式（暂时停用）===
+      // === 创意写作模式===
       // const stored = window.appBridge.applyOutputStoredRegex(next, { isEdit: true });
       // const display = window.appBridge.applyOutputDisplayRegex(stored, { isEdit: true, depth: 0 });
       const stored = next;

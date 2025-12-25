@@ -201,7 +201,7 @@ export class SessionPanel {
     this.panel.innerHTML = `
             <h3 style="margin:0 0 12px;">好友列表</h3>
             <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
-                <button id="session-avatar-btn" type="button" title="设置好友头像" style="width:184px; height:44px; border-radius:12px; border:1px solid #e2e8f0; background:#fff; padding:0; overflow:hidden; cursor:pointer;">
+                <button id="session-avatar-btn" type="button" title="设置好友头像" style="width:64px; height:44px; border-radius:12px; border:1px solid #e2e8f0; background:#fff; padding:0; overflow:hidden; cursor:pointer;">
                     <img id="session-avatar-preview" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" src="./assets/external/feather-default.png">
                 </button>
                 <input id="session-name" placeholder="新好友名稱" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;">

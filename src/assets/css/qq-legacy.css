@@ -454,19 +454,60 @@
 }
 
 .chat-send-btn {
-    padding: 10px 20px;
-    border-radius: 20px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 14px;
     border: none;
-    background: #1a1a1a;
-    color: #fff;
-    font-size: 15px;
-    font-weight: 500;
+    background: transparent;
+    color: transparent;
+    font-size: 0;
+    line-height: 0;
     cursor: pointer;
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .chat-send-btn:active {
     opacity: 0.8;
+}
+
+.chat-send-btn:disabled {
+    opacity: 0.5;
+}
+
+.chat-send-icon {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    display: block;
+    transition: filter 0.2s ease, transform 0.2s ease;
+}
+
+.chat-send-btn.is-creative .chat-send-icon {
+    filter: brightness(0) saturate(100%) invert(69%) sepia(86%) saturate(1548%) hue-rotate(338deg) brightness(100%) contrast(101%);
+}
+
+.send-mode-popover {
+    position: fixed;
+    z-index: 26000;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    writing-mode: horizontal-tb;
+    text-orientation: mixed;
+    text-align: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
 }
 
 .voice-btn {
