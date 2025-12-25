@@ -12,7 +12,7 @@ const genGroupId = () => `group:${Date.now()}-${Math.random().toString(16).slice
 const normalize = (s) => String(s || '').trim();
 const normalizeKey = (s) => normalize(s).toLowerCase().replace(/\s+/g, '');
 
-const defaultAvatar = './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
+const defaultAvatar = './assets/external/feather-default.png';
 
 export class GroupCreatePanel {
     constructor({ contactsStore, chatStore, onCreated } = {}) {

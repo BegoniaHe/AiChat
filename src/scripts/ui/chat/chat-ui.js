@@ -419,7 +419,7 @@ export class ChatUI {
         // 头像
         const avatarImg = document.createElement('img');
         avatarImg.className = 'QQ_chat_head';
-        avatarImg.src = message.avatar || './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
+        avatarImg.src = message.avatar || './assets/external/feather-default.png';
         avatarImg.alt = message.name || '';
 
         // 消息气泡
@@ -666,7 +666,7 @@ export class ChatUI {
         // 头像（使用默认助手头像）
         const avatar = document.createElement('img');
         avatar.className = 'QQ_chat_head';
-        avatar.src = avatarUrl || './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png';
+        avatar.src = avatarUrl || './assets/external/feather-default.png';
 
         // 气泡
         const bubble = document.createElement('div');

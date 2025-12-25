@@ -166,9 +166,9 @@ const initApp = async () => {
   });
 
   const avatars = {
-    user: './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png',
+    user: './assets/external/feather-default.png',
     assistant:
-      './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp',
+      './assets/external/feather-default.png',
   };
 
   const getEffectivePersona = (sessionId = chatStore.getCurrent()) => {
@@ -187,7 +187,7 @@ const initApp = async () => {
 
   const syncUserPersonaUI = (sessionId = chatStore.getCurrent()) => {
     const p = getEffectivePersona(sessionId);
-    const url = p.avatar || './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png';
+    const url = p.avatar || './assets/external/feather-default.png';
     const name = p.name || '我';
     avatars.user = url;
     document.querySelectorAll('.user-avatar-btn img').forEach(img => (img.src = url));
@@ -2951,6 +2951,9 @@ ${listPart || '-（无）'}
     const overrideTextRaw = typeof options.overrideText === 'string' ? options.overrideText : '';
     const overrideText = overrideTextRaw.trim() ? overrideTextRaw : '';
     const ignorePending = Boolean(options.ignorePending);
+    const suppressUserMessage = Boolean(options.suppressUserMessage);
+    const existingUserMessageId = typeof options.existingUserMessageId === 'string' ? options.existingUserMessageId : '';
+    const skipInputRegex = Boolean(options.skipInputRegex);
     const sessionId = chatStore.getCurrent();
     const allMessages = chatStore.getMessages(sessionId);
 
@@ -3276,6 +3279,7 @@ ${listPart || '-（无）'}
       meta: {
         // Avoid breaking protocol/dialogue parsing modes; only enable summary for normal chat replies.
         disableSummary: Boolean(disableSummaryForThis),
+        skipInputRegex: Boolean(skipInputRegex),
       },
       group: isGroupChat
         ? {
@@ -3312,35 +3316,44 @@ ${listPart || '-（无）'}
     // 只有在没有 pending 消息时，才创建新的用户消息气泡
     let userMsg = null;
     if (!pendingMessagesToConfirm || pendingMessagesToConfirm.length === 0) {
-      const stickerKey = parseStickerToken(text);
-      if (stickerKey) {
-        userMsg = {
-          role: 'user',
-          type: 'sticker',
-          content: stickerKey,
-          raw: text,
-          name: userName,
-          avatar: avatars.user,
-          time: formatNowTime(),
-        };
+      if (!suppressUserMessage) {
+        const stickerKey = parseStickerToken(text);
+        if (stickerKey) {
+          userMsg = {
+            role: 'user',
+            type: 'sticker',
+            content: stickerKey,
+            raw: text,
+            name: userName,
+            avatar: avatars.user,
+            time: formatNowTime(),
+          };
+        } else {
+          const storedUser = window.appBridge.applyInputStoredRegex(text, { isEdit: false });
+          const displayUser = window.appBridge.applyInputDisplayRegex(storedUser, { isEdit: false, depth: 0 });
+          userMsg = {
+            role: 'user',
+            type: 'text',
+            content: displayUser,
+            raw: storedUser,
+            name: userName,
+            avatar: avatars.user,
+            time: formatNowTime(),
+          };
+        }
+        ui.addMessage(userMsg);
+        chatStore.appendMessage(userMsg, sessionId);
+        activeGeneration = { sessionId, userMsgId: userMsg.id, streamCtrl: null, cancelled: false };
+        refreshChatAndContacts();
+        ui.clearInput();
       } else {
-        const storedUser = window.appBridge.applyInputStoredRegex(text, { isEdit: false });
-        const displayUser = window.appBridge.applyInputDisplayRegex(storedUser, { isEdit: false, depth: 0 });
-        userMsg = {
-          role: 'user',
-          type: 'text',
-          content: displayUser,
-          raw: storedUser,
-          name: userName,
-          avatar: avatars.user,
-          time: formatNowTime(),
+        activeGeneration = {
+          sessionId,
+          userMsgId: existingUserMessageId || null,
+          streamCtrl: null,
+          cancelled: false,
         };
       }
-      ui.addMessage(userMsg);
-      chatStore.appendMessage(userMsg, sessionId);
-      activeGeneration = { sessionId, userMsgId: userMsg.id, streamCtrl: null, cancelled: false };
-      refreshChatAndContacts();
-      ui.clearInput();
     } else {
       // 有 pending 消息时，使用第一条 pending 消息的 ID
       activeGeneration = { sessionId, userMsgId: pendingMessagesToConfirm[0]?.id, streamCtrl: null, cancelled: false };
@@ -4263,90 +4276,54 @@ ${listPart || '-（无）'}
       const msgs = chatStore.getMessages(sessionId);
       const idx = msgs.findIndex(m => m.id === message.id);
       if (idx === -1) return;
-      const prevUser = [...msgs]
-        .slice(0, idx)
-        .reverse()
-        .find(m => m.role === 'user');
-      if (!prevUser) {
+      let prevUserIdx = -1;
+      for (let i = idx - 1; i >= 0; i--) {
+        if (msgs[i]?.role === 'user' && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
+          prevUserIdx = i;
+          break;
+        }
+      }
+      if (prevUserIdx === -1) {
         window.toastr?.warning('未找到對應的用戶消息，無法重生成');
         return;
       }
-      ui.removeMessage(message.id);
-      chatStore.deleteMessage(message.id, sessionId);
-      let streamCtrl = null;
-      try {
-        const assistantAvatar = getAssistantAvatarForSession(sessionId);
-        const text = prevUser.content;
-        const config = window.appBridge.config.get();
-        let full = '';
-        if (config.stream) {
-          streamCtrl = ui.startAssistantStream({
-            avatar: assistantAvatar,
-            name: '助手',
-            time: formatNowTime(),
-            typing: true,
-          });
-          const stream = await window.appBridge.generate(text, llmContext(text));
-          for await (const chunk of stream) {
-            full += chunk;
-            streamCtrl.update(full);
-          }
-          const uName = getEffectivePersona(sessionId)?.name || '我';
-          let stored = sanitizeAssistantReplyText(full, uName);
-          let display = stored;
-          // === 创意写作模式（暂时停用）===
-          // try {
-          //     stored = window.appBridge.applyOutputStoredRegex(full);
-          //     display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-          //     streamCtrl.update(display);
-          // } catch {}
-          const parsed = {
-            role: 'assistant',
-            name: '助手',
-            avatar: assistantAvatar,
-            time: formatNowTime(),
-            id: streamCtrl?.id,
-            rawOriginal: full,
-            raw: stored,
-            ...parseSpecialMessage(display),
-          };
-          streamCtrl.finish(parsed);
-          {
-            const saved = chatStore.appendMessage(parsed, sessionId);
-            autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
-          }
-          refreshChatAndContacts();
-        } else {
-          ui.showTyping(assistantAvatar);
-          const resultRaw = await window.appBridge.generate(text, llmContext(text));
-          ui.hideTyping();
-          // === 创意写作模式（暂时停用）===
-          // const stored = window.appBridge.applyOutputStoredRegex(resultRaw);
-          // const display = window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 });
-          const uName = getEffectivePersona(sessionId)?.name || '我';
-          const stored = sanitizeAssistantReplyText(resultRaw, uName);
-          const display = stored;
-          const parsed = {
-            role: 'assistant',
-            name: '助手',
-            avatar: assistantAvatar,
-            time: formatNowTime(),
-            rawOriginal: resultRaw,
-            raw: stored,
-            ...parseSpecialMessage(display),
-          };
-          ui.addMessage(parsed);
-          {
-            const saved = chatStore.appendMessage(parsed, sessionId);
-            autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
-          }
-          refreshChatAndContacts();
+      let nextUserIdx = -1;
+      for (let i = prevUserIdx + 1; i < msgs.length; i++) {
+        if (msgs[i]?.role === 'user' && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
+          nextUserIdx = i;
+          break;
         }
-      } catch (err) {
-        streamCtrl?.cancel?.();
-        ui.hideTyping();
-        window.toastr?.error(err.message || '重新生成失敗');
       }
+      if (nextUserIdx !== -1) {
+        window.toastr?.warning('只能重生成最新一輪回覆');
+        return;
+      }
+      const roundMessages = msgs.slice(prevUserIdx + 1, nextUserIdx === -1 ? msgs.length : nextUserIdx);
+      const assistantMessages = roundMessages.filter(m => m?.role === 'assistant');
+      if (!assistantMessages.length) {
+        window.toastr?.warning('未找到可重生成的 AI 回覆');
+        return;
+      }
+      assistantMessages.forEach(m => {
+        chatStore.deleteMessage(m.id, sessionId);
+        ui.removeMessage(m.id);
+      });
+      chatStore.removeLastSummary?.(sessionId);
+      refreshChatAndContacts();
+
+      const prevUser = msgs[prevUserIdx];
+      const resendText = getMessageSendText(prevUser);
+      if (!String(resendText || '').trim()) {
+        window.toastr?.warning('未找到對應的用戶消息內容');
+        return;
+      }
+      await handleSend(null, {
+        overrideText: resendText,
+        ignorePending: true,
+        suppressUserMessage: true,
+        skipInputRegex: true,
+        existingUserMessageId: prevUser?.id || '',
+      });
       return;
     }
   });

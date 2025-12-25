@@ -84,7 +84,7 @@ export class WorldPanel {
 
                 const getMemberLabel = (mid) => {
                     const c = this.contactsStore?.getContact?.(mid);
-                    return { name: c?.name || mid, avatar: c?.avatar || './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp' };
+                    return { name: c?.name || mid, avatar: c?.avatar || './assets/external/feather-default.png' };
                 };
 
                 const bindForMember = (memberId, worldId) => {

@@ -356,7 +356,7 @@ export class PersonaPanel {
                     margin-bottom: 8px;
                     background: ${checked ? 'rgba(37,99,235,0.06)' : '#fff'};
                 `;
-                const avatarUrl = it.avatar || (it.isGroup ? './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp' : './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png');
+                const avatarUrl = it.avatar || (it.isGroup ? './assets/external/feather-default.png' : './assets/external/feather-default.png');
                 row.innerHTML = `
                     <input class="persona-bulk-check" type="checkbox" ${checked ? 'checked' : ''} style="width:18px; height:18px;">
                     <img src="${avatarUrl}" alt="" style="width:36px; height:36px; border-radius:12px; object-fit:cover; background:#eee;">
@@ -534,7 +534,7 @@ export class PersonaPanel {
                 border: 1px solid ${p.id === activeId ? '#bae6fd' : 'transparent'};
             `;
 
-            const avatarUrl = p.avatar || './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png'; // Default user avatar
+            const avatarUrl = p.avatar || './assets/external/feather-default.png'; // Default user avatar
             const isLockedForSession = lockPersonaId && p.id === lockPersonaId;
 
             item.innerHTML = `
@@ -640,7 +640,7 @@ export class PersonaPanel {
     updateAvatarPreview(url) {
         const div = this.panel.querySelector('#edit-avatar-preview');
         // If no URL, use default image for preview context
-        const safeUrl = url || './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png';
+        const safeUrl = url || './assets/external/feather-default.png';
         div.style.backgroundImage = `url("${safeUrl}")`;
         div.dataset.url = url || '';
     }
@@ -651,7 +651,7 @@ export class PersonaPanel {
         if (useFile) {
             await this.mediaPicker.pickFile('image');
         } else {
-            await this.mediaPicker.pickUrl('请输入头像地址', './assets/external/sharkpan.xyz-f-BZsa-mmexport1736279012663.png');
+            await this.mediaPicker.pickUrl('请输入头像地址', './assets/external/feather-default.png');
         }
     }
 

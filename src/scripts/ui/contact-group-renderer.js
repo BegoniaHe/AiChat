@@ -126,7 +126,7 @@ export class ContactGroupRenderer {
         div.dataset.session = contact.id;
         div.dataset.name = contact.name || contact.id;
 
-        const avatar = contact.avatar || './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
+        const avatar = contact.avatar || './assets/external/feather-default.png';
         const name = contact.name || contact.id;
 
         div.innerHTML = `

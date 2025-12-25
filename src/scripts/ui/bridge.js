@@ -504,20 +504,25 @@ class AppBridge {
       // - direct scripts (non-ephemeral) may alter stored chat content
       // - promptOnly scripts apply to outgoing prompt only
       const ctx = this.getRegexContext();
-      const directInput = this.regex.apply(userMessage, ctx, regex_placement.USER_INPUT, {
-        isMarkdown: false,
-        isPrompt: false,
-        isEdit: false,
-        depth: 0,
-      });
-      const promptInput = this.regex.apply(userMessage, ctx, regex_placement.USER_INPUT, {
-        // Product requirement: as long as enabled, input regex should apply to outgoing prompt.
-        // So, include markdownOnly scripts too when building outgoing prompt.
-        isMarkdown: true,
-        isPrompt: true,
-        isEdit: false,
-        depth: 0,
-      });
+      const skipInputRegex = context?.meta?.skipInputRegex === true;
+      const directInput = skipInputRegex
+        ? userMessage
+        : this.regex.apply(userMessage, ctx, regex_placement.USER_INPUT, {
+            isMarkdown: false,
+            isPrompt: false,
+            isEdit: false,
+            depth: 0,
+          });
+      const promptInput = skipInputRegex
+        ? userMessage
+        : this.regex.apply(userMessage, ctx, regex_placement.USER_INPUT, {
+            // Product requirement: as long as enabled, input regex should apply to outgoing prompt.
+            // So, include markdownOnly scripts too when building outgoing prompt.
+            isMarkdown: true,
+            isPrompt: true,
+            isEdit: false,
+            depth: 0,
+          });
       const nextContext = {
         ...(context || {}),
         meta: {

@@ -8,6 +8,25 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-25 20:41
+  - 默认头像统一为羽毛图标（含聊天/联系人/群聊/设置/列表等默认回退）。
+  - 新增资源：`src/assets/external/feather-default.png`
+  - 修改：`src/index.html`
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+  - 修改：`src/scripts/ui/contact-group-renderer.js`
+  - 修改：`src/scripts/ui/contact-settings-panel.js`
+  - 修改：`src/scripts/ui/group-chat-panels.js`
+  - 修改：`src/scripts/ui/persona-panel.js`
+  - 修改：`src/scripts/ui/session-panel.js`
+  - 修改：`src/scripts/ui/world-panel.js`
+- 2025-12-25 20:21
+  - 新好友头像按钮加宽，避免添加好友时头像选择区过窄。
+  - 重新生成：支持重生成最新一轮 AI 回覆，批量删除该轮所有 AI 气泡并移除对应摘要后重发请求；修复 llmContext 未定义报错，并避免重复应用输入正则。
+  - 修改：`src/scripts/ui/session-panel.js`
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/bridge.js`
+  - 修改：`src/scripts/storage/chat-store.js`
 - 2025-12-25 19:54
   - 解析補強：當 <content> 完整但 MiPhone 在其外部時，先去除 </think>/<thinking>，再抽取 MiPhone 區塊解析。
   - 修改：`src/scripts/ui/app.js`

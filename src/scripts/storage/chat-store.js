@@ -1085,6 +1085,26 @@ export class ChatStore {
         return true;
     }
 
+    removeLastSummary(id = this.currentId) {
+        const sid = String(id || '').trim();
+        if (!sid) return false;
+        this._ensureSession(sid);
+        const session = this.state.sessions[sid];
+        const curAid = session.currentArchiveId;
+        if (curAid && Array.isArray(session.archives)) {
+            const arc = session.archives.find(a => a.id === curAid);
+            if (arc && Array.isArray(arc.summaries) && arc.summaries.length) {
+                arc.summaries.pop();
+                this._persist();
+                return true;
+            }
+        }
+        if (!Array.isArray(session.detachedSummaries) || session.detachedSummaries.length === 0) return false;
+        session.detachedSummaries.pop();
+        this._persist();
+        return true;
+    }
+
     clearSummaries(id = this.currentId) {
         const sid = String(id || '').trim();
         if (!sid) return false;

@@ -168,7 +168,7 @@ export class ContactSettingsPanel {
         };
         this.panel.querySelector('#contact-avatar-clear').onclick = () => {
             this.currentAvatar = '';
-            if (this.avatarPreview) this.avatarPreview.src = './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
+            if (this.avatarPreview) this.avatarPreview.src = './assets/external/feather-default.png';
         };
         this.panel.querySelector('#contact-settings-save').onclick = () => this.save();
         this.panel.querySelector('#contact-new-chat').onclick = () => this.startNewChat();
@@ -681,7 +681,7 @@ export class ContactSettingsPanel {
         if (sub) sub.textContent = `会话：${sessionId}`;
         this.currentAvatar = c.avatar || '';
         if (this.avatarPreview) {
-            this.avatarPreview.src = this.currentAvatar || './assets/external/cdn.discordapp.com-role-icons-1336817752844796016-da610f5548f174d9e04d49b1b28c3af1.webp';
+            this.avatarPreview.src = this.currentAvatar || './assets/external/feather-default.png';
         }
         if (this.nameInput) this.nameInput.value = c.name || sessionId;
     }
