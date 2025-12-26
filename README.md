@@ -2,12 +2,12 @@
 
 本项目启发于 SillyTavern，灵感多数来自 Discord 的“类脑”相关讨论。
 
-一个基于 Tauri 的聊天应用，支持多模型对话、流式回复、动态与群聊，并提供贴图与多媒体渲染。
+一个基于 Tauri 的聊天应用，支持多模型对话、动态与群聊，并提供贴图与多媒体渲染。
 
 ## 下载与安装（Android）
 
 1. 打开 GitHub Pages 下载页（示例）：
-   - `https://<owner>.github.io/<repo>/`
+   - `https://dghiffjd7.github.io/AiChat/`
 2. 下载最新版 APK：
    - `https://github.com/dghiffjd7/AiChat/releases/latest/download/app-universal-release.apk`
 3. 如果手机里已安装开发版（`npm run dev` 安装的 Debug 包）或签名不同，先卸载旧版。
@@ -21,17 +21,17 @@
 
 ## 功能简介
 
-- 多模型配置：OpenAI、Anthropic、兼容 OpenAI 协议的自定义服务。
-- 流式回复：边生成边显示，阅读不中断。
+- 多模型配置：Gemini、Deepseek、OpenAI、Anthropic、兼容 OpenAI 协议的自定义服务。
 - 多会话/群聊/动态：支持私聊、群聊与动态评论。
-- 贴图与多媒体：`[bqb-关键词]`、图片、语音等渲染。
-- 本地存储：聊天历史与配置存本地，不依赖云端。
+- 贴图与多媒体：表情包、图片、语音等渲染。
+- 本地存储：聊天历史与配置存本地。
 
 ## 首次使用配置
 
-1. 打开应用，点击右上角 **⚙️ 配置**。
-2. 填写 API Base URL / API Key / 模型名称。
+1. 打开应用，点击左上角头像，出现下拉选单。
+2. 进入API设定界面，建议使用Gemini(G3P)，填写  API Key，选择模型。
 3. 点击 **测试连接**，成功后保存。
+4. 可选：预设。
 
 ## 下载入口（建议）
 

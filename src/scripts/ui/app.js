@@ -819,18 +819,6 @@ ${listPart || '-（无）'}
       .replace(/\r/g, '\n')
   );
 
-  const extractContentBody = text => {
-    const raw = String(text ?? '');
-    const re = /<content\b[^>]*>([\s\S]*?)<\/content\s*>/gi;
-    let m;
-    let last = null;
-    while ((m = re.exec(raw))) last = m;
-    if (last && typeof last[1] === 'string') return last[1];
-    const open = raw.match(/<content\b[^>]*>/i);
-    if (open && open.index != null) return raw.slice(open.index + open[0].length);
-    return raw;
-  };
-
   const normalizeEchoText = (text = '') => {
     const raw = String(text || '');
     return raw
@@ -933,7 +921,7 @@ ${listPart || '-（无）'}
       const avatar = m.avatar || resolveAvatarForMessage(m, sessionId);
       const j = convPos.has(i) ? convPos.get(i) : null;
       const depth = j === null ? undefined : total - 1 - j;
-      const creativeBase = m?.meta?.renderRich ? extractContentBody(base) : base;
+      const creativeBase = base;
 
       if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
         if (m?.meta?.renderRich) {
@@ -3506,8 +3494,7 @@ ${listPart || '-（无）'}
               requestSummaryCompaction(sessionId);
             } catch {}
           }
-          const contentBody = extractContentBody(stripped);
-          let stored = normalizeCreativeLineBreaks(contentBody);
+          let stored = normalizeCreativeLineBreaks(stripped);
           let display = stored;
           try {
             stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
@@ -3960,8 +3947,7 @@ ${listPart || '-（无）'}
               requestSummaryCompaction(sessionId);
             } catch {}
           }
-          const contentBody = extractContentBody(stripped);
-          let stored = normalizeCreativeLineBreaks(contentBody);
+          let stored = normalizeCreativeLineBreaks(stripped);
           let display = stored;
           try {
             stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
