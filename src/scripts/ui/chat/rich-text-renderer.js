@@ -48,19 +48,56 @@ const copyToClipboard = async (text) => {
     }
 };
 
-const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {}) => {
+const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, preserveNewlines } = {}) => {
     const content = String(htmlBodyOrDocument ?? '');
     const hasHtml = /<html[\s>]/i.test(content);
-    const doc = hasHtml
-        ? content
-        : `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>${content}</body></html>`;
+    const prewrapStyle = preserveNewlines
+        ? `
+<style id="__chatapp_prewrap">
+  .__chatapp-prewrap,
+  .__chatapp-prewrap p,
+  .__chatapp-prewrap div,
+  .__chatapp-prewrap span,
+  .__chatapp-prewrap li {
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+</style>`
+        : '';
+
+    const addBodyClass = (html, className) => {
+        if (!className) return html;
+        return String(html).replace(/<body([^>]*)>/i, (match, attrs) => {
+            const rawAttrs = String(attrs || '');
+            if (/class\s*=/i.test(rawAttrs)) {
+                return match.replace(/class\s*=\s*(['"])(.*?)\1/i, (m, q, val) => {
+                    const next = String(val || '').trim();
+                    const merged = next ? `${next} ${className}` : className;
+                    return `class=${q}${merged}${q}`;
+                });
+            }
+            return `<body${rawAttrs} class="${className}">`;
+        });
+    };
+
+    let doc = '';
+    if (hasHtml) {
+        doc = preserveNewlines ? addBodyClass(content, '__chatapp-prewrap') : content;
+    } else {
+        const bodyClass = preserveNewlines ? ' class="__chatapp-prewrap"' : '';
+        const wrapped = preserveNewlines ? `<div class="__chatapp-prewrap">${content}</div>` : content;
+        doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body${bodyClass}>${wrapped}</body></html>`;
+    }
 
     // Base style: avoid overflowing the phone width; keep layout modern and readable
     const baseStyle = `
 <style id="__chatapp_base">
-  html, body { margin:0; padding:0; max-width:100% !important; overflow-x:hidden !important; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
-  body { padding: 8px; background: transparent; transform-origin: top left; overflow-x:hidden !important; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
-  *, *::before, *::after { box-sizing: border-box; max-width: 100% !important; }
+  html, body { margin:0; padding:0; max-width:100% !important; width:100% !important; min-height:0 !important; height:auto !important; overflow-x:hidden !important; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  body { padding: 8px; background: transparent; transform-origin: top left; overflow-x:hidden !important; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; display:block !important; align-items:flex-start !important; justify-content:flex-start !important; }
+  *, *::before, *::after { box-sizing: border-box; max-width: 100% !important; min-width: 0 !important; }
+  details, summary { max-width: 100% !important; }
+  details[open] { max-height: none !important; overflow: visible !important; }
   img, video, canvas, svg { max-width: 100%; height: auto; }
   table { max-width: 100%; display:block; overflow:auto; border-collapse: collapse; }
   pre { max-width: 100%; overflow:auto; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -76,10 +113,39 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
   let pressTimer = null;
   let pressActive = false;
 
+  const measureContentHeight = () => {
+    try {
+      const body = document.body;
+      if (!body) return 0;
+      const kids = Array.from(body.children || []);
+      if (!kids.length) {
+        const rect = body.getBoundingClientRect();
+        return rect ? rect.height : 0;
+      }
+      let minTop = null;
+      let maxBottom = null;
+      kids.forEach((el) => {
+        const rect = el.getBoundingClientRect();
+        if (!rect || rect.height <= 0) return;
+        if (minTop === null || rect.top < minTop) minTop = rect.top;
+        if (maxBottom === null || rect.bottom > maxBottom) maxBottom = rect.bottom;
+      });
+      if (minTop === null || maxBottom === null) {
+        const rect = body.getBoundingClientRect();
+        return rect ? rect.height : 0;
+      }
+      const padTop = parseFloat(getComputedStyle(body).paddingTop || '0') || 0;
+      const padBottom = parseFloat(getComputedStyle(body).paddingBottom || '0') || 0;
+      return Math.max(0, maxBottom - minTop) + padTop + padBottom;
+    } catch {
+      return 0;
+    }
+  };
+
   const post = () => {
     try {
-      const rect = document.body ? document.body.getBoundingClientRect() : null;
-      const h = Math.ceil(Math.max(120, rect ? rect.height : 0));
+      const rawH = measureContentHeight();
+      const h = Math.ceil(Math.max(120, rawH || 0));
       if (h && h !== lastH) {
         lastH = h;
         parent.postMessage({ type: 'chatapp:iframe-resize', id, height: h }, '*');
@@ -106,6 +172,10 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
       }
 
       let scale = clientW / scrollW;
+      if (scale > 0.98) {
+        post();
+        return;
+      }
       const minScale = 0.55;
       scale = Math.max(minScale, Math.min(1, scale));
       body.style.transformOrigin = 'top left';
@@ -118,8 +188,57 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
   };
 
   const start = () => {
-    fitToWidth();
-    post();
+    const stripBodyWhitespace = () => {
+      try {
+        const body = document.body;
+        if (!body) return;
+        Array.from(body.childNodes || []).forEach((node) => {
+          if (node && node.nodeType === Node.TEXT_NODE && !String(node.textContent || '').trim()) {
+            node.remove();
+          }
+        });
+      } catch {}
+    };
+    const clampOversizedBlocks = () => {
+      try {
+        const body = document.body;
+        const docEl = document.documentElement;
+        if (!body || !docEl) return;
+        const vh = Math.max(docEl.clientHeight || 0, window.innerHeight || 0);
+        if (!vh) return;
+        const nodes = body.querySelectorAll('*');
+        nodes.forEach((el) => {
+          const style = window.getComputedStyle(el);
+          const display = String(style.display || '');
+          if (display.includes('flex') || display.includes('grid')) {
+            const align = String(style.alignItems || '');
+            const justify = String(style.justifyContent || '');
+            if (align.includes('center')) el.style.alignItems = 'flex-start';
+            if (justify.includes('center')) el.style.justifyContent = 'flex-start';
+          }
+          const minH = parseFloat(style.minHeight || '');
+          if (Number.isFinite(minH) && minH >= vh * 0.9) {
+            el.style.minHeight = 'auto';
+          }
+          const h = parseFloat(style.height || '');
+          if (Number.isFinite(h) && h >= vh * 0.9) {
+            el.style.height = 'auto';
+          }
+          const maxH = parseFloat(style.maxHeight || '');
+          if (Number.isFinite(maxH) && maxH >= vh * 0.9) {
+            el.style.maxHeight = 'none';
+          }
+          const mt = parseFloat(style.marginTop || '');
+          const mb = parseFloat(style.marginBottom || '');
+          if (Number.isFinite(mt) && mt >= 48) el.style.marginTop = '16px';
+          if (Number.isFinite(mb) && mb >= 48) el.style.marginBottom = '16px';
+          const pt = parseFloat(style.paddingTop || '');
+          const pb = parseFloat(style.paddingBottom || '');
+          if (Number.isFinite(pt) && pt >= 64) el.style.paddingTop = '16px';
+          if (Number.isFinite(pb) && pb >= 64) el.style.paddingBottom = '16px';
+        });
+      } catch {}
+    };
 
     // Forward long-press gestures to parent (iframe events don't bubble to outer document)
     const sendPress = (phase, ev) => {
@@ -159,15 +278,39 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling } = {
       try { ev.preventDefault(); } catch {}
     }, { passive: false });
 
+    const requestLayout = (() => {
+      let rafId = null;
+      return () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          stripBodyWhitespace();
+          clampOversizedBlocks();
+          fitToWidth();
+          post();
+        });
+      };
+    })();
+
+    requestLayout();
+
+    document.addEventListener('toggle', (ev) => {
+      if (ev && ev.target && ev.target.tagName === 'DETAILS') requestLayout();
+    }, true);
+
     try {
-      const ro = new ResizeObserver(() => { fitToWidth(); });
+      const ro = new ResizeObserver(() => { requestLayout(); });
       ro.observe(document.documentElement);
       if (document.body) ro.observe(document.body);
     } catch {
-      setInterval(() => { fitToWidth(); }, 500);
+      setInterval(() => { requestLayout(); }, 500);
     }
-    window.addEventListener('load', () => setTimeout(() => { fitToWidth(); }, 0));
-    window.addEventListener('resize', () => setTimeout(() => { fitToWidth(); }, 0));
+    try {
+      const mo = new MutationObserver(() => { requestLayout(); });
+      if (document.body) mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    } catch {}
+    window.addEventListener('load', () => setTimeout(() => { requestLayout(); }, 0));
+    window.addEventListener('resize', () => setTimeout(() => { requestLayout(); }, 0));
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
@@ -191,12 +334,39 @@ window.addEventListener('message', (e) => {
     if (/<\/body>/i.test(doc)) {
         // Try to put style inside <head> if present, otherwise before </body>
         if (/<\/head>/i.test(doc)) {
-            const withHead = doc.replace(/<\/head>/i, `${baseStyle}${vh}</head>`);
+            const withHead = doc.replace(/<\/head>/i, `${baseStyle}${prewrapStyle}${vh}</head>`);
             return withHead.replace(/<\/body>/i, `${viewportAdjust}${bridge}</body>`);
         }
-        return doc.replace(/<\/body>/i, `${baseStyle}${vh}${viewportAdjust}${bridge}</body>`);
+        return doc.replace(/<\/body>/i, `${baseStyle}${prewrapStyle}${vh}${viewportAdjust}${bridge}</body>`);
     }
-    return `${baseStyle}${vh}${viewportAdjust}${doc}${bridge}`;
+    return `${baseStyle}${prewrapStyle}${vh}${viewportAdjust}${doc}${bridge}`;
+};
+
+const injectHtmlNewlines = (html) => {
+    const raw = String(html ?? '');
+    if (!raw.includes('\n')) return raw;
+    const protectedRe = /<(style|script)[^>]*>[\s\S]*?<\/\1>/gi;
+    const chunks = [];
+    let last = 0;
+    let m;
+    while ((m = protectedRe.exec(raw))) {
+        if (m.index > last) chunks.push({ kind: 'text', value: raw.slice(last, m.index) });
+        chunks.push({ kind: 'raw', value: m[0] });
+        last = protectedRe.lastIndex;
+    }
+    if (last < raw.length) chunks.push({ kind: 'text', value: raw.slice(last) });
+    return chunks
+        .map(chunk => {
+            if (chunk.kind !== 'text') return chunk.value;
+            const parts = String(chunk.value || '').split(/(<[^>]+>)/g);
+            return parts.map(part => {
+                if (!part) return part;
+                if (part.startsWith('<')) return part;
+                if (!part.trim()) return part;
+                return part.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '<br>');
+            }).join('');
+        })
+        .join('');
 };
 
 const processAllVhUnits = (htmlContent) => {
@@ -245,7 +415,7 @@ const processAllVhUnits = (htmlContent) => {
     return processed;
 };
 
-const makeCodeBlock = ({ lang, code, messageId }) => {
+const makeCodeBlock = ({ lang, code, messageId, preserveHtmlNewlines = false }) => {
     const wrap = document.createElement('div');
     wrap.className = 'chat-codeblock';
     wrap.style.cssText = 'border:1px solid rgba(0,0,0,0.10); border-radius:12px; overflow:hidden; margin:8px 0;';
@@ -271,12 +441,12 @@ const makeCodeBlock = ({ lang, code, messageId }) => {
         iframe.loading = 'lazy';
         iframe.setAttribute('sandbox', 'allow-scripts'); // no same-origin
 
-        let html = code;
+        let html = preserveHtmlNewlines ? injectHtmlNewlines(code) : code;
         const hasMinVh = /min-height:\s*[^;]*vh/i.test(html);
         const hasJsVhUsage = /\d+vh/.test(html);
         const needsVhHandling = hasMinVh || hasJsVhUsage;
         if (needsVhHandling) html = processAllVhUnits(html);
-        iframe.srcdoc = buildIframeSrcDoc(html, { iframeId, needsVhHandling });
+        iframe.srcdoc = buildIframeSrcDoc(html, { iframeId, needsVhHandling, preserveNewlines: false });
         previewWrap.appendChild(iframe);
 
         wrap.appendChild(previewWrap);
@@ -345,7 +515,7 @@ export const setupIframeResizeListener = () => {
     });
 };
 
-export const renderRichText = (containerEl, text, { messageId } = {}) => {
+export const renderRichText = (containerEl, text, { messageId, preserveHtmlNewlines = false } = {}) => {
     if (!containerEl) return;
     containerEl.innerHTML = '';
 
@@ -359,13 +529,31 @@ export const renderRichText = (containerEl, text, { messageId } = {}) => {
         (/<style[\s>]/i.test(trimmed) || /<details[\s>]/i.test(trimmed) || /<div[\s>]/i.test(trimmed) || /<body[\s>]/i.test(trimmed)) &&
         /<\/[a-z][a-z0-9]*\s*>/i.test(trimmed)
     );
-    const parts = (/```/.test(rawText) ? splitFencedCodeBlocks(rawText)
+    const textWithBreaks = rawText
+        .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+        .replace(/<br\s*\/?>/gi, '\n');
+    const hasCodeFence = /```/.test(rawText);
+    let parts = (hasCodeFence ? splitFencedCodeBlocks(rawText)
         : wholeLooksLikeHtml
             ? [{ type: 'code', lang: 'html', code: trimmed }]
-            : [{ type: 'text', text: rawText }]);
+            : [{ type: 'text', text: textWithBreaks }]);
+    if (hasCodeFence) {
+        parts = parts.map(p => {
+            if (p.type !== 'text') return p;
+            const normalized = String(p.text || '')
+                .replace(/&lt;br\s*\/?&gt;/gi, '\n')
+                .replace(/<br\s*\/?>/gi, '\n');
+            return { ...p, text: normalized };
+        });
+    }
     parts.forEach((p) => {
         if (p.type === 'code') {
-            containerEl.appendChild(makeCodeBlock({ lang: p.lang, code: p.code, messageId }));
+            containerEl.appendChild(makeCodeBlock({
+                lang: p.lang,
+                code: p.code,
+                messageId,
+                preserveHtmlNewlines,
+            }));
             return;
         }
 

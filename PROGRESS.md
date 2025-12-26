@@ -8,6 +8,22 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-27 03:16
+  - 创意写作 HTML 预览：移除全局 pre-wrap 以避免模板缩进换行撑高 iframe，折叠/展开时去掉空白文本节点并刷新高度。
+  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+- 2025-12-27 02:36
+  - 富文本预览：强制顶部对齐并压缩过大 margin/padding，减少“思考卡片”上下空白。
+  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+- 2025-12-27 02:29
+  - 富文本预览高度计算改为基于实际内容块，减少“居中导致的大空白”。
+  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+- 2025-12-27 02:23
+  - 创意写作富文本适配：限制超高区块，细化缩放阈值并在展开/折叠时重新布局。
+  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+- 2025-12-27 02:12
+  - 创意写作富文本：HTML 预览保留自然换行，避免段落挤成一团；<br> 在文本片段中自动还原。
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
 - 2025-12-26 10:12
   - 创意写作：不再特殊处理 <content>，完整回复统一走正则与自然换行。
   - 修改：`src/scripts/ui/app.js`

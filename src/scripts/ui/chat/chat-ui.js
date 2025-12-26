@@ -593,7 +593,10 @@ export class ChatUI {
                 // === 创意写作模式===
                 // Safe rich rendering (code fences + html iframe preview)
                 if (message?.meta?.renderRich) {
-                    renderRichText(bubble, String(message.content ?? ''), { messageId: message.id });
+                    renderRichText(bubble, String(message.content ?? ''), {
+                        messageId: message.id,
+                        preserveHtmlNewlines: true,
+                    });
                     break;
                 }
                 // === 对话模式（纯文本）===

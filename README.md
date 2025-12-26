@@ -10,14 +10,12 @@
    - `https://dghiffjd7.github.io/AiChat/`
 2. 下载最新版 APK：
    - `https://github.com/dghiffjd7/AiChat/releases/latest/download/app-universal-release.apk`
-3. 如果手机里已安装开发版（`npm run dev` 安装的 Debug 包）或签名不同，先卸载旧版。
-4. 在手机系统中允许“安装未知来源应用”。
-5. 点击 APK 完成安装。
+3. 在手机系统中允许“安装未知来源应用”。
+4. 点击 APK 完成安装。
 
 ### 更新方式
 
 - 直接下载最新版 APK 覆盖安装即可（同包名 + 同签名 + 版本号递增）。
-- 如果提示“签名不一致/无法更新”，卸载旧版后再安装。
 
 ## 功能简介
 
