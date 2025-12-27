@@ -921,10 +921,34 @@ ${listPart || '-（无）'}
       const avatar = m.avatar || resolveAvatarForMessage(m, sessionId);
       const j = convPos.has(i) ? convPos.get(i) : null;
       const depth = j === null ? undefined : total - 1 - j;
-      const creativeBase = base;
+      const rawSource =
+        typeof m.rawSource === 'string'
+          ? m.rawSource
+          : typeof m.raw_source === 'string'
+            ? m.raw_source
+            : '';
+      const creativeSource = rawSource ? normalizeCreativeLineBreaks(rawSource) : '';
+      const creativeBase = creativeSource || base;
 
       if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
         if (m?.meta?.renderRich) {
+          if (creativeSource) {
+            let stored = creativeSource;
+            try {
+              stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(creativeSource, { depth }));
+            } catch {}
+            let display = stored;
+            try {
+              display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth }));
+            } catch {}
+            return {
+              ...m,
+              avatar,
+              raw: stored,
+              content: display,
+              status: m.status,
+            };
+          }
           return {
             ...m,
             avatar,
@@ -3494,10 +3518,11 @@ ${listPart || '-（无）'}
               requestSummaryCompaction(sessionId);
             } catch {}
           }
-          let stored = normalizeCreativeLineBreaks(stripped);
-          let display = stored;
+          const rawSource = normalizeCreativeLineBreaks(stripped);
+          let stored = rawSource;
+          let display = rawSource;
           try {
-            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
+            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(rawSource, { depth: 0 }));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
             streamCtrl.update(display);
           } catch {}
@@ -3511,6 +3536,7 @@ ${listPart || '-（无）'}
             time: formatNowTime(),
             id: streamCtrl?.id,
             rawOriginal: full,
+            rawSource,
             raw: stored,
             content: display,
             meta,
@@ -3947,10 +3973,11 @@ ${listPart || '-（无）'}
               requestSummaryCompaction(sessionId);
             } catch {}
           }
-          let stored = normalizeCreativeLineBreaks(stripped);
-          let display = stored;
+          const rawSource = normalizeCreativeLineBreaks(stripped);
+          let stored = rawSource;
+          let display = rawSource;
           try {
-            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(stored));
+            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(rawSource, { depth: 0 }));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
           } catch {}
           const meta = { renderRich: true };
@@ -3962,6 +3989,7 @@ ${listPart || '-（无）'}
             avatar: assistantAvatar,
             time: formatNowTime(),
             rawOriginal: resultRaw,
+            rawSource,
             raw: stored,
             content: display,
             meta,
@@ -4497,6 +4525,7 @@ ${listPart || '-（无）'}
       const display = next;
       const updater = {
         rawOriginal: next,
+        rawSource: normalizeCreativeLineBreaks(next),
         raw: stored,
         ...parseSpecialMessage(display),
       };

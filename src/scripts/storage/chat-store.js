@@ -9,6 +9,7 @@ const MAX_PERSIST_ARCHIVES_PER_SESSION = 6;
 const MAX_PERSIST_ARCHIVE_MESSAGES = 400;
 const MAX_PERSIST_SUMMARIES_PER_SESSION = 120;
 const MAX_PERSIST_STRING_CHARS = 180_000;
+const MAX_PERSIST_RAW_SOURCE_CHARS = 600_000;
 const MAX_PERSIST_DATA_URL_CHARS = 4096;
 
 const isDataUrl = (s) => typeof s === 'string' && s.startsWith('data:') && s.length > MAX_PERSIST_DATA_URL_CHARS;
@@ -30,6 +31,10 @@ const sanitizeMessageForPersist = (msg) => {
 
     // Many message payloads include huge raw originals; we only keep bounded versions on disk.
     if (typeof out.rawOriginal === 'string') delete out.rawOriginal;
+    if (typeof out.rawSource === 'string') out.rawSource = clampString(out.rawSource, MAX_PERSIST_RAW_SOURCE_CHARS);
+    if (typeof out.raw_source === 'string' && typeof out.rawSource !== 'string') {
+        out.raw_source = clampString(out.raw_source, MAX_PERSIST_RAW_SOURCE_CHARS);
+    }
 
     if (typeof out.content === 'string') out.content = clampString(out.content);
     if (typeof out.raw === 'string') out.raw = clampString(out.raw);

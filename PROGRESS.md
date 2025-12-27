@@ -8,6 +8,12 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-27 03:43
+  - 创意写作：保存正则前的原始文本并在渲染时按当前正则重新生成显示，避免切换预设导致块状缺失。
+  - Persona 头像：本地图片上传时先压缩，再持久化保存，减少重开恢复默认的问题。
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/storage/chat-store.js`
+  - 修改：`src/scripts/ui/persona-panel.js`
 - 2025-12-27 03:16
   - 创意写作 HTML 预览：移除全局 pre-wrap 以避免模板缩进换行撑高 iframe，折叠/展开时去掉空白文本节点并刷新高度。
   - 修改：`src/scripts/ui/chat/rich-text-renderer.js`

@@ -1,5 +1,6 @@
 
 import { MediaPicker } from './media-picker.js';
+import { avatarDataUrlFromFile } from '../utils/image.js';
 
 export class PersonaPanel {
     constructor({ personaStore, chatStore = null, contactsStore = null, getSessionId = null, onPersonaChanged }) {
@@ -12,7 +13,16 @@ export class PersonaPanel {
         this.panel = null;
         this.mediaPicker = new MediaPicker({
             onUrl: (url) => this.updateAvatarPreview(url),
-            onFile: (dataUrl) => this.updateAvatarPreview(dataUrl)
+            onFile: async (dataUrl, file) => {
+                if (file) {
+                    try {
+                        const compressed = await avatarDataUrlFromFile(file, { maxDim: 256, quality: 0.84, maxBytes: 420_000 });
+                        this.updateAvatarPreview(compressed);
+                        return;
+                    } catch {}
+                }
+                if (dataUrl) this.updateAvatarPreview(dataUrl);
+            }
         });
         this.editingId = null;
         this.bulkModal = null;
