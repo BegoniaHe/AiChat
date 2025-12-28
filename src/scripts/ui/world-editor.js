@@ -126,6 +126,8 @@ const normalizeEntry = (entry = {}, index = 0) => {
     return e;
 };
 
+const createDefaultEntry = (index = 0) => normalizeEntry({ constant: true, selective: false }, index);
+
 const positionLabel = (pos = 0, role = 0, depth = DEFAULT_DEPTH) => {
     switch (Number(pos)) {
         case 0: return '↑Char';
@@ -163,7 +165,7 @@ export class WorldEditorModal {
         if (!Array.isArray(this.data.entries)) this.data.entries = [];
         this.data.entries = this.data.entries.map((e, i) => normalizeEntry(e, i));
         if (!this.data.entries.length) {
-            this.data.entries.push(normalizeEntry({}, 0));
+            this.data.entries.push(createDefaultEntry(0));
         }
         if (this.titleEl) {
             this.titleEl.textContent = `世界书：${name}`;
@@ -511,7 +513,7 @@ export class WorldEditorModal {
     }
 
     addEntry() {
-        const newEntry = normalizeEntry({}, this.data.entries.length);
+        const newEntry = createDefaultEntry(this.data.entries.length);
         newEntry.id = `entry-${Date.now()}`;
         this.data.entries.unshift(newEntry);
         this.selectEntry(0);

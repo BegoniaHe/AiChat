@@ -8,6 +8,34 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+- 2025-12-28 22:48
+  - 狀態欄漸變加深並拉到純白收尾（聊天室與列表頁頂欄）。
+  - 修改：`src/assets/css/main.css`
+  - 修改：`src/assets/css/qq-legacy.css`
+- 2025-12-28 22:45
+  - 聊天室狀態欄漸變區縮短（僅保留極小下延），降低頂部深色區高度。
+  - 修改：`src/assets/css/qq-legacy.css`
+- 2025-12-28 22:37
+  - 非聊天室頂欄：安全區域改為獨立漸變覆蓋層，恢復淡色分割線。
+  - 修改：`src/assets/css/main.css`
+- 2025-12-28 22:32
+  - 聊天室狀態欄遮罩下延，覆蓋頂部 padding 導致的白色縫隙。
+  - 修改：`src/assets/css/qq-legacy.css`
+- 2025-12-28 22:27
+  - 修正聊天室頂欄：恢復原高度，安全區以獨立覆蓋層呈現，避免標題區變高且狀態欄仍為白色。
+  - 修改：`src/assets/css/qq-legacy.css`
+- 2025-12-28 22:12
+  - 顶部状态栏可见性：顶部栏与聊天室顶栏加入渐变底色并补足 safe-area 顶部间距。
+  - 通用设定：新增“流式小点动画”开关，关闭后小点静止显示。
+  - 发送按钮：发送中/流式期间保持禁用，避免重复发送。
+  - 世界书：新建条目默认蓝灯（常驻）。
+  - 修改：`src/assets/css/main.css`
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/storage/app-settings.js`
+  - 修改：`src/scripts/ui/general-settings-panel.js`
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+  - 修改：`src/scripts/ui/world-editor.js`
 - 2025-12-27 03:43
   - 创意写作：保存正则前的原始文本并在渲染时按当前正则重新生成显示，避免切换预设导致块状缺失。
   - Persona 头像：本地图片上传时先压缩，再持久化保存，减少重开恢复默认的问题。
@@ -87,7 +115,7 @@
 - 2025-12-25 20:21
   - 新好友头像按钮加宽，避免添加好友时头像选择区过窄。
   - 重新生成：支持重生成最新一轮 AI 回覆，批量删除该轮所有 AI 气泡并移除对应摘要后重发请求；修复 llmContext 未定义报错，并避免重复应用输入正则。
-  - 修改：`src/scripts/ui/session-panel.js`
+  - 修改：`scripts/ui/session-panel.js`
   - 修改：`src/scripts/ui/app.js`
   - 修改：`src/scripts/ui/bridge.js`
   - 修改：`src/scripts/storage/chat-store.js`

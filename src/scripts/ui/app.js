@@ -4,6 +4,7 @@ import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { MomentSummaryStore } from '../storage/moment-summary-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
+import { appSettings } from '../storage/app-settings.js';
 import { logger } from '../utils/logger.js';
 import { initMediaAssets, listMediaAssets, resolveMediaAsset, isAssetRef, isLikelyUrl } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
@@ -34,6 +35,16 @@ import { WorldInfoIndicator } from './worldinfo-indicator.js';
 
 const initApp = async () => {
   const ui = new ChatUI();
+  const applyTypingDotsSetting = () => {
+    const enabled = appSettings.get().typingDotsEnabled !== false;
+    if (!document?.body) return;
+    if (enabled) {
+      delete document.body.dataset.typingDots;
+    } else {
+      document.body.dataset.typingDots = 'off';
+    }
+  };
+  applyTypingDotsSetting();
   let updateStickerPreview = () => {};
   const originalSetInputText = ui.setInputText.bind(ui);
   ui.setInputText = (val) => {

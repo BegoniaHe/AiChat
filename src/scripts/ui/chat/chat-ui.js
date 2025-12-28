@@ -42,6 +42,7 @@ export class ChatUI {
         this.errorBanner = null;
         this.isOnline = true;
         this.isStreaming = false;
+        this.isSending = false;
         this.contextMenu = this.createContextMenu();
         this.longPressTimer = null;
         this.actionHandler = null;
@@ -194,11 +195,9 @@ export class ChatUI {
     bindNetworkEvents() {
         const updateStatus = () => {
             if (typeof navigator !== 'undefined' && !navigator.onLine) {
-                this.isOnline = false;
                 this.setSendEnabled(false);
                 this.showErrorBanner('網絡不可用，請檢查連接');
             } else {
-                this.isOnline = true;
                 this.setSendEnabled(true);
                 if (this.errorBanner) this.errorBanner.style.display = 'none';
                 window.toastr?.info?.('網絡已連接');
@@ -307,14 +306,22 @@ export class ChatUI {
     }
 
     setSendingState(isSending) {
-        this.sendBtn.disabled = isSending || !this.isOnline || this.isStreaming;
+        this.isSending = Boolean(isSending);
+        this.updateSendButtonState();
     }
 
     setSendEnabled(enabled) {
-        this.sendBtn.disabled = !enabled;
-        const label = enabled ? '发送' : '离线';
+        this.isOnline = Boolean(enabled);
+        this.updateSendButtonState();
+    }
+
+    updateSendButtonState() {
+        if (!this.sendBtn) return;
+        const disabled = !this.isOnline || this.isSending || this.isStreaming;
+        this.sendBtn.disabled = disabled;
+        const label = this.isOnline ? '发送' : '离线';
         this.sendBtn.setAttribute('aria-label', label);
-        if (enabled) {
+        if (this.isOnline) {
             this.sendBtn.classList.remove('is-offline');
         } else {
             this.sendBtn.classList.add('is-offline');
@@ -765,6 +772,7 @@ export class ChatUI {
         let pendingText = '';
         const bufferIndex = this.messageBuffer.push({ role: 'assistant', type: 'text', content: '' }) - 1;
         this.isStreaming = true;
+        this.updateSendButtonState();
         return {
             id: msgId,
             update: (text) => {
@@ -783,6 +791,7 @@ export class ChatUI {
             },
             finish: (finalMessage) => {
                 this.isStreaming = false;
+                this.updateSendButtonState();
                 if (updateHandle != null) {
                     caf(updateHandle);
                     updateHandle = null;
@@ -813,6 +822,7 @@ export class ChatUI {
             },
             cancel: () => {
                 this.isStreaming = false;
+                this.updateSendButtonState();
                 if (updateHandle != null) {
                     caf(updateHandle);
                     updateHandle = null;

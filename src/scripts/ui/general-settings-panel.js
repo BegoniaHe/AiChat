@@ -5,6 +5,7 @@ export class GeneralSettingsPanel {
     this.element = null;
     this.overlayElement = null;
     this.debugToggle = null;
+    this.typingDotsToggle = null;
   }
 
   show() {
@@ -15,6 +16,10 @@ export class GeneralSettingsPanel {
     if (this.debugToggle) {
       this.debugToggle.checked = Boolean(settings.showDebugToggle);
     }
+    if (this.typingDotsToggle) {
+      this.typingDotsToggle.checked = settings.typingDotsEnabled !== false;
+    }
+    this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
     this.element.style.display = 'block';
     this.overlayElement.style.display = 'block';
   }
@@ -22,6 +27,15 @@ export class GeneralSettingsPanel {
   hide() {
     if (this.element) this.element.style.display = 'none';
     if (this.overlayElement) this.overlayElement.style.display = 'none';
+  }
+
+  applyTypingDotsSetting(enabled) {
+    if (!document?.body) return;
+    if (enabled) {
+      delete document.body.dataset.typingDots;
+    } else {
+      document.body.dataset.typingDots = 'off';
+    }
   }
 
   createUI() {
@@ -58,6 +72,14 @@ export class GeneralSettingsPanel {
           <small style="color: #666; margin-left: 26px;">右下角调试按钮，默认隐藏</small>
         </div>
 
+        <div style="margin-bottom: 16px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="general-typing-dots" style="width: 18px; height: 18px;">
+            <span style="font-weight: 700;">流式小点动画</span>
+          </label>
+          <small style="color: #666; margin-left: 26px;">关闭后保留静态小点</small>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; gap: 8px;">
           <button id="general-settings-done" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0;
                                                    background: #f8fafc; cursor: pointer; font-size: 14px; color: #475569;">
@@ -77,6 +99,7 @@ export class GeneralSettingsPanel {
     this.element.onclick = (e) => e.stopPropagation();
 
     this.debugToggle = this.element.querySelector('#general-debug-toggle');
+    this.typingDotsToggle = this.element.querySelector('#general-typing-dots');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -85,6 +108,11 @@ export class GeneralSettingsPanel {
         const panel = getDebugPanel();
         panel.setEnabled(Boolean(settings.showDebugToggle));
       } catch {}
+    });
+    this.typingDotsToggle?.addEventListener('change', (e) => {
+      const enabled = Boolean(e?.target?.checked);
+      const settings = appSettings.update({ typingDotsEnabled: enabled });
+      this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
     });
 
     this.element.querySelector('#general-settings-close')?.addEventListener('click', () => this.hide());

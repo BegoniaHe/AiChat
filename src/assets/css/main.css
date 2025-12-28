@@ -39,6 +39,12 @@
   animation: slideIn 0.3s ease;
 }
 
+body[data-typing-dots="off"] .typing-dot {
+  animation: none !important;
+  opacity: 0.55;
+  transform: translateY(0) !important;
+}
+
 /* 背景占位（若需要使用已下載外部背景） */
 .bg-legacy {
   background-image: url('../external/sharkpan.xyz-f-eWhZ-00017-2763077315.png');
@@ -530,8 +536,27 @@ body,
   /* 為狀態欄留出空間，但頂欄本身緊貼狀態欄下方 */
   padding-top: env(safe-area-inset-top, 0px);
   margin-top: 0;
-  /* 半透明背景，不完全遮擋狀態欄 */
+  /* 半透明背景，安全區域單獨覆蓋 */
   background: rgba(255, 255, 255, 0.95) !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
+.topbar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top, 0px);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.7) 0%, rgba(255, 255, 255, 1) 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.topbar > * {
+  position: relative;
+  z-index: 1;
 }
 
 .section-header {
