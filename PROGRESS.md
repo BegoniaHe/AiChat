@@ -1555,3 +1555,18 @@
 - 2025-12-22 21:05
   - Prompt 结构调整：<chat_guide> 与世界书同位置注入；世界书不再重复；清理块之间多余空行。
   - 修改：`src/scripts/ui/bridge.js`
+- 2025-12-27 20:45
+  - 群聊提示词补充系统消息格式示例；系统消息解析支持邀请/移除成员并自动追加“加入群聊”系统提示。
+  - 发送后清理待发送队列，修复缓存消息发送后蓝点残留。
+  - 进入聊天室时若仍在生成回复，恢复显示等待动画。
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/bridge.js`
+- 2025-12-27 22:29
+  - 未读分割线：进入聊天室定位到首条未读时插入灰色“以下为未读讯息”分割线，复进无新讯息则不显示。
+  - 修改：`src/assets/css/qq-legacy.css`
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/chat/chat-ui.js`
+- 2025-12-28 00:33
+  - 进入聊天室时优先定位未读分割线，不自动滚到底部，避免跳转失效。
+  - 修改：`src/scripts/ui/app.js`
+  - 修改：`src/scripts/ui/chat/chat-ui.js`

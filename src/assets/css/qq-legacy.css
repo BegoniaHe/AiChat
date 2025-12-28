@@ -397,6 +397,28 @@
     color: rgba(100, 116, 139, 0.85);
 }
 
+.QQ_chat_unread-divider {
+    margin: 14px 0;
+}
+
+.QQ_chat_unread-divider .QQ_chat_unread-line {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: rgba(100, 116, 139, 0.85);
+    font-size: 12px;
+    letter-spacing: 0.2px;
+}
+
+.QQ_chat_unread-divider .QQ_chat_unread-line::before,
+.QQ_chat_unread-divider .QQ_chat_unread-line::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(148, 163, 184, 0.45);
+}
+
 /* ========================================
    10. 聊天室输入区域 - 原版样式
    ======================================== */

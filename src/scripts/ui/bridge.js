@@ -971,11 +971,13 @@ class AppBridge {
 	      if (Boolean(context?.meta?.disableChatGuide) || mode === 'none') return '';
 	      const summaryOnly = mode === 'summary-only';
 	      const parts = [];
+	      const groupSystemHint = '系统消息（我们能解析的这种）：内容';
 	      if (!summaryOnly && !isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
 	        parts.push(dialogueRules);
 	      }
 	      if (!summaryOnly && !isMomentCommentTask && isGroupChat && groupEnabled && groupRules && groupPosition !== -1) {
 	        parts.push(groupRules);
+	        parts.push(groupSystemHint);
 	      }
 	      if (!summaryOnly && !isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition !== -1) {
 	        parts.push(momentCreateRules);

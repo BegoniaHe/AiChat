@@ -372,6 +372,23 @@ export class ChatUI {
             message.id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
         }
 
+        if (message.role === 'system' && message.type === 'divider') {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'QQ_chat_sysmsg QQ_chat_unread-divider';
+            wrapper.dataset.msgId = message.id;
+            wrapper.dataset.role = 'system';
+            wrapper.__chatappMessage = message;
+
+            const line = document.createElement('div');
+            line.className = 'QQ_chat_unread-line';
+            const text = document.createElement('span');
+            text.textContent = String(message.content ?? '');
+            line.appendChild(text);
+            wrapper.appendChild(line);
+
+            return wrapper;
+        }
+
         if (message.role === 'system') {
             const wrapper = document.createElement('div');
             wrapper.className = 'QQ_chat_sysmsg';
@@ -806,7 +823,7 @@ export class ChatUI {
         };
     }
 
-    preloadHistory(messages = []) {
+    preloadHistory(messages = [], { keepScroll = false } = {}) {
         const list = Array.isArray(messages) ? messages : [];
         if (!list.length || !this.scrollEl) return;
         const fragment = document.createDocumentFragment();
@@ -826,7 +843,7 @@ export class ChatUI {
             if (el) fragment.appendChild(el);
         }
         this.scrollEl.appendChild(fragment);
-        this.scrollToBottom();
+        if (!keepScroll) this.scrollToBottom();
     }
 
     prependHistory(messages = []) {

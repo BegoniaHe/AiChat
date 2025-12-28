@@ -965,6 +965,24 @@ ${listPart || '-（无）'}
     });
   };
 
+  const injectUnreadDivider = (messages = [], firstUnreadId = '') => {
+    const list = Array.isArray(messages) ? messages.slice() : [];
+    const targetId = String(firstUnreadId || '').trim();
+    if (!targetId) return { list, dividerId: '' };
+    const idx = list.findIndex(m => String(m?.id || '') === targetId);
+    if (idx === -1) return { list, dividerId: '' };
+    const dividerId = `unread-divider-${targetId}`;
+    list.splice(idx, 0, {
+      id: dividerId,
+      role: 'system',
+      type: 'divider',
+      content: '以下为未读讯息',
+      time: '',
+      meta: { transient: true, kind: 'unread-divider' },
+    });
+    return { list, dividerId };
+  };
+
   const getAssistantAvatarForSession = sessionId => {
     const c = contactsStore.getContact(sessionId);
     return c?.avatar || avatars.assistant;
@@ -2396,13 +2414,37 @@ ${listPart || '-（无）'}
       }
     }
     const initial = history.slice(start, start + PAGE);
+    const { list: initialWithDivider, dividerId } = injectUnreadDivider(initial, firstUnreadId);
     ui.clearMessages();
-    ui.preloadHistory(decorateMessagesForDisplay(initial, { sessionId }));
+    ui.hideTyping();
+    ui.preloadHistory(decorateMessagesForDisplay(initialWithDivider, { sessionId }), { keepScroll: true });
     // Keep a render cursor so we can lazy-load earlier messages when scrolling up.
     chatRenderState.set(sessionId, { start });
 
-    if (firstUnreadId) setTimeout(() => ui.scrollToMessage(firstUnreadId), 50);
-    else setTimeout(() => ui.scrollToBottom(), 0);
+    const jumpToUnread = () => {
+      if (dividerId && ui.scrollToMessage(dividerId)) return true;
+      if (firstUnreadId) return ui.scrollToMessage(firstUnreadId);
+      return false;
+    };
+    if (dividerId || firstUnreadId) {
+      try {
+        if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+          window.requestAnimationFrame(() => {
+            if (!jumpToUnread()) setTimeout(jumpToUnread, 80);
+          });
+        } else {
+          setTimeout(() => {
+            if (!jumpToUnread()) setTimeout(jumpToUnread, 80);
+          }, 0);
+        }
+      } catch {
+        setTimeout(() => {
+          if (!jumpToUnread()) setTimeout(jumpToUnread, 80);
+        }, 0);
+      }
+    } else {
+      setTimeout(() => ui.scrollToBottom(), 0);
+    }
     // Mark read once user enters the chatroom
     try {
       chatStore.markRead(sessionId);
@@ -2421,6 +2463,9 @@ ${listPart || '-（无）'}
     ui.setSessionLabel(sessionId);
     if (uiStateArmed) saveUiState();
     updatePendingFloat(sessionId);
+    if (activeGeneration && !activeGeneration.cancelled && activeGeneration.sessionId === sessionId) {
+      ui.showTyping(getAssistantAvatarForSession(sessionId));
+    }
     uiLog('enterChatRoom', { sessionId, originPage: chatOriginPage });
   };
 
@@ -2594,6 +2639,7 @@ ${listPart || '-（无）'}
 
   // Track the current in-flight generation so we can support "收回" (cancel + retract)
   let activeGeneration = null; // { sessionId, userMsgId, streamCtrl, cancelled }
+  const pendingGroupJoins = new Set();
 
   // Chat UI lazy-load: only render the latest N messages; load earlier on scroll-to-top.
   const bindChatScrollLazyLoad = () => {
@@ -3029,6 +3075,21 @@ ${listPart || '-（无）'}
 
     // 找到所有 pending 消息
     const pendingMessages = ignorePending ? [] : allMessages.filter(m => m.status === 'pending');
+    const pendingQueue = (!ignorePending && !targetMessageId) ? (chatStore.getPendingMessages(sessionId) || []) : [];
+    if (pendingQueue.length) {
+      const historyIds = new Set(allMessages.map(m => String(m?.id || '')).filter(Boolean));
+      const restored = [];
+      pendingQueue.forEach(m => {
+        const id = String(m?.id || '').trim();
+        if (!id || historyIds.has(id)) return;
+        const saved = chatStore.appendMessage({ ...m, status: 'pending' }, sessionId);
+        ui.addMessage(saved);
+        restored.push(saved);
+        historyIds.add(saved.id);
+      });
+      pendingQueue.forEach(m => chatStore.removePendingMessage(m?.id, sessionId));
+      if (restored.length) pendingMessages.push(...restored);
+    }
 
     // 用于追踪哪些消息需要在发送成功后标记为 sent
     let pendingMessagesToConfirm = [];
@@ -3111,6 +3172,142 @@ ${listPart || '-（无）'}
       const key = normalizeLoose(raw);
       const lower = key.toLowerCase();
       return key === '系统' || key === '系统消息' || key === '系统提示' || lower === 'system' || lower === 'systemmessage' || lower === 'systemmsg';
+    };
+    const stripSystemMessagePrefix = content => {
+      return String(content || '').replace(/^系统消息[:：]?\s*/i, '').trim();
+    };
+    const splitSystemNames = (segment = '') => {
+      const cleaned = String(segment || '').replace(/[。.!！？]+/g, '').trim();
+      if (!cleaned) return [];
+      return cleaned
+        .split(/[、，,]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+    };
+    const parseGroupSystemOps = content => {
+      const text = stripSystemMessagePrefix(content).replace(/\s+/g, ' ').trim();
+      if (!text) return [];
+      const ops = [];
+      const inviteNames = new Set();
+      const inviteRe = /邀请(.+?)加入群聊/g;
+      let m = null;
+      while ((m = inviteRe.exec(text))) {
+        splitSystemNames(m[1]).forEach(name => inviteNames.add(name));
+      }
+      if (inviteNames.size > 0) {
+        ops.push({ type: 'invite', names: [...inviteNames] });
+      }
+      const removeNames = new Set();
+      const removePatterns = [
+        /将(.+?)(?:移出|移除|踢出)群聊/g,
+        /把(.+?)(?:移出|移除|踢出)群聊/g,
+        /(?:移出|移除|踢出)(.+?)(?:群聊|本群)/g,
+      ];
+      removePatterns.forEach(re => {
+        let rm = null;
+        while ((rm = re.exec(text))) {
+          splitSystemNames(rm[1]).forEach(name => removeNames.add(name));
+        }
+      });
+      if (removeNames.size > 0) {
+        ops.push({ type: 'remove', names: [...removeNames] });
+      }
+      if (!text.includes('邀请')) {
+        const joinNames = new Set();
+        const joinRe = /(.+?)加入群聊/g;
+        let jm = null;
+        while ((jm = joinRe.exec(text))) {
+          splitSystemNames(jm[1]).forEach(name => joinNames.add(name));
+        }
+        if (joinNames.size > 0) {
+          ops.push({ type: 'join', names: [...joinNames] });
+        }
+      }
+      return ops;
+    };
+    const updateGroupMembers = (groupId, nextMembers) => {
+      const gid = String(groupId || '').trim();
+      if (!gid) return false;
+      const g = contactsStore.getContact(gid);
+      if (!g) return false;
+      const uniq = [...new Set((nextMembers || []).map(id => String(id || '').trim()).filter(Boolean))];
+      contactsStore.upsertContact({ id: gid, members: uniq, isGroup: true });
+      if (String(chatStore.getCurrent() || '') === gid && currentChatTitle) {
+        currentChatTitle.textContent = formatSessionName(gid, contactsStore.getContact(gid));
+      }
+      return true;
+    };
+    const appendGroupSystemMessage = (groupId, content) => {
+      const gid = String(groupId || '').trim();
+      if (!gid) return;
+      const parsed = {
+        role: 'system',
+        type: 'meta',
+        content,
+        name: '系统',
+        time: formatNowTime(),
+      };
+      if (String(chatStore.getCurrent() || '') === gid) ui.addMessage(parsed);
+      chatStore.appendMessage(parsed, gid);
+      refreshChatAndContacts();
+    };
+    const scheduleGroupMemberJoin = (groupId, memberId, displayName, { announce = true, delayMs } = {}) => {
+      const gid = String(groupId || '').trim();
+      const mid = String(memberId || '').trim();
+      if (!gid || !mid) return;
+      const key = `${gid}::${mid}`;
+      if (pendingGroupJoins.has(key)) return;
+      pendingGroupJoins.add(key);
+      const delay =
+        Number.isFinite(delayMs) && delayMs >= 0 ? Math.trunc(delayMs) : (1200 + Math.floor(Math.random() * 2200));
+      setTimeout(() => {
+        pendingGroupJoins.delete(key);
+        const g = contactsStore.getContact(gid);
+        if (!g) return;
+        const members = Array.isArray(g.members) ? g.members.map(String) : [];
+        if (members.includes(mid)) return;
+        members.push(mid);
+        if (!updateGroupMembers(gid, members)) return;
+        if (announce) appendGroupSystemMessage(gid, `系统消息：${displayName}加入群聊`);
+      }, delay);
+    };
+    const maybeApplyGroupSystemOps = (content, groupId) => {
+      const ops = parseGroupSystemOps(content);
+      if (!ops.length) return;
+      const g = contactsStore.getContact(groupId);
+      if (!g) return;
+      let members = Array.isArray(g.members) ? g.members.map(String) : [];
+      const memberSet = new Set(members);
+      const findMemberId = name => {
+        const raw = normalizeName(name).replace(/^@/, '').trim();
+        if (!raw) return '';
+        const byId = contactsStore.getContact(raw);
+        if (byId?.id) return byId.id;
+        const byName = resolveContactByDisplayName(raw);
+        return byName?.id || '';
+      };
+      ops.forEach(op => {
+        const names = Array.isArray(op?.names) ? op.names : [];
+        names.forEach(name => {
+          const mid = findMemberId(name);
+          if (!mid) return;
+          const cname = contactsStore.getContact(mid)?.name || name || mid;
+          if (op.type === 'invite') {
+            if (memberSet.has(mid)) return;
+            scheduleGroupMemberJoin(groupId, mid, cname, { announce: true });
+          } else if (op.type === 'join') {
+            if (memberSet.has(mid)) return;
+            scheduleGroupMemberJoin(groupId, mid, cname, { announce: false, delayMs: 0 });
+          } else if (op.type === 'remove') {
+            if (!memberSet.has(mid)) return;
+            const nextMembers = members.filter(id => String(id) !== String(mid));
+            memberSet.delete(mid);
+            members = nextMembers;
+            updateGroupMembers(groupId, nextMembers);
+            refreshChatAndContacts();
+          }
+        });
+      });
     };
     const resolvePrivateChatTargetSessionId = otherName => {
       const other = normalizeName(otherName);
@@ -3302,8 +3499,23 @@ ${listPart || '-（无）'}
       };
       const history = all
         .filter(m => m && m.status !== 'pending' && m.status !== 'sending')
-        .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+        .filter(m => {
+          if (!m || typeof m.content !== 'string') return false;
+          if (m.role === 'user' || m.role === 'assistant') return true;
+          return isGroupChat && m.role === 'system';
+        })
         .map(m => {
+          if (isGroupChat && m.role === 'system') {
+            const raw = String(m.content || '').trim();
+            if (!raw) return null;
+            const cleaned = raw.replace(/^系统消息[:：]?\s*/i, '').trim();
+            const systemLine = `系统消息（我们能解析的这种）：${cleaned || raw}`;
+            return {
+              role: 'assistant',
+              content: systemLine,
+              name: '系统',
+            };
+          }
           let content = typeof m.raw === 'string' ? m.raw : m.content;
           if (m.role === 'assistant' && m?.meta?.renderRich) {
             const summary = resolveCreativeHistorySummary(m);
@@ -3603,6 +3815,7 @@ ${listPart || '-（无）'}
                     };
                     if (targetGroupId === sessionId) ui.addMessage(parsed);
                     chatStore.appendMessage(parsed, targetGroupId);
+                    maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                     return;
                   }
                   const isMe =
@@ -3728,6 +3941,7 @@ ${listPart || '-（无）'}
                         };
                         if (targetGroupId === sessionId) ui.addMessage(parsed);
                         chatStore.appendMessage(parsed, targetGroupId);
+                        maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                         return;
                       }
                       const isMe =
@@ -3832,6 +4046,7 @@ ${listPart || '-（无）'}
                           };
                           if (targetGroupId === sessionId) ui.addMessage(parsed);
                           chatStore.appendMessage(parsed, targetGroupId);
+                          maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                           return;
                         }
                         const isMe =
@@ -4042,6 +4257,7 @@ ${listPart || '-（无）'}
                   };
                   if (targetGroupId === sessionId) ui.addMessage(parsed);
                   chatStore.appendMessage(parsed, targetGroupId);
+                  maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                   didAnything = true;
                   return;
                 }
@@ -4146,6 +4362,7 @@ ${listPart || '-（无）'}
                       };
                       if (targetGroupId === sessionId) ui.addMessage(parsed);
                       chatStore.appendMessage(parsed, targetGroupId);
+                      maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                       didAnything = true;
                       return;
                     }
@@ -4235,6 +4452,7 @@ ${listPart || '-（无）'}
                         };
                         if (targetGroupId === sessionId) ui.addMessage(parsed);
                         chatStore.appendMessage(parsed, targetGroupId);
+                        maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                         didAnything = true;
                         return;
                       }
@@ -4365,9 +4583,11 @@ ${listPart || '-（无）'}
           pendingMessagesToConfirm.forEach(m => {
             chatStore.updateMessage(m.id, { status: 'sent' }, sessionId);
             ui.updateMessage(m.id, { ...m, status: 'sent' });
+            chatStore.removePendingMessage(m.id, sessionId);
           });
         }
         movePendingFromHistoryToQueue(sessionId);
+        refreshChatAndContacts();
       }
       updatePendingFloat(sessionId);
       ui.setSendingState(false);
