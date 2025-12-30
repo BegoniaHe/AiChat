@@ -1,5 +1,47 @@
 # 開發進度追蹤（必更新）
 
+## 2025-12-30 09:58
+- 富文本 iframe：允许脚本时改走 host + document.write 直写原始 HTML，避免 release 下 blob 脚本不执行导致高度/长按失效。
+- host 收到允许脚本时不再 DOMParser 重排，改为直写保留脚本顺序。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+  - `src/iframe-host.js`
+
+## 2025-12-30 11:04
+- 富文本脚本模式：iframe sandbox 增加 same-origin 以兼容脚本执行与同源访问。
+- CSP 放宽脚本/样式/媒体来源（含 http/data/blob 与 unsafe-eval），适配自定义 HTML 资源。
+- Android release 允许 cleartext，避免 http 资源被系统阻断。
+- 风险提醒文案加重，强调同源数据与外部资源风险。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+  - `src-tauri/tauri.conf.json`
+  - `src-tauri/gen/android/app/build.gradle.kts`
+  - `src/scripts/ui/general-settings-panel.js`
+
+## 2025-12-30 11:47
+- 富文本脚本模式改为直接 srcdoc/blob 渲染，移除 host 中转，避免 release 下 host 脚本/桥接被拦截。
+- 脚本模式不再设置 iframe sandbox（对齐 ST 方案），并注入 base href 以支持相对资源。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+
+## 2025-12-30 11:57
+- 富文本脚本模式对齐 ST：桥接脚本改为 blob 外链注入，避免 inline 脚本被 WebView 阻断。
+- iframe 增加 data 标记，脚本从 DOM 读取 id；父页面同源观察 iframe 内容自动测高。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+
+## 2025-12-29 00:12
+- 通用设定新增「富文本 iframe 执行脚本」开关，启用时弹出风险警告。
+- 富文本 iframe 主机支持按开关执行脚本（默认安全模式不执行）。
+- 允许富文本在启用脚本后加载 https 样式资源，并放开 CSP 的 https 样式/脚本/字体来源。
+- 启用脚本时改用 blob iframe 直渲染 HTML（保留原始样式/脚本），避免 host 解析影响美化。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+  - `src/iframe-host.js`
+  - `src-tauri/tauri.conf.json`
+
 ## 架構簡表
 - 前端殼：`src/index.html` + `assets/css/qq-legacy.css`（原版QQ樣式） + `assets/css/main.css`
 - 交互邏輯：`src/scripts/ui/app.js`（整體協調）、`src/scripts/ui/chat/chat-ui.js`（渲染/輸入/打字）、`src/scripts/ui/config-panel.js`

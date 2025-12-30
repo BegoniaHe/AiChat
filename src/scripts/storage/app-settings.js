@@ -3,6 +3,7 @@ const SETTINGS_KEY = 'app_settings_v1';
 const defaults = {
   showDebugToggle: false,
   typingDotsEnabled: true,
+  allowRichIframeScripts: false,
 };
 
 const readSettings = () => {

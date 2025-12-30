@@ -4,7 +4,396 @@
  * - For HTML code blocks containing <body>...</body>, render sandboxed iframe preview (ST 酒馆助手风格)
  */
 
+import { logger } from '../../utils/logger.js';
+import { appSettings } from '../../storage/app-settings.js';
+
+const iframeDebugState = new Map();
+const getIframeState = (id, init) => {
+    if (!id) return null;
+    if (!iframeDebugState.has(id) && init) iframeDebugState.set(id, init);
+    return iframeDebugState.get(id) || null;
+};
+const warnIframe = (msg, id, extra = '') => {
+    const suffix = extra ? ` ${extra}` : '';
+    logger.warn(`[iframe] ${msg} id=${id || 'unknown'}${suffix}`);
+};
+
+const getIframeHostUrl = () => {
+    try {
+        return new URL('iframe-host.html', window.location.href).toString();
+    } catch {
+        return 'iframe-host.html';
+    }
+};
 const escapeText = (s) => String(s ?? '');
+const allowRichIframeScripts = () => appSettings.get().allowRichIframeScripts === true;
+const stripScriptsForPreview = (html) => String(html ?? '').replace(/<script[\s\S]*?<\/script\s*>/gi, '');
+
+let iframeBridgeScriptUrl = '';
+const buildIframeBridgeScript = () => `
+(() => {
+  const getIframeId = () => {
+    try {
+      const body = document.body;
+      const docEl = document.documentElement;
+      return (body && body.getAttribute('data-chatapp-iframe-id')) ||
+        (docEl && docEl.getAttribute('data-chatapp-iframe-id')) || '';
+    } catch {
+      return '';
+    }
+  };
+  const id = getIframeId();
+  let lastH = 0;
+  let pressTimer = null;
+  let pressActive = false;
+  let touchActive = false;
+  let touchStartPoint = null;
+  const moveThreshold = 12;
+
+  const measureContentHeight = () => {
+    try {
+      const body = document.body;
+      if (!body) return 0;
+      const kids = Array.from(body.children || []);
+      if (!kids.length) {
+        const rect = body.getBoundingClientRect();
+        return rect ? rect.height : 0;
+      }
+      let minTop = null;
+      let maxBottom = null;
+      kids.forEach((el) => {
+        const rect = el.getBoundingClientRect();
+        if (!rect || rect.height <= 0) return;
+        if (minTop === null || rect.top < minTop) minTop = rect.top;
+        if (maxBottom === null || rect.bottom > maxBottom) maxBottom = rect.bottom;
+      });
+      if (minTop === null || maxBottom === null) {
+        const rect = body.getBoundingClientRect();
+        return rect ? rect.height : 0;
+      }
+      const padTop = parseFloat(getComputedStyle(body).paddingTop || '0') || 0;
+      const padBottom = parseFloat(getComputedStyle(body).paddingBottom || '0') || 0;
+      return Math.max(0, maxBottom - minTop) + padTop + padBottom;
+    } catch {
+      return 0;
+    }
+  };
+
+  const postResize = () => {
+    try {
+      const rawH = measureContentHeight();
+      const h = Math.ceil(Math.max(120, rawH || 0));
+      if (h && h !== lastH) {
+        lastH = h;
+        parent.postMessage({ type: 'chatapp:iframe-resize', id, height: h }, '*');
+      }
+    } catch {}
+  };
+
+  const fitToWidth = () => {
+    try {
+      const docEl = document.documentElement;
+      const body = document.body;
+      if (!docEl || !body) return;
+      body.style.transform = '';
+      body.style.width = '';
+      docEl.style.overflowX = 'hidden';
+
+      const clientW = Math.max(1, docEl.clientWidth || 1);
+      const scrollW = Math.max(body.scrollWidth || 0, docEl.scrollWidth || 0);
+      if (scrollW <= clientW + 2) {
+        postResize();
+        return;
+      }
+      let scale = clientW / scrollW;
+      if (scale > 0.98) {
+        postResize();
+        return;
+      }
+      const minScale = 0.55;
+      scale = Math.max(minScale, Math.min(1, scale));
+      body.style.transformOrigin = 'top left';
+      body.style.transform = 'scale(' + scale + ')';
+      body.style.width = (100 / scale) + '%';
+      docEl.style.overflowX = 'hidden';
+      postResize();
+    } catch {}
+  };
+
+  const getPoint = (ev) => {
+    try {
+      if (ev && ev.touches && ev.touches.length) {
+        const t = ev.touches[0];
+        return { x: t.clientX || 0, y: t.clientY || 0 };
+      }
+      if (ev && ev.changedTouches && ev.changedTouches.length) {
+        const t = ev.changedTouches[0];
+        return { x: t.clientX || 0, y: t.clientY || 0 };
+      }
+      const x = (ev && typeof ev.clientX === 'number') ? ev.clientX : 0;
+      const y = (ev && typeof ev.clientY === 'number') ? ev.clientY : 0;
+      return { x, y };
+    } catch {
+      return { x: 0, y: 0 };
+    }
+  };
+
+  const sendPress = (phase, ev) => {
+    try {
+      const p = getPoint(ev);
+      parent.postMessage({ type: 'chatapp:iframe-press', id, phase, x: p.x, y: p.y }, '*');
+    } catch {}
+  };
+
+  const requestLayout = (() => {
+    let rafId = null;
+    return () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        fitToWidth();
+        postResize();
+      });
+    };
+  })();
+
+  const start = () => {
+    const stripBodyWhitespace = () => {
+      try {
+        const body = document.body;
+        if (!body) return;
+        Array.from(body.childNodes || []).forEach((node) => {
+          if (node && node.nodeType === Node.TEXT_NODE && !String(node.textContent || '').trim()) {
+            node.remove();
+          }
+        });
+      } catch {}
+    };
+    const clampOversizedBlocks = () => {
+      try {
+        const body = document.body;
+        const docEl = document.documentElement;
+        if (!body || !docEl) return;
+        const vh = Math.max(docEl.clientHeight || 0, window.innerHeight || 0);
+        if (!vh) return;
+        const nodes = body.querySelectorAll('*');
+        nodes.forEach((el) => {
+          const style = window.getComputedStyle(el);
+          const display = String(style.display || '');
+          if (display.includes('flex') || display.includes('grid')) {
+            const align = String(style.alignItems || '');
+            const justify = String(style.justifyContent || '');
+            if (align.includes('center')) el.style.alignItems = 'flex-start';
+            if (justify.includes('center')) el.style.justifyContent = 'flex-start';
+          }
+          const minH = parseFloat(style.minHeight || '');
+          if (Number.isFinite(minH) && minH >= vh * 0.9) {
+            el.style.minHeight = 'auto';
+          }
+          const h = parseFloat(style.height || '');
+          if (Number.isFinite(h) && h >= vh * 0.9) {
+            el.style.height = 'auto';
+          }
+          const maxH = parseFloat(style.maxHeight || '');
+          if (Number.isFinite(maxH) && maxH >= vh * 0.9) {
+            el.style.maxHeight = 'none';
+          }
+          const mt = parseFloat(style.marginTop || '');
+          const mb = parseFloat(style.marginBottom || '');
+          if (Number.isFinite(mt) && mt >= 48) el.style.marginTop = '16px';
+          if (Number.isFinite(mb) && mb >= 48) el.style.marginBottom = '16px';
+          const pt = parseFloat(style.paddingTop || '');
+          const pb = parseFloat(style.paddingBottom || '');
+          if (Number.isFinite(pt) && pt >= 64) el.style.paddingTop = '16px';
+          if (Number.isFinite(pb) && pb >= 64) el.style.paddingBottom = '16px';
+        });
+      } catch {}
+    };
+
+    document.addEventListener('pointerdown', (ev) => {
+      if (touchActive) return;
+      pressActive = true;
+      sendPress('down', ev);
+      pressTimer = setTimeout(() => {
+        sendPress('longpress', ev);
+      }, 520);
+    }, { passive: true });
+    ['pointerup','pointercancel','pointerleave','pointerout'].forEach((t) => {
+      document.addEventListener(t, (ev) => {
+        if (!pressActive) return;
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        sendPress('up', ev);
+        pressActive = false;
+      }, { passive: true });
+    });
+    document.addEventListener('touchstart', (ev) => {
+      touchActive = true;
+      touchStartPoint = getPoint(ev);
+      pressActive = true;
+      sendPress('down', ev);
+      pressTimer = setTimeout(() => {
+        sendPress('longpress', ev);
+      }, 520);
+    }, { passive: true });
+    document.addEventListener('touchmove', (ev) => {
+      if (!pressActive || !touchStartPoint) return;
+      const p = getPoint(ev);
+      const dx = p.x - touchStartPoint.x;
+      const dy = p.y - touchStartPoint.y;
+      if (dx * dx + dy * dy > moveThreshold * moveThreshold) {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        sendPress('cancel', ev);
+        pressActive = false;
+      }
+    }, { passive: true });
+    document.addEventListener('touchend', (ev) => {
+      if (!pressActive) {
+        touchActive = false;
+        touchStartPoint = null;
+        return;
+      }
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      sendPress('up', ev);
+      pressActive = false;
+      touchStartPoint = null;
+      setTimeout(() => { touchActive = false; }, 120);
+    }, { passive: true });
+    document.addEventListener('touchcancel', (ev) => {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      sendPress('cancel', ev);
+      pressActive = false;
+      touchStartPoint = null;
+      setTimeout(() => { touchActive = false; }, 120);
+    }, { passive: true });
+    document.addEventListener('contextmenu', (ev) => {
+      try { ev.preventDefault(); } catch {}
+      sendPress('longpress', ev);
+    }, { passive: false });
+    document.addEventListener('selectstart', (ev) => {
+      try { ev.preventDefault(); } catch {}
+    }, { passive: false });
+
+    requestLayout();
+    try {
+      parent.postMessage({ type: 'chatapp:iframe-ready', id }, '*');
+    } catch {}
+
+    [50, 150, 300, 600].forEach((ms) => {
+      setTimeout(() => { requestLayout(); }, ms);
+    });
+    try {
+      const ro = new ResizeObserver(() => { requestLayout(); });
+      ro.observe(document.documentElement);
+      if (document.body) ro.observe(document.body);
+    } catch {
+      setInterval(() => { requestLayout(); }, 500);
+    }
+    try {
+      const mo = new MutationObserver(() => { requestLayout(); });
+      if (document.body) mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+    } catch {}
+    window.addEventListener('load', () => setTimeout(() => { requestLayout(); }, 0));
+    window.addEventListener('resize', () => setTimeout(() => { requestLayout(); }, 0));
+    document.addEventListener('toggle', (ev) => {
+      if (ev && ev.target && ev.target.tagName === 'DETAILS') requestLayout();
+    }, true);
+    stripBodyWhitespace();
+    clampOversizedBlocks();
+    requestLayout();
+  };
+
+  window.addEventListener('message', (e) => {
+    const data = e?.data;
+    if (!data || typeof data !== 'object') return;
+    if (data.type === 'chatapp:updateViewportHeight' && typeof data.height === 'number') {
+      try {
+        document.documentElement.style.setProperty('--viewport-height', data.height + 'px');
+      } catch {}
+      requestLayout();
+      return;
+    }
+    if (data.type === 'chatapp:ping') {
+      try {
+        parent.postMessage({ type: 'chatapp:pong', id }, '*');
+      } catch {}
+    }
+  });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+`;
+
+const getIframeBridgeScriptUrl = () => {
+    if (iframeBridgeScriptUrl) return iframeBridgeScriptUrl;
+    try {
+        const blob = new Blob([buildIframeBridgeScript()], { type: 'application/javascript' });
+        iframeBridgeScriptUrl = URL.createObjectURL(blob);
+    } catch {
+        iframeBridgeScriptUrl = '';
+    }
+    return iframeBridgeScriptUrl;
+};
+
+const iframeResizeState = {
+    resizeObserver: null,
+    observedElements: new WeakMap(),
+    mutationObservers: new WeakMap(),
+};
+
+const adjustIframeHeight = (iframe) => {
+    try {
+        if (!iframe || !iframe.contentWindow) return;
+        const doc = iframe.contentWindow.document;
+        const body = doc?.body;
+        const docEl = doc?.documentElement;
+        if (!body || !docEl) return;
+        const bodyHeight = Math.max(body.scrollHeight || 0, body.offsetHeight || 0, body.clientHeight || 0);
+        const docHeight = Math.max(docEl.scrollHeight || 0, docEl.offsetHeight || 0, docEl.clientHeight || 0);
+        const newHeight = Math.max(120, bodyHeight, docHeight);
+        const clamped = Math.min(newHeight + 4, 2000);
+        const current = parseFloat(iframe.style.height || '') || 0;
+        if (Math.abs(current - clamped) > 2) {
+            iframe.style.height = `${clamped}px`;
+        }
+    } catch {}
+};
+
+const observeIframeContent = (iframe) => {
+    try {
+        if (!iframe || iframe.dataset.iframeAutoResize === '1') return;
+        if (!iframe.contentWindow) return;
+        const doc = iframe.contentWindow.document;
+        const body = doc?.body;
+        const docEl = doc?.documentElement;
+        if (!body || !docEl) return;
+        iframe.dataset.iframeAutoResize = '1';
+        if (typeof ResizeObserver !== 'undefined') {
+            if (!iframeResizeState.resizeObserver) {
+                iframeResizeState.resizeObserver = new ResizeObserver((entries) => {
+                    entries.forEach((entry) => {
+                        const target = entry?.target;
+                        const owner = target ? iframeResizeState.observedElements.get(target) : null;
+                        if (owner) adjustIframeHeight(owner);
+                    });
+                });
+            }
+            iframeResizeState.observedElements.set(body, iframe);
+            iframeResizeState.observedElements.set(docEl, iframe);
+            try { iframeResizeState.resizeObserver.observe(body); } catch {}
+            try { iframeResizeState.resizeObserver.observe(docEl); } catch {}
+        }
+        if (!iframeResizeState.mutationObservers.has(iframe)) {
+            try {
+                const mo = new MutationObserver(() => adjustIframeHeight(iframe));
+                mo.observe(body, { subtree: true, childList: true, attributes: true, characterData: true });
+                mo.observe(docEl, { subtree: true, childList: true, attributes: true });
+                iframeResizeState.mutationObservers.set(iframe, mo);
+            } catch {}
+        }
+        adjustIframeHeight(iframe);
+    } catch {}
+};
 
 const splitFencedCodeBlocks = (text) => {
     const src = String(text ?? '');
@@ -48,9 +437,21 @@ const copyToClipboard = async (text) => {
     }
 };
 
-const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, preserveNewlines } = {}) => {
+const buildIframeSrcDoc = (
+    htmlBodyOrDocument,
+    {
+        iframeId,
+        needsVhHandling,
+        preserveNewlines,
+        injectBridgeScript = true,
+        styleInBody = false,
+        baseHref = '',
+        bridgeScriptUrl = '',
+    } = {},
+) => {
     const content = String(htmlBodyOrDocument ?? '');
     const hasHtml = /<html[\s>]/i.test(content);
+    const iframeIdValue = String(iframeId || '');
     const prewrapStyle = preserveNewlines
         ? `
 <style id="__chatapp_prewrap">
@@ -80,21 +481,34 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, pres
             return `<body${rawAttrs} class="${className}">`;
         });
     };
+    const addBodyAttr = (html, attrName, attrValue) => {
+        if (!attrName || !attrValue) return html;
+        const attrRe = new RegExp(`\\b${attrName}\\s*=`, 'i');
+        return String(html).replace(/<body([^>]*)>/i, (match, attrs) => {
+            const rawAttrs = String(attrs || '');
+            if (attrRe.test(rawAttrs)) return match;
+            return `<body${rawAttrs} ${attrName}="${attrValue}">`;
+        });
+    };
 
     let doc = '';
     if (hasHtml) {
         doc = preserveNewlines ? addBodyClass(content, '__chatapp-prewrap') : content;
+        if (iframeIdValue) {
+            doc = addBodyAttr(doc, 'data-chatapp-iframe-id', iframeIdValue);
+        }
     } else {
         const bodyClass = preserveNewlines ? ' class="__chatapp-prewrap"' : '';
         const wrapped = preserveNewlines ? `<div class="__chatapp-prewrap">${content}</div>` : content;
-        doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body${bodyClass}>${wrapped}</body></html>`;
+        const iframeAttr = iframeIdValue ? ` data-chatapp-iframe-id="${iframeIdValue}"` : '';
+        doc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body${bodyClass}${iframeAttr}>${wrapped}</body></html>`;
     }
 
     // Base style: avoid overflowing the phone width; keep layout modern and readable
     const baseStyle = `
 <style id="__chatapp_base">
   html, body { margin:0; padding:0; max-width:100% !important; width:100% !important; min-height:0 !important; height:auto !important; overflow-x:hidden !important; box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
-  body { padding: 8px; background: transparent; transform-origin: top left; overflow-x:hidden !important; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; display:block !important; align-items:flex-start !important; justify-content:flex-start !important; }
+  body { padding: 12px; background: transparent; transform-origin: top left; overflow-x:hidden !important; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; display:block !important; align-items:flex-start !important; justify-content:flex-start !important; }
   *, *::before, *::after { box-sizing: border-box; max-width: 100% !important; min-width: 0 !important; }
   details, summary { max-width: 100% !important; }
   details[open] { max-height: none !important; overflow: visible !important; }
@@ -199,6 +613,11 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, pres
         });
       } catch {}
     };
+    const sendReady = () => {
+      try {
+        parent.postMessage({ type: 'chatapp:iframe-ready', id }, '*');
+      } catch {}
+    };
     const clampOversizedBlocks = () => {
       try {
         const body = document.body;
@@ -241,26 +660,51 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, pres
     };
 
     // Forward long-press gestures to parent (iframe events don't bubble to outer document)
-    const sendPress = (phase, ev) => {
+    const getPoint = (ev) => {
       try {
+        if (ev && ev.touches && ev.touches.length) {
+          const t = ev.touches[0];
+          return { x: t.clientX || 0, y: t.clientY || 0 };
+        }
+        if (ev && ev.changedTouches && ev.changedTouches.length) {
+          const t = ev.changedTouches[0];
+          return { x: t.clientX || 0, y: t.clientY || 0 };
+        }
         const x = (ev && typeof ev.clientX === 'number') ? ev.clientX : 0;
         const y = (ev && typeof ev.clientY === 'number') ? ev.clientY : 0;
-        parent.postMessage({ type: 'chatapp:iframe-press', id, phase, x, y }, '*');
+        return { x, y };
+      } catch {
+        return { x: 0, y: 0 };
+      }
+    };
+    const sendPress = (phase, ev) => {
+      try {
+        const p = getPoint(ev);
+        parent.postMessage({ type: 'chatapp:iframe-press', id, phase, x: p.x, y: p.y }, '*');
       } catch {}
     };
     const clear = () => {
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
       if (pressActive) { sendPress('cancel', { clientX: 0, clientY: 0 }); pressActive = false; }
     };
-    document.addEventListener('pointerdown', (ev) => {
-      try { ev.preventDefault(); } catch {}
+    const allowToggleTarget = (ev) => {
+      return !!(ev?.target && (ev.target.closest?.('summary') || ev.target.closest?.('details')));
+    };
+    const startPress = (ev) => {
       clear();
       pressActive = true;
       sendPress('down', ev);
       pressTimer = setTimeout(() => {
         sendPress('longpress', ev);
       }, 520);
-    }, { passive: false });
+    };
+    let touchActive = false;
+    let touchStartPoint = null;
+    const moveThreshold = 12;
+    document.addEventListener('pointerdown', (ev) => {
+      if (touchActive) return;
+      startPress(ev);
+    }, { passive: true });
     ['pointerup','pointercancel','pointerleave','pointerout'].forEach((t) => {
       document.addEventListener(t, (ev) => {
         if (!pressActive) return;
@@ -268,6 +712,47 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, pres
         sendPress('up', ev);
         pressActive = false;
       }, { passive: true });
+    });
+    document.addEventListener('touchstart', (ev) => {
+      touchActive = true;
+      touchStartPoint = getPoint(ev);
+      startPress(ev);
+    }, { passive: true });
+    document.addEventListener('touchmove', (ev) => {
+      if (!pressActive || !touchStartPoint) return;
+      const p = getPoint(ev);
+      const dx = p.x - touchStartPoint.x;
+      const dy = p.y - touchStartPoint.y;
+      if (dx * dx + dy * dy > moveThreshold * moveThreshold) {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        sendPress('cancel', ev);
+        pressActive = false;
+      }
+    }, { passive: true });
+    document.addEventListener('touchend', (ev) => {
+      if (!pressActive) {
+        touchActive = false;
+        touchStartPoint = null;
+        return;
+      }
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      sendPress('up', ev);
+      pressActive = false;
+      touchStartPoint = null;
+      setTimeout(() => { touchActive = false; }, 120);
+    }, { passive: true });
+    document.addEventListener('touchcancel', (ev) => {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      sendPress('cancel', ev);
+      pressActive = false;
+      touchStartPoint = null;
+      setTimeout(() => { touchActive = false; }, 120);
+    }, { passive: true });
+    window.addEventListener('message', (e) => {
+      if (!e || !e.data || e.data.type !== 'chatapp:ping') return;
+      try {
+        parent.postMessage({ type: 'chatapp:pong', id }, '*');
+      } catch {}
     });
     // Some WebViews trigger text selection / native menu via contextmenu on long-press
     document.addEventListener('contextmenu', (ev) => {
@@ -293,6 +778,11 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, pres
     })();
 
     requestLayout();
+    sendReady();
+    // Warm up layout to cover WebViews that delay initial paints.
+    [50, 150, 300, 600].forEach((ms) => {
+      setTimeout(() => { requestLayout(); }, ms);
+    });
 
     document.addEventListener('toggle', (ev) => {
       if (ev && ev.target && ev.target.tagName === 'DETAILS') requestLayout();
@@ -313,6 +803,12 @@ const buildIframeSrcDoc = (htmlBodyOrDocument, { iframeId, needsVhHandling, pres
     window.addEventListener('resize', () => setTimeout(() => { requestLayout(); }, 0));
   };
 
+  window.addEventListener('error', (ev) => {
+    try {
+      const message = String(ev?.message || ev?.error?.message || 'iframe error');
+      parent.postMessage({ type: 'chatapp:iframe-error', id, message }, '*');
+    } catch {}
+  });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 })();
@@ -330,16 +826,25 @@ window.addEventListener('message', (e) => {
 </script>`
         : '';
 
+    const normalizedBaseHref = baseHref ? String(baseHref) : '';
+    const baseTag = normalizedBaseHref ? `<base href="${normalizedBaseHref}">` : '';
+    const bridgeTag = bridgeScriptUrl ? `<script src="${bridgeScriptUrl}"></script>` : '';
+    const bridgeInject = injectBridgeScript
+        ? (bridgeTag ? bridgeTag : `${viewportAdjust}${bridge}`)
+        : '';
+    const headInject = styleInBody ? '' : `${baseTag}${baseStyle}${prewrapStyle}${vh}`;
+    const bodyInject = `${styleInBody ? `${baseStyle}${prewrapStyle}${vh}` : ''}${bridgeInject}`;
+
     // Inject base style + scripts
     if (/<\/body>/i.test(doc)) {
         // Try to put style inside <head> if present, otherwise before </body>
         if (/<\/head>/i.test(doc)) {
-            const withHead = doc.replace(/<\/head>/i, `${baseStyle}${prewrapStyle}${vh}</head>`);
-            return withHead.replace(/<\/body>/i, `${viewportAdjust}${bridge}</body>`);
+            const withHead = doc.replace(/<\/head>/i, `${headInject}</head>`);
+            return withHead.replace(/<\/body>/i, `${bodyInject}</body>`);
         }
-        return doc.replace(/<\/body>/i, `${baseStyle}${prewrapStyle}${vh}${viewportAdjust}${bridge}</body>`);
+        return doc.replace(/<\/body>/i, `${headInject}${bodyInject}</body>`);
     }
-    return `${baseStyle}${prewrapStyle}${vh}${viewportAdjust}${doc}${bridge}`;
+    return `${headInject}${bodyInject}${doc}`;
 };
 
 const injectHtmlNewlines = (html) => {
@@ -430,6 +935,7 @@ const makeCodeBlock = ({ lang, code, messageId, preserveHtmlNewlines = false }) 
         /<style[\s>]/i.test(code) ||
         /<details[\s>]/i.test(code) ||
         /<div[\s>]/i.test(code);
+    const allowScripts = allowRichIframeScripts();
     if (looksLikeHtmlDoc || isHtmlLang) {
         const previewWrap = document.createElement('div');
         previewWrap.style.cssText = 'background:#fff;';
@@ -437,20 +943,143 @@ const makeCodeBlock = ({ lang, code, messageId, preserveHtmlNewlines = false }) 
         const iframeId = `msg-${String(messageId || 'x')}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
         iframe.dataset.iframeId = iframeId;
         iframe.dataset.msgId = String(messageId || '');
+        iframe.dataset.iframeSource = 'host';
+        iframe.dataset.iframeAllowScripts = allowScripts ? '1' : '0';
         iframe.style.cssText = 'width:100%; border:0; display:block; height:240px; background:#fff;';
-        iframe.loading = 'lazy';
-        iframe.setAttribute('sandbox', 'allow-scripts'); // no same-origin
+        if (!allowScripts) {
+            iframe.setAttribute('sandbox', 'allow-scripts');
+        }
+        getIframeState(iframeId, {
+            messageId: String(messageId || ''),
+            createdAt: Date.now(),
+            readyAt: 0,
+            resizeCount: 0,
+            lastResizeAt: 0,
+            pressCount: 0,
+            lastPressAt: 0,
+            error: '',
+        });
 
         let html = preserveHtmlNewlines ? injectHtmlNewlines(code) : code;
         const hasMinVh = /min-height:\s*[^;]*vh/i.test(html);
         const hasJsVhUsage = /\d+vh/.test(html);
         const needsVhHandling = hasMinVh || hasJsVhUsage;
         if (needsVhHandling) html = processAllVhUnits(html);
-        iframe.srcdoc = buildIframeSrcDoc(html, { iframeId, needsVhHandling, preserveNewlines: false });
+        const previewHtml = allowScripts ? html : stripScriptsForPreview(html);
+        const hostDoc = buildIframeSrcDoc(previewHtml, {
+            iframeId,
+            needsVhHandling,
+            preserveNewlines: false,
+            injectBridgeScript: false,
+            styleInBody: true,
+        });
+        const fallbackDoc = buildIframeSrcDoc(previewHtml, {
+            iframeId,
+            needsVhHandling,
+            preserveNewlines: false,
+            injectBridgeScript: true,
+            styleInBody: false,
+        });
+        const bridgeScriptUrl = allowScripts ? getIframeBridgeScriptUrl() : '';
+        const baseHref = allowScripts ? `${window.location.origin}/` : '';
+        const scriptDoc = buildIframeSrcDoc(html, {
+            iframeId,
+            needsVhHandling,
+            preserveNewlines: false,
+            injectBridgeScript: true,
+            styleInBody: false,
+            baseHref,
+            bridgeScriptUrl,
+        });
         previewWrap.appendChild(iframe);
+        if (allowScripts) {
+            let blobUrl = '';
+            const onLoad = () => {
+                iframe.dataset.iframeLoaded = '1';
+                const st = getIframeState(iframeId, { messageId: String(messageId || ''), createdAt: Date.now() });
+                if (st) st.loadedAt = Date.now();
+                observeIframeContent(iframe);
+                if (blobUrl) {
+                    try { URL.revokeObjectURL(blobUrl); } catch {}
+                }
+            };
+            iframe.dataset.iframeDocSent = '1';
+            try {
+                const blob = new Blob([scriptDoc], { type: 'text/html' });
+                blobUrl = URL.createObjectURL(blob);
+                iframe.dataset.iframeSource = 'blob';
+                iframe.src = blobUrl;
+                iframe.addEventListener('load', onLoad, { once: true });
+            } catch {
+                iframe.dataset.iframeSource = 'srcdoc';
+                iframe.srcdoc = scriptDoc;
+                iframe.addEventListener('load', onLoad, { once: true });
+            }
+        } else {
+            iframe.src = getIframeHostUrl();
+            iframe.addEventListener('load', () => {
+                iframe.dataset.iframeLoaded = '1';
+                const st = getIframeState(iframeId, { messageId: String(messageId || ''), createdAt: Date.now() });
+                if (st) st.loadedAt = Date.now();
+                if (iframe.dataset.iframeDocSent === '1') return;
+                iframe.dataset.iframeDocSent = '1';
+                try {
+                    iframe.contentWindow?.postMessage({
+                        type: 'chatapp:iframe-load',
+                        id: iframeId,
+                        doc: hostDoc,
+                        allowScripts,
+                    }, '*');
+                } catch {}
+            }, { once: false });
+            iframe.addEventListener('error', () => {
+                const st = getIframeState(iframeId, { messageId: String(messageId || ''), createdAt: Date.now() });
+                if (st) st.error = st.error || 'load-error';
+                warnIframe('iframe-load-error', iframeId);
+            });
+        }
 
         wrap.appendChild(previewWrap);
         // Match ST 酒馆助手体验：渲染后不显示源码（源码/复制转移到长按菜单）
+
+        // Fallback: some WebViews choke on srcdoc; retry via srcdoc if host never reports ready.
+        if (!allowScripts) {
+            setTimeout(() => {
+                if (iframe.dataset.iframeReady === '1') return;
+                if (iframe.dataset.iframeFallbackAttempted === '1') return;
+                iframe.dataset.iframeFallbackAttempted = '1';
+                if (iframe.dataset.iframeLoaded === '1') return;
+                try {
+                    iframe.dataset.iframeSource = 'srcdoc';
+                    iframe.removeAttribute('src');
+                    iframe.srcdoc = fallbackDoc;
+                } catch {}
+            }, 1200);
+        }
+        setTimeout(() => {
+            const st = getIframeState(iframeId);
+            if (!st) return;
+            if (!st.readyAt) {
+                const msgId = st.messageId || iframe.dataset.msgId || '';
+                const fallback = iframe.dataset.iframeFallbackAttempted === '1' ? 'fallback=1' : 'fallback=0';
+                const loaded = iframe.dataset.iframeLoaded === '1' ? 'loaded=1' : 'loaded=0';
+                const source = iframe.dataset.iframeSource || 'host';
+                const sent = iframe.dataset.iframeDocSent === '1' ? 'sent=1' : 'sent=0';
+                warnIframe('no-ready-after-2s', iframeId, `msg=${msgId} ${fallback} ${loaded} ${sent} source=${source}`);
+            }
+            if (!st.lastResizeAt) {
+                const msgId = st.messageId || iframe.dataset.msgId || '';
+                const loaded = iframe.dataset.iframeLoaded === '1' ? 'loaded=1' : 'loaded=0';
+                const source = iframe.dataset.iframeSource || 'host';
+                const sent = iframe.dataset.iframeDocSent === '1' ? 'sent=1' : 'sent=0';
+                warnIframe('no-resize-after-2s', iframeId, `msg=${msgId} ${loaded} ${sent} source=${source}`);
+            }
+        }, 2000);
+        setTimeout(() => {
+            if (iframe.dataset.iframeReady === '1') {
+                try { iframe.contentWindow?.postMessage({ type: 'chatapp:ping' }, '*'); } catch {}
+            }
+        }, 2200);
 
         // notify iframe about viewport height changes (for vh handling)
         if (needsVhHandling) {
@@ -484,6 +1113,58 @@ export const setupIframeResizeListener = () => {
         const data = e?.data;
         if (!data || typeof data !== 'object') return;
         const esc = (CSS && typeof CSS.escape === 'function') ? CSS.escape : (s) => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+        if (data.type === 'chatapp:iframe-ready') {
+            const id = String(data.id || '');
+            if (!id) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            iframe.dataset.iframeReady = '1';
+            const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+            if (st && !st.readyAt) st.readyAt = Date.now();
+            return;
+        }
+        if (data.type === 'chatapp:iframe-host-ready') {
+            const id = String(data.id || '');
+            if (!id) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+            if (st) st.hostReadyAt = Date.now();
+            logger.info(`[iframe] host-ready id=${id}`);
+            return;
+        }
+        if (data.type === 'chatapp:iframe-host-error') {
+            const id = String(data.id || '');
+            const message = String(data.message || '');
+            if (!id) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+            if (st) st.error = message || 'host-error';
+            warnIframe('iframe-host-error', id, message ? `err=${message}` : '');
+            return;
+        }
+        if (data.type === 'chatapp:pong') {
+            const id = String(data.id || '');
+            if (!id) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+            if (st) st.lastPongAt = Date.now();
+            return;
+        }
+        if (data.type === 'chatapp:iframe-error') {
+            const id = String(data.id || '');
+            const message = String(data.message || '');
+            if (!id) return;
+            const iframe = document.querySelector(`iframe[data-iframe-id="${esc(id)}"]`);
+            if (!iframe) return;
+            iframe.dataset.iframeError = message || 'error';
+            const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+            if (st) st.error = message || 'error';
+            warnIframe('iframe-error', id, message ? `err=${message}` : '');
+            return;
+        }
         if (data.type === 'chatapp:iframe-resize') {
             const id = String(data.id || '');
             const height = Number(data.height);
@@ -492,6 +1173,11 @@ export const setupIframeResizeListener = () => {
             if (!iframe) return;
             const clamped = Math.max(120, Math.min(height + 4, 2000));
             iframe.style.height = `${clamped}px`;
+            const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+            if (st) {
+                st.resizeCount = (st.resizeCount || 0) + 1;
+                st.lastResizeAt = Date.now();
+            }
             return;
         }
 
@@ -508,6 +1194,11 @@ export const setupIframeResizeListener = () => {
             const clientX = rect.left + x;
             const clientY = rect.top + y;
             const msgId = String(iframe.dataset.msgId || '');
+            const st = getIframeState(id, { messageId: msgId, createdAt: Date.now() });
+            if (st) {
+                st.pressCount = (st.pressCount || 0) + 1;
+                st.lastPressAt = Date.now();
+            }
             window.dispatchEvent(new CustomEvent('chatapp-iframe-press', {
                 detail: { id, phase, clientX, clientY, msgId }
             }));

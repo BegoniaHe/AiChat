@@ -21,6 +21,9 @@ pub fn run() {
             commands::ensure_media_bundle,
             commands::http_request,
             commands::log_js,
+            commands::save_raw_reply,
+            commands::load_raw_reply,
+            commands::delete_raw_reply,
         ])
         .setup(|_app| {
             #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]

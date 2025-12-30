@@ -2429,6 +2429,7 @@ ${listPart || '-（无）'}
     ui.clearMessages();
     ui.hideTyping();
     ui.preloadHistory(decorateMessagesForDisplay(initialWithDivider, { sessionId }), { keepScroll: true });
+    chatStore.prefetchRawOriginals?.(sessionId).catch(() => {});
     // Keep a render cursor so we can lazy-load earlier messages when scrolling up.
     chatRenderState.set(sessionId, { start });
 
@@ -2641,6 +2642,7 @@ ${listPart || '-（无）'}
       const start = Math.max(0, history.length - PAGE);
       ui.preloadHistory(decorateMessagesForDisplay(history.slice(start), { sessionId: currentId }));
       chatRenderState.set(currentId, { start });
+      chatStore.prefetchRawOriginals?.(currentId).catch(() => {});
     }
     const draft = chatStore.getDraft(currentId);
     if (draft) ui.setInputText(draft);
@@ -2673,6 +2675,7 @@ ${listPart || '-（无）'}
         if (chunk.length) {
           ui.prependHistory(decorateMessagesForDisplay(chunk, { sessionId: sid }));
           chatRenderState.set(sid, { start: nextStart });
+          chatStore.prefetchRawOriginalsForMessages?.(chunk, sid).catch(() => {});
         } else {
           chatRenderState.set(sid, { start: 0 });
         }
@@ -4704,6 +4707,42 @@ ${listPart || '-（无）'}
     if (action === 'send-to-here' && message.status === 'pending') {
       await handleSend(message.id);
       return;
+    }
+    if (action === 'view-code') {
+      let raw = typeof message?.rawOriginal === 'string' ? message.rawOriginal : '';
+      if (!raw.trim()) {
+        raw = (await chatStore.loadRawOriginal?.(message, sessionId)) || '';
+      }
+      if (!raw.trim()) {
+        raw = message?.rawSource ?? message?.raw_source ?? message?.source ?? message?.raw ?? message?.content ?? '';
+      }
+      ui.openCodeViewer({ message, text: String(raw || '') });
+      return true;
+    }
+    if (action === 'copy-text') {
+      let text = '';
+      if (message?.meta?.renderRich) {
+        try {
+          text = ui.getBubbleCopyText(payload?.wrapper);
+        } catch {}
+      }
+      if (!String(text || '').trim()) {
+        text = message?.content || '';
+      }
+      if (!String(text || '').trim()) {
+        const loaded = await chatStore.loadRawOriginal?.(message, sessionId);
+        text =
+          loaded ||
+          message?.rawSource ||
+          message?.raw_source ||
+          message?.rawOriginal ||
+          message?.raw ||
+          message?.content ||
+          '';
+      }
+      const ok = await ui.copyToClipboard(text);
+      ok ? window.toastr?.success?.('已複製') : window.toastr?.warning?.('複製失敗');
+      return true;
     }
 
     if (action === 'delete-selected') {

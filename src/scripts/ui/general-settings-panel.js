@@ -6,6 +6,7 @@ export class GeneralSettingsPanel {
     this.overlayElement = null;
     this.debugToggle = null;
     this.typingDotsToggle = null;
+    this.richIframeScriptsToggle = null;
   }
 
   show() {
@@ -18,6 +19,9 @@ export class GeneralSettingsPanel {
     }
     if (this.typingDotsToggle) {
       this.typingDotsToggle.checked = settings.typingDotsEnabled !== false;
+    }
+    if (this.richIframeScriptsToggle) {
+      this.richIframeScriptsToggle.checked = Boolean(settings.allowRichIframeScripts);
     }
     this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
     this.element.style.display = 'block';
@@ -80,6 +84,14 @@ export class GeneralSettingsPanel {
           <small style="color: #666; margin-left: 26px;">关闭后保留静态小点</small>
         </div>
 
+        <div style="margin-bottom: 16px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="general-rich-iframe-scripts" style="width: 18px; height: 18px;">
+            <span style="font-weight: 700;">富文本 iframe 执行脚本</span>
+          </label>
+          <small style="color: #666; margin-left: 26px;">高风险：脚本可访问同源数据并加载外部资源，仅信任来源启用</small>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; gap: 8px;">
           <button id="general-settings-done" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0;
                                                    background: #f8fafc; cursor: pointer; font-size: 14px; color: #475569;">
@@ -100,6 +112,7 @@ export class GeneralSettingsPanel {
 
     this.debugToggle = this.element.querySelector('#general-debug-toggle');
     this.typingDotsToggle = this.element.querySelector('#general-typing-dots');
+    this.richIframeScriptsToggle = this.element.querySelector('#general-rich-iframe-scripts');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -113,6 +126,20 @@ export class GeneralSettingsPanel {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ typingDotsEnabled: enabled });
       this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
+    });
+    this.richIframeScriptsToggle?.addEventListener('change', (e) => {
+      const target = e?.target;
+      const enabled = Boolean(target?.checked);
+      if (enabled) {
+        const ok = confirm(
+          '启用后，富文本 iframe 将执行其中的脚本并放宽安全限制，脚本可能访问同源数据、加载外部资源，导致敏感信息泄露或设置被篡改。仅在信任来源时启用。确定继续吗？',
+        );
+        if (!ok) {
+          if (target) target.checked = false;
+          return;
+        }
+      }
+      appSettings.update({ allowRichIframeScripts: enabled });
     });
 
     this.element.querySelector('#general-settings-close')?.addEventListener('click', () => this.hide());

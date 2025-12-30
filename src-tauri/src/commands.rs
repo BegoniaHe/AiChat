@@ -15,6 +15,32 @@ fn get_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
+fn sanitize_segment(input: &str) -> String {
+    let raw = input.trim();
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    let mut cleaned = if trimmed.is_empty() { "default".to_string() } else { out };
+    const MAX_LEN: usize = 80;
+    if cleaned.len() > MAX_LEN {
+        cleaned.truncate(MAX_LEN);
+    }
+    cleaned
+}
+
+fn raw_reply_path(app: &AppHandle, session_id: &str, message_id: &str) -> Result<PathBuf, String> {
+    let data_dir = get_data_dir(app)?;
+    let sid = sanitize_segment(session_id);
+    let mid = sanitize_segment(message_id);
+    Ok(data_dir.join("raw_replies").join(sid).join(format!("{mid}.txt")))
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.exists() {
         return Err(format!("source directory missing: {}", src.display()));
@@ -410,6 +436,61 @@ pub async fn load_kv(app: AppHandle, name: String) -> Result<Value, String> {
     }
 
     Ok(data)
+}
+
+/// 保存原始回复（用于富文本/创意写作回溯）
+#[tauri::command]
+pub async fn save_raw_reply(
+    app: AppHandle,
+    session_id: String,
+    message_id: String,
+    text: String,
+) -> Result<(), String> {
+    let file = raw_reply_path(&app, &session_id, &message_id)?;
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&file, text).map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "android")]
+    {
+        if let Ok(f) = fs::File::open(&file) {
+            unsafe {
+                libc::fsync(f.as_raw_fd());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 读取原始回复
+#[tauri::command]
+pub async fn load_raw_reply(
+    app: AppHandle,
+    session_id: String,
+    message_id: String,
+) -> Result<Option<String>, String> {
+    let file = raw_reply_path(&app, &session_id, &message_id)?;
+    if !file.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(file).map_err(|e| e.to_string())?;
+    Ok(Some(text))
+}
+
+/// 删除原始回复
+#[tauri::command]
+pub async fn delete_raw_reply(
+    app: AppHandle,
+    session_id: String,
+    message_id: String,
+) -> Result<(), String> {
+    let file = raw_reply_path(&app, &session_id, &message_id)?;
+    if file.exists() {
+        fs::remove_file(file).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize)]

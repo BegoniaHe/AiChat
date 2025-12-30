@@ -32,10 +32,17 @@ if (-not $SkipBuild) {
 }
 
 $apkInputCandidates = @(
-  (Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release.apk"),
-  (Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release-unsigned.apk")
+  (Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release-unsigned.apk"),
+  (Join-Path $root "src-tauri\gen\android\app\build\outputs\apk\universal\release\app-universal-release.apk")
 )
-$apkInput = $apkInputCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$apkInputItem = $apkInputCandidates `
+  | Where-Object { Test-Path $_ } `
+  | ForEach-Object { Get-Item $_ } `
+  | Sort-Object LastWriteTime -Descending `
+  | Select-Object -First 1
+if ($apkInputItem) {
+  $apkInput = $apkInputItem.FullName
+}
 if (-not $apkInput) {
   $fallback = $apkInputCandidates -join "; "
   throw "未找到 APK：$fallback"
@@ -83,9 +90,13 @@ if (-not $SkipSign) {
     if (-not $KeyPass) { $KeyPass = $KeystorePass }
   }
 
-  & $zipalign -v 4 $apkInput $alignedApk
+  Remove-Item -Force -ErrorAction SilentlyContinue $alignedApk, $signedApk, "$signedApk.idsig"
+  & $zipalign -f -v 4 $apkInput $alignedApk
+  if ($LASTEXITCODE -ne 0) { throw "zipalign 失败，退出码 $LASTEXITCODE" }
   & $apksigner sign --ks $KeystorePath --ks-key-alias $KeystoreAlias --ks-pass "pass:$KeystorePass" --key-pass "pass:$KeyPass" --out $signedApk $alignedApk
+  if ($LASTEXITCODE -ne 0) { throw "apksigner 失败，退出码 $LASTEXITCODE" }
   & $apksigner verify --verbose $signedApk
+  if ($LASTEXITCODE -ne 0) { throw "apksigner verify 失败，退出码 $LASTEXITCODE" }
 } else {
   Copy-Item $apkInput $signedApk -Force
 }
