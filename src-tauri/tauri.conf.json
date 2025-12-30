@@ -1,6 +1,6 @@
 {
   "productName": "ChatApp",
-  "version": "0.2.67",
+  "version": "0.2.70",
   "identifier": "com.chatapp.dev",
   "build": {
     "beforeDevCommand": "",
@@ -47,13 +47,13 @@
           "http://localhost:*",
           "http://127.0.0.1:*"
         ],
-        "img-src": "'self' data: https: blob: asset: tauri: file:",
-        "media-src": "'self' data: https: blob: asset: tauri: file:",
-        "style-src": "'self' 'unsafe-inline' https:",
-        "script-src": "'self' 'unsafe-inline' https:",
+        "img-src": "'self' data: https: http: blob: asset: tauri: file:",
+        "media-src": "'self' data: https: http: blob: asset: tauri: file:",
+        "style-src": "'self' 'unsafe-inline' https: http: data: blob:",
+        "script-src": "'self' 'unsafe-inline' 'unsafe-eval' https: http: data: blob:",
         "frame-src": "'self' data: blob:",
         "child-src": "'self' data: blob:",
-        "font-src": "'self' data: https:"
+        "font-src": "'self' data: https: http:"
       }
     }
   }
