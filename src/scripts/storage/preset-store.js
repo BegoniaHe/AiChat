@@ -170,7 +170,7 @@ const clone = (v) => {
 
 const normalizeType = (type) => {
     const t = String(type || '').toLowerCase();
-    if (t === 'sysprompt' || t === 'context' || t === 'instruct' || t === 'openai') return t;
+    if (t === 'sysprompt' || t === 'context' || t === 'instruct' || t === 'openai' || t === 'reasoning') return t;
     throw new Error(`Unknown preset type: ${type}`);
 };
 
@@ -335,6 +335,7 @@ const makeDefaultState = (defaultsByType) => {
     const sysId = findIdByName('sysprompt', 'Neutral - Chat') || findIdByName('sysprompt', 'Roleplay - Immersive');
     const insId = findIdByName('instruct', 'ChatML') || findIdByName('instruct', 'Llama 3 Instruct');
     const openaiId = findIdByName('openai', 'Default');
+    const reasoningId = findIdByName('reasoning', 'DeepSeek') || findIdByName('reasoning', 'Blank');
 
     return {
         version: 1,
@@ -343,18 +344,21 @@ const makeDefaultState = (defaultsByType) => {
             context: defaultsByType?.context || {},
             instruct: defaultsByType?.instruct || {},
             openai: defaultsByType?.openai || {},
+            reasoning: defaultsByType?.reasoning || {},
         },
         active: {
             sysprompt: sysId,
             context: ctxId,
             instruct: insId,
             openai: openaiId,
+            reasoning: reasoningId,
         },
         enabled: {
             sysprompt: true,
             context: true,
             instruct: false,
             openai: true,
+            reasoning: true,
         }
     };
 };
@@ -377,6 +381,7 @@ export class PresetStore {
                 context: ensureObj(types.context, {}),
                 instruct: ensureObj(types.instruct, {}),
                 openai: ensureObj(types.openai, {}),
+                reasoning: ensureObj(types.reasoning, {}),
             };
 
             // Convert {name -> presetData} to {id -> presetDataWithName} (stable id = name)
@@ -390,7 +395,7 @@ export class PresetStore {
             return out;
         } catch (err) {
             logger.warn('加载内置 ST 预设失败', err);
-            return { sysprompt: {}, context: {}, instruct: {}, openai: {} };
+            return { sysprompt: {}, context: {}, instruct: {}, openai: {}, reasoning: {} };
         }
     }
 
@@ -484,7 +489,7 @@ export class PresetStore {
             state.active = ensureObj(state.active, {});
             state.presets = ensureObj(state.presets, {});
 
-            for (const type of ['sysprompt', 'context', 'instruct', 'openai']) {
+            for (const type of ['sysprompt', 'context', 'instruct', 'openai', 'reasoning']) {
                 state.presets[type] = ensureObj(state.presets[type], {});
                 for (const [id, data] of Object.entries(defaults[type] || {})) {
                     if (!state.presets[type][id]) state.presets[type][id] = data;
@@ -493,7 +498,7 @@ export class PresetStore {
                     state.active[type] = Object.keys(state.presets[type])[0] || null;
                 }
                 if (typeof state.enabled[type] !== 'boolean') {
-                    state.enabled[type] = (type === 'sysprompt' || type === 'context' || type === 'openai');
+                    state.enabled[type] = (type === 'sysprompt' || type === 'context' || type === 'openai' || type === 'reasoning');
                 }
             }
 
@@ -609,7 +614,7 @@ export class PresetStore {
         }
 
         // merge: overwrite by id, keep existing otherwise
-        for (const t of ['sysprompt', 'context', 'instruct', 'openai']) {
+        for (const t of ['sysprompt', 'context', 'instruct', 'openai', 'reasoning']) {
             next.presets ||= {};
             next.presets[t] ||= {};
             const incoming = imported.presets?.[t];

@@ -1779,6 +1779,26 @@
         "n": 1,
         "name": "Default"
       }
+    },
+    "reasoning": {
+      "DeepSeek": {
+        "name": "DeepSeek",
+        "prefix": "<think>\n",
+        "suffix": "\n</think>",
+        "separator": "\n\n"
+      },
+      "Blank": {
+        "name": "Blank",
+        "prefix": "",
+        "suffix": "",
+        "separator": ""
+      },
+      "OpenAI Harmony": {
+        "name": "OpenAI Harmony",
+        "prefix": "<|start|>assistant<|channel|>analysis<|message|>",
+        "suffix": "<|start|>assistant<|channel|>final<|message|>",
+        "separator": ""
+      }
     }
   }
 }

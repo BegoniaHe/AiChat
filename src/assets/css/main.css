@@ -44,6 +44,11 @@ body[data-typing-dots="off"] .typing-dot {
   opacity: 0.55;
   transform: translateY(0) !important;
 }
+body[data-typing-dots="off"] .typing,
+body[data-typing-dots="off"] #typing-indicator,
+body[data-typing-dots="off"] [data-typing-placeholder="1"] {
+  display: none !important;
+}
 
 /* 背景占位（若需要使用已下載外部背景） */
 .bg-legacy {

@@ -4,6 +4,7 @@
 
 import { resolveMediaAsset } from '../../utils/media-assets.js';
 import { renderRichText, setupIframeResizeListener } from './rich-text-renderer.js';
+import { appSettings } from '../../storage/app-settings.js';
 
 const resolveMediaUrl = (kind, value) => {
   const resolved = resolveMediaAsset(kind, value);
@@ -55,6 +56,11 @@ export class ChatUI {
     this.bindInputAutosize();
     this.bindFocusScroll();
     this.bindNetworkEvents();
+    this.bindReasoningSettings();
+  }
+
+  isTypingDotsEnabled() {
+    return document?.body?.dataset?.typingDots !== 'off';
   }
 
   normalizeAssistantLineBreaks(text) {
@@ -62,6 +68,72 @@ export class ChatUI {
     return String(text ?? '')
       .replace(/&lt;br\s*\/?&gt;/gi, '\n')
       .replace(/<br\s*\/?>/gi, '\n');
+  }
+
+  applyCreativeBubbleState(wrapper, message) {
+    if (!wrapper) return;
+    const isCreative = message?.role === 'assistant' && message?.meta?.renderRich;
+    if (isCreative) {
+      wrapper.dataset.creative = '1';
+    } else {
+      delete wrapper.dataset.creative;
+    }
+  }
+
+  getReasoningText(message) {
+    const meta = message?.meta;
+    if (!meta || typeof meta !== 'object') return '';
+    const raw = typeof meta.reasoningDisplay === 'string' ? meta.reasoningDisplay : meta.reasoning;
+    return String(raw ?? '').trim();
+  }
+
+  buildReasoningElement(message) {
+    const meta = message?.meta;
+    if (!meta || typeof meta !== 'object') return null;
+    if (meta.reasoningHidden === true && appSettings.get().reasoningShowHidden !== true) return null;
+    const text = this.getReasoningText(message);
+    if (!text) return null;
+    const details = document.createElement('details');
+    details.className = 'chat-reasoning';
+    if (meta.reasoningHidden === true) details.dataset.hidden = '1';
+    if (appSettings.get().reasoningAutoExpand === true) details.open = true;
+    const summary = document.createElement('summary');
+    summary.className = 'chat-reasoning-summary';
+    summary.textContent = '推理';
+    const content = document.createElement('div');
+    content.className = 'chat-reasoning-content';
+    content.textContent = text;
+    details.appendChild(summary);
+    details.appendChild(content);
+    return details;
+  }
+
+  prepareTextContainer(bubble, message) {
+    const reasoningEl = this.buildReasoningElement(message);
+    if (!reasoningEl) return bubble;
+    bubble.innerHTML = '';
+    bubble.appendChild(reasoningEl);
+    const content = document.createElement('div');
+    content.className = 'chat-message-content';
+    bubble.appendChild(content);
+    return content;
+  }
+
+  bindReasoningSettings() {
+    if (this.__chatappReasoningBound) return;
+    this.__chatappReasoningBound = true;
+    const updateAll = () => {
+      const autoExpand = appSettings.get().reasoningAutoExpand === true;
+      document.querySelectorAll('details.chat-reasoning').forEach((el) => {
+        if (!(el instanceof HTMLDetailsElement)) return;
+        el.open = autoExpand;
+        if (el.dataset.hidden === '1') {
+          el.style.display = appSettings.get().reasoningShowHidden === true ? '' : 'none';
+        }
+      });
+    };
+    window.addEventListener('reasoning-settings-changed', updateAll);
+    updateAll();
   }
 
   renderTextWithStickers(bubble, text) {
@@ -153,8 +225,7 @@ export class ChatUI {
         }
 
         if (phase === 'down') {
-          const iframe = iframeId ? document.querySelector(`iframe[data-iframe-id="${esc(iframeId)}"]`) : null;
-          this.startLongPress({ clientX, clientY, target: iframe || wrapper }, message);
+          this.clearLongPress();
           return;
         }
         if (phase === 'longpress') {
@@ -456,6 +527,7 @@ export class ChatUI {
     wrapper.dataset.msgId = message.id;
     wrapper.dataset.role = message.role || '';
     wrapper.__chatappMessage = message;
+    this.applyCreativeBubbleState(wrapper, message);
 
     // 添加 pending/sending 状态标记
     if (message.status === 'pending' || message.status === 'sending') {
@@ -638,7 +710,8 @@ export class ChatUI {
         // === 创意写作模式===
         // Safe rich rendering (code fences + html iframe preview)
         if (message?.meta?.renderRich) {
-          renderRichText(bubble, String(message.content ?? ''), {
+          const target = this.prepareTextContainer(bubble, message);
+          renderRichText(target, String(message.content ?? ''), {
             messageId: message.id,
             preserveHtmlNewlines: true,
           });
@@ -649,9 +722,10 @@ export class ChatUI {
           const baseText = typeof message.raw === 'string' ? message.raw : message.content;
           const normalized =
             message.role === 'assistant' ? this.normalizeAssistantLineBreaks(baseText) : String(baseText ?? '');
-          if (!this.renderTextWithStickers(bubble, normalized)) {
-            bubble.textContent = normalized;
-            bubble.style.whiteSpace = 'pre-wrap';
+          const target = this.prepareTextContainer(bubble, message);
+          if (!this.renderTextWithStickers(target, normalized)) {
+            target.textContent = normalized;
+            target.style.whiteSpace = 'pre-wrap';
           }
         }
     }
@@ -728,6 +802,7 @@ export class ChatUI {
   }
 
   showTyping(avatarUrl = '') {
+    if (!this.isTypingDotsEnabled()) return;
     if (this.typingEl) return;
     const wrap = document.createElement('div');
     wrap.className = 'QQ_chat_charmsg';
@@ -779,7 +854,10 @@ export class ChatUI {
     const wrapperEl = messageEl?.closest?.('.QQ_chat_charmsg, .QQ_chat_mymsg') || messageEl?.parentElement || null;
     const msgId = wrapperEl?.dataset?.msgId || placeholder.id || meta?.id || '';
     // Default: show typing animation inside the streaming bubble (avoid an extra placeholder bubble)
-    if (meta?.typing !== false && messageEl) {
+    if (wrapperEl) {
+      wrapperEl.dataset.typingPlaceholder = '1';
+    }
+    if (meta?.typing !== false && messageEl && this.isTypingDotsEnabled()) {
       messageEl.innerHTML = `
                 <div class="typing">
                     <span class="typing-dot"></span>
@@ -787,6 +865,8 @@ export class ChatUI {
                     <span class="typing-dot"></span>
                 </div>
             `;
+    } else if (messageEl) {
+      messageEl.textContent = '';
     }
     const raf = cb => {
       try {
@@ -816,6 +896,9 @@ export class ChatUI {
           const next = pendingText;
           updateHandle = null;
           if (!messageEl || !messageEl.isConnected) return;
+          if (wrapperEl?.dataset?.typingPlaceholder) {
+            delete wrapperEl.dataset.typingPlaceholder;
+          }
           messageEl.textContent = this.normalizeAssistantLineBreaks(next);
           messageEl.style.whiteSpace = 'pre-wrap';
           this.scrollToBottom();
@@ -842,16 +925,21 @@ export class ChatUI {
               ...(fm || {}),
               id: msgId || fm?.id || placeholder.id,
             };
+            this.applyCreativeBubbleState(wrapperEl, fm);
           }
           this.messageBuffer[bufferIndex] = fm;
           try {
             // Render rich content for the final text
             const text = String(fm?.content ?? '');
+            const target = this.prepareTextContainer(messageEl, fm);
             if (fm?.meta?.renderRich) {
-              renderRichText(messageEl, text, { messageId: msgId || fm?.id || meta?.id });
+              renderRichText(target, text, { messageId: msgId || fm?.id || meta?.id });
             } else {
-              messageEl.textContent = this.normalizeAssistantLineBreaks(text);
-              messageEl.style.whiteSpace = 'pre-wrap';
+              const normalized = this.normalizeAssistantLineBreaks(text);
+              if (!this.renderTextWithStickers(target, normalized)) {
+                target.textContent = normalized;
+                target.style.whiteSpace = 'pre-wrap';
+              }
             }
           } catch {}
         }

@@ -72,6 +72,7 @@ const PRESET_TYPES = [
     { id: 'context', label: '上下文模板' },
     { id: 'instruct', label: 'Instruct 模板' },
     { id: 'openai', label: '生成参数/自定义' },
+    { id: 'reasoning', label: '推理格式' },
 ];
 
 export class RegexPanel {

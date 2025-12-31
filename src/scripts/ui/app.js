@@ -45,6 +45,16 @@ const initApp = async () => {
     }
   };
   applyTypingDotsSetting();
+  const applyCreativeWideSetting = () => {
+    const enabled = appSettings.get().creativeWideBubble === true;
+    if (!document?.body) return;
+    if (enabled) {
+      document.body.dataset.creativeWide = 'on';
+    } else {
+      delete document.body.dataset.creativeWide;
+    }
+  };
+  applyCreativeWideSetting();
   let updateStickerPreview = () => {};
   const originalSetInputText = ui.setInputText.bind(ui);
   ui.setInputText = (val) => {
@@ -830,6 +840,121 @@ ${listPart || '-（无）'}
       .replace(/\r/g, '\n')
   );
 
+  const stripSimpleHtml = text => String(text ?? '').replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '');
+
+  const normalizePlainText = text => normalizeCreativeLineBreaks(String(text ?? ''));
+
+  const escapeRegex = (input) => String(input ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const getReasoningPreset = () => {
+    try {
+      return window.appBridge?.presets?.getActive?.('reasoning') || {};
+    } catch {
+      return {};
+    }
+  };
+  const parseReasoningBlock = (text, { strict = true } = {}) => {
+    const raw = String(text ?? '');
+    const settings = appSettings.get();
+    if (settings.reasoningAutoParse !== true) return { content: raw, reasoning: '' };
+    const preset = getReasoningPreset();
+    const prefix = String(preset?.prefix ?? '');
+    const suffix = String(preset?.suffix ?? '');
+    if (!prefix || !suffix) return { content: raw, reasoning: '' };
+    try {
+      const pattern = `${strict ? '^\\s*?' : ''}${escapeRegex(prefix)}([\\s\\S]*?)${escapeRegex(suffix)}`;
+      const regex = new RegExp(pattern, 's');
+      const match = raw.match(regex);
+      if (!match) return { content: raw, reasoning: '' };
+      const reasoning = String(match[1] ?? '').trim();
+      const content = (raw.slice(0, match.index) + raw.slice(match.index + match[0].length))
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      return { content, reasoning };
+    } catch {
+      return { content: raw, reasoning: '' };
+    }
+  };
+  const applyReasoningRegex = (reasoning, { depth } = {}) => {
+    const text = String(reasoning ?? '').trim();
+    if (!text) return { stored: '', display: '' };
+    let stored = text;
+    let display = text;
+    try {
+      stored = window.appBridge.applyReasoningStoredRegex(text, { depth });
+      display = window.appBridge.applyReasoningDisplayRegex(stored, { depth });
+    } catch {}
+    return { stored, display };
+  };
+  const extractReasoningFromContent = (content, { depth, strict = true } = {}) => {
+    const parsed = parseReasoningBlock(content, { strict });
+    if (!parsed.reasoning) return { content: parsed.content, reasoning: '', reasoningDisplay: '' };
+    const { stored, display } = applyReasoningRegex(parsed.reasoning, { depth });
+    return { content: parsed.content, reasoning: stored, reasoningDisplay: display };
+  };
+
+  const resolveMessagePlainText = (message, { depth, preferRawSource = false } = {}) => {
+    if (!message || typeof message !== 'object') return '';
+    const pick = value => {
+      const normalized = normalizePlainText(value);
+      return normalized.trim() ? normalized : '';
+    };
+
+    if (message.role === 'assistant') {
+      const rawSource =
+        typeof message.rawSource === 'string'
+          ? message.rawSource
+          : typeof message.raw_source === 'string'
+            ? message.raw_source
+            : '';
+      const filteredRawSource = rawSource ? (extractReasoningFromContent(rawSource, { depth, strict: true }).content || rawSource) : '';
+      if (preferRawSource && rawSource) {
+        try {
+          const picked = pick(window.appBridge.applyOutputStoredRegex(filteredRawSource || rawSource, { depth }));
+          if (picked) return picked;
+        } catch {
+          const picked = pick(filteredRawSource || rawSource);
+          if (picked) return picked;
+        }
+      }
+      const raw = typeof message.raw === 'string' ? message.raw : '';
+      const rawPicked = pick(raw);
+      if (rawPicked) return rawPicked;
+      if (rawSource) {
+        try {
+          return pick(window.appBridge.applyOutputStoredRegex(filteredRawSource || rawSource, { depth }));
+        } catch {
+          return pick(filteredRawSource || rawSource);
+        }
+      }
+      const rawOriginal = typeof message.rawOriginal === 'string' ? message.rawOriginal : '';
+      if (rawOriginal) {
+        try {
+          const filteredOriginal = extractReasoningFromContent(rawOriginal, { depth, strict: true }).content || rawOriginal;
+          return pick(window.appBridge.applyOutputStoredRegex(filteredOriginal, { depth }));
+        } catch {
+          const filteredOriginal = extractReasoningFromContent(rawOriginal, { depth, strict: true }).content || rawOriginal;
+          return pick(filteredOriginal);
+        }
+      }
+      const content = typeof message.content === 'string' ? message.content : '';
+      return content ? pick(stripSimpleHtml(content)) : '';
+    }
+
+    if (message.role === 'user') {
+      const raw = typeof message.raw === 'string' ? message.raw : '';
+      const rawPicked = pick(raw);
+      if (rawPicked) return rawPicked;
+      const content = typeof message.content === 'string' ? message.content : '';
+      if (!content) return '';
+      try {
+        return pick(window.appBridge.applyInputStoredRegex(content, { depth }));
+      } catch {
+        return pick(content);
+      }
+    }
+    return '';
+  };
+
   const normalizeEchoText = (text = '') => {
     const raw = String(text || '');
     return raw
@@ -940,6 +1065,14 @@ ${listPart || '-（无）'}
             : '';
       const creativeSource = rawSource ? normalizeCreativeLineBreaks(rawSource) : '';
       const creativeBase = creativeSource || base;
+      const meta = (m?.meta && typeof m.meta === 'object') ? { ...m.meta } : m?.meta;
+      if (meta && typeof meta.reasoning === 'string') {
+        try {
+          meta.reasoningDisplay = window.appBridge.applyReasoningDisplayRegex(meta.reasoning, { depth });
+        } catch {
+          meta.reasoningDisplay = meta.reasoning;
+        }
+      }
 
       if (m.role === 'assistant' && (m.type === 'text' || !m.type)) {
         if (m?.meta?.renderRich) {
@@ -958,6 +1091,7 @@ ${listPart || '-（无）'}
               raw: stored,
               content: display,
               status: m.status,
+              meta,
             };
           }
           return {
@@ -965,14 +1099,15 @@ ${listPart || '-（无）'}
             avatar,
             content: normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(creativeBase, { depth })),
             status: m.status,
+            meta,
           };
         }
-        return { ...m, avatar, content: base, status: m.status }; // 保留 status 字段
+        return { ...m, avatar, content: base, status: m.status, meta }; // 保留 status 字段
       }
       if (m.role === 'user' && (m.type === 'text' || !m.type)) {
-        return { ...m, avatar, content: window.appBridge.applyInputDisplayRegex(base, { depth }), status: m.status }; // 保留 status 字段
+        return { ...m, avatar, content: window.appBridge.applyInputDisplayRegex(base, { depth }), status: m.status, meta }; // 保留 status 字段
       }
-      return { ...m, avatar, status: m.status }; // 保留 status 字段
+      return { ...m, avatar, status: m.status, meta }; // 保留 status 字段
     });
   };
 
@@ -3460,6 +3595,26 @@ ${listPart || '-（无）'}
         .trim();
       return { text: stripped, summary };
     };
+    const buildAssistantMessageFromText = (rawText, { sessionId, time, name, avatar, showName, depth } = {}) => {
+      const cleaned = sanitizeAssistantReplyText(rawText, userName);
+      const reasoningParsed = extractReasoningFromContent(cleaned, { depth, strict: true });
+      const parsed = parseSpecialMessage(reasoningParsed.content || '');
+      const meta = { ...(parsed.meta || {}) };
+      if (showName) meta.showName = true;
+      if (reasoningParsed.reasoning) {
+        meta.reasoning = reasoningParsed.reasoning;
+        meta.reasoningDisplay = reasoningParsed.reasoningDisplay;
+      }
+      const next = {
+        role: 'assistant',
+        ...parsed,
+        name: name || '助手',
+        avatar: avatar || getAssistantAvatarForSession(sessionId),
+        time: time || formatNowTime(),
+      };
+      if (Object.keys(meta).length) next.meta = meta;
+      return next;
+    };
     const sanitizeThinkingForProtocolParse = text => {
       const raw = String(text ?? '');
       // More tolerant fallback: if model echoed "<content>" inside (possibly unclosed) thinking,
@@ -3496,6 +3651,12 @@ ${listPart || '-（无）'}
 
     const buildHistoryForLLM = pendingUserText => {
       const all = chatStore.getMessages(sessionId) || [];
+      const convPos = new Map();
+      all.forEach((m, idx) => {
+        if (m && (m.role === 'user' || m.role === 'assistant')) convPos.set(idx, convPos.size);
+      });
+      const total = convPos.size;
+      const getDepthForIndex = idx => (convPos.has(idx) ? total - 1 - convPos.get(idx) : undefined);
       const resolveCreativeHistorySummary = (msg) => {
         const direct = String(msg?.meta?.summary || '').trim();
         if (direct) return direct;
@@ -3511,14 +3672,16 @@ ${listPart || '-（无）'}
         } catch {}
         return '';
       };
-      const history = all
+      let history = all
         .filter(m => m && m.status !== 'pending' && m.status !== 'sending')
         .filter(m => {
           if (!m || typeof m.content !== 'string') return false;
           if (m.role === 'user' || m.role === 'assistant') return true;
           return isGroupChat && m.role === 'system';
         })
-        .map(m => {
+        .map((m, idx) => {
+          const depth = getDepthForIndex(idx);
+          const isCreativeReply = m?.role === 'assistant' && Boolean(m?.meta?.renderRich);
           if (isGroupChat && m.role === 'system') {
             const raw = String(m.content || '').trim();
             if (!raw) return null;
@@ -3528,10 +3691,19 @@ ${listPart || '-（无）'}
               role: 'assistant',
               content: systemLine,
               name: '系统',
+              __creative: false,
             };
           }
           let content = typeof m.raw === 'string' ? m.raw : m.content;
-          if (m.role === 'assistant' && m?.meta?.renderRich) {
+          if (creativeMode && (m.role === 'assistant' || m.role === 'user')) {
+            const plain = resolveMessagePlainText(m, {
+              depth,
+              preferRawSource: isCreativeReply,
+            });
+            if (plain) {
+              content = plain;
+            }
+          } else if (m.role === 'assistant' && m?.meta?.renderRich) {
             const summary = resolveCreativeHistorySummary(m);
             if (!summary) return null;
             content = summary;
@@ -3540,10 +3712,14 @@ ${listPart || '-（无）'}
             if (key) content = buildStickerToken(key);
           }
           if (!String(content || '').trim()) return null;
+          const reasoning =
+            m.role === 'assistant' && typeof m?.meta?.reasoning === 'string' ? m.meta.reasoning : '';
           return {
             role: m.role,
             content,
             name: typeof m.name === 'string' ? m.name : '',
+            __creative: isCreativeReply,
+            __reasoning: reasoning,
           };
         })
         .filter(Boolean);
@@ -3582,6 +3758,62 @@ ${listPart || '-（无）'}
           total -= (typeof dropped?.content === 'string' ? dropped.content.length : 0);
         }
       } catch {}
+      if (creativeMode) {
+        const rawLimit = Number(appSettings.get().creativeHistoryMax);
+        const creativeLimit = Number.isFinite(rawLimit) ? Math.max(0, Math.trunc(rawLimit)) : 3;
+        const creativeIdx = [];
+        history.forEach((m, idx) => {
+          if (m?.__creative) creativeIdx.push(idx);
+        });
+        if (creativeLimit <= 0) {
+          history = history.filter(m => !m?.__creative);
+        } else if (creativeIdx.length > creativeLimit) {
+          const keep = new Set(creativeIdx.slice(-creativeLimit));
+          history = history.filter((m, idx) => !m?.__creative || keep.has(idx));
+        }
+      }
+      try {
+        const settings = appSettings.get();
+        const preset = getReasoningPreset();
+        const addToPrompts = settings.reasoningAddToPrompts === true;
+        const prefixRaw = String(preset?.prefix ?? '');
+        const suffixRaw = String(preset?.suffix ?? '');
+        const sepRaw = String(preset?.separator ?? '');
+        if (addToPrompts && (prefixRaw || suffixRaw || sepRaw)) {
+          const maxAdditions = Number.isFinite(Number(settings.reasoningMaxAdditions))
+            ? Math.max(0, Math.trunc(Number(settings.reasoningMaxAdditions)))
+            : 1;
+          if (maxAdditions > 0) {
+            const applyMacros = (val) => {
+              try {
+                return window.appBridge.processTextMacros(String(val ?? ''), { sessionId });
+              } catch {
+                return String(val ?? '');
+              }
+            };
+            const prefix = applyMacros(prefixRaw);
+            const suffix = applyMacros(suffixRaw);
+            const separator = applyMacros(sepRaw);
+            let added = 0;
+            for (let i = history.length - 1; i >= 0; i--) {
+              if (added >= maxAdditions) break;
+              const msg = history[i];
+              if (!msg || msg.role !== 'assistant') continue;
+              const reasoning = String(msg.__reasoning || '').trim();
+              if (!reasoning) continue;
+              const block = `${prefix}${reasoning}${suffix}${separator}`;
+              msg.content = `${block}${msg.content || ''}`;
+              added += 1;
+            }
+          }
+        }
+      } catch {}
+      history = history.map(m => {
+        if (!m || typeof m !== 'object') return m;
+        if (!('__creative' in m) && !('__reasoning' in m)) return m;
+        const { __creative, __reasoning, ...rest } = m;
+        return rest;
+      });
       return history;
     };
     let disableSummaryForThis = false;
@@ -3745,15 +3977,21 @@ ${listPart || '-（无）'}
             } catch {}
           }
           const rawSource = normalizeCreativeLineBreaks(stripped);
-          let stored = rawSource;
-          let display = rawSource;
+          const reasoningParsed = extractReasoningFromContent(rawSource, { depth: 0, strict: true });
+          const finalSource = normalizeCreativeLineBreaks(reasoningParsed.content || '');
+          let stored = finalSource;
+          let display = finalSource;
           try {
-            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(rawSource, { depth: 0 }));
+            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(finalSource, { depth: 0 }));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
             streamCtrl.update(display);
           } catch {}
           const meta = { renderRich: true };
           if (summary) meta.summary = summary;
+          if (reasoningParsed.reasoning) {
+            meta.reasoning = reasoningParsed.reasoning;
+            meta.reasoningDisplay = reasoningParsed.reasoningDisplay;
+          }
           const parsed = {
             role: 'assistant',
             type: 'text',
@@ -3762,7 +4000,7 @@ ${listPart || '-（无）'}
             time: formatNowTime(),
             id: streamCtrl?.id,
             rawOriginal: full,
-            rawSource,
+            rawSource: finalSource,
             raw: stored,
             content: display,
             meta,
@@ -3837,15 +4075,23 @@ ${listPart || '-（无）'}
                   if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                   const role = isMe ? 'user' : 'assistant';
                   const c = isMe ? null : resolveContactByDisplayName(speaker);
-                  const parsed = {
-                    role,
-                    type: 'text',
-                    ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
-                    name: role === 'user' ? userName : speaker || '成员',
-                    avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
-                    time: m?.time || formatNowTime(),
-                    meta: role === 'assistant' ? { showName: true } : undefined,
-                  };
+                  const parsed = role === 'assistant'
+                    ? buildAssistantMessageFromText(content, {
+                        sessionId: targetGroupId,
+                        time: m?.time || formatNowTime(),
+                        name: speaker || '成员',
+                        avatar: c?.avatar || avatars.assistant,
+                        showName: true,
+                        depth: 0,
+                      })
+                    : {
+                        role: 'user',
+                        type: 'text',
+                        ...parseSpecialMessage(content),
+                        name: userName,
+                        avatar: avatars.user,
+                        time: m?.time || formatNowTime(),
+                      };
                   if (targetGroupId === sessionId) ui.addMessage(parsed);
                   const saved = chatStore.appendMessage(parsed, targetGroupId);
                   if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -3869,15 +4115,11 @@ ${listPart || '-（无）'}
               ev.messages.forEach(msgText => {
                 const rawMsg = String(msgText || '');
                 if (userEchoGuard.shouldDrop(rawMsg)) return;
-                const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
-                const parsed = {
-                  role: 'assistant',
-                  type: 'text',
-                  ...parseSpecialMessage(cleaned),
-                  name: '助手',
-                  avatar: getAssistantAvatarForSession(targetSessionId),
+                const parsed = buildAssistantMessageFromText(rawMsg, {
+                  sessionId: targetSessionId,
                   time: formatNowTime(),
-                };
+                  depth: 0,
+                });
                 if (targetSessionId === sessionId) {
                   ui.addMessage(parsed);
                 }
@@ -3965,15 +4207,23 @@ ${listPart || '-（无）'}
                       if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                       const role = isMe ? 'user' : 'assistant';
                       const c = isMe ? null : resolveContactByDisplayName(speaker);
-                      const parsed = {
-                        role,
-                        type: 'text',
-                        ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
-                        name: role === 'user' ? userName : speaker || '成员',
-                        avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
-                        time: m?.time || formatNowTime(),
-                        meta: role === 'assistant' ? { showName: true } : undefined,
-                      };
+                      const parsed = role === 'assistant'
+                        ? buildAssistantMessageFromText(content, {
+                            sessionId: targetGroupId,
+                            time: m?.time || formatNowTime(),
+                            name: speaker || '成员',
+                            avatar: c?.avatar || avatars.assistant,
+                            showName: true,
+                            depth: 0,
+                          })
+                        : {
+                            role: 'user',
+                            type: 'text',
+                            ...parseSpecialMessage(content),
+                            name: userName,
+                            avatar: avatars.user,
+                            time: m?.time || formatNowTime(),
+                          };
                       if (targetGroupId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetGroupId);
                       if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -3989,15 +4239,11 @@ ${listPart || '-（无）'}
                     (ev.messages || []).forEach(msgText => {
                       const rawMsg = String(msgText || '');
                       if (userEchoGuard.shouldDrop(rawMsg)) return;
-                      const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
-                      const parsed = {
-                        role: 'assistant',
-                        type: 'text',
-                        ...parseSpecialMessage(cleaned),
-                        name: '助手',
-                        avatar: getAssistantAvatarForSession(targetSessionId),
+                      const parsed = buildAssistantMessageFromText(rawMsg, {
+                        sessionId: targetSessionId,
                         time: formatNowTime(),
-                      };
+                        depth: 0,
+                      });
                       if (targetSessionId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetSessionId);
                       autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
@@ -4070,15 +4316,23 @@ ${listPart || '-（无）'}
                         if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                         const role = isMe ? 'user' : 'assistant';
                         const c = isMe ? null : resolveContactByDisplayName(speaker);
-                        const parsed = {
-                          role,
-                          type: 'text',
-                          ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
-                          name: role === 'user' ? userName : speaker || '成员',
-                          avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
-                          time: m?.time || formatNowTime(),
-                          meta: role === 'assistant' ? { showName: true } : undefined,
-                        };
+                        const parsed = role === 'assistant'
+                          ? buildAssistantMessageFromText(content, {
+                              sessionId: targetGroupId,
+                              time: m?.time || formatNowTime(),
+                              name: speaker || '成员',
+                              avatar: c?.avatar || avatars.assistant,
+                              showName: true,
+                              depth: 0,
+                            })
+                          : {
+                              role: 'user',
+                              type: 'text',
+                              ...parseSpecialMessage(content),
+                              name: userName,
+                              avatar: avatars.user,
+                              time: m?.time || formatNowTime(),
+                            };
                         if (targetGroupId === sessionId) ui.addMessage(parsed);
                         const saved = chatStore.appendMessage(parsed, targetGroupId);
                         if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -4094,15 +4348,11 @@ ${listPart || '-（无）'}
                       (ev.messages || []).forEach(msgText => {
                         const rawMsg = String(msgText || '');
                         if (userEchoGuard.shouldDrop(rawMsg)) return;
-                        const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
-                        const parsed = {
-                          role: 'assistant',
-                          type: 'text',
-                          ...parseSpecialMessage(cleaned),
-                          name: '助手',
-                          avatar: getAssistantAvatarForSession(targetSessionId),
+                        const parsed = buildAssistantMessageFromText(rawMsg, {
+                          sessionId: targetSessionId,
                           time: formatNowTime(),
-                        };
+                          depth: 0,
+                        });
                         if (targetSessionId === sessionId) ui.addMessage(parsed);
                         const saved = chatStore.appendMessage(parsed, targetSessionId);
                         autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
@@ -4150,7 +4400,14 @@ ${listPart || '-（无）'}
             } catch {}
           }
           let stored = sanitizeAssistantReplyText(stripped, userName);
+          const reasoningParsed = extractReasoningFromContent(stored, { depth: 0, strict: true });
+          stored = reasoningParsed.content || '';
           let display = stored;
+          const meta = {};
+          if (reasoningParsed.reasoning) {
+            meta.reasoning = reasoningParsed.reasoning;
+            meta.reasoningDisplay = reasoningParsed.reasoningDisplay;
+          }
           // === 创意写作模式===
           // try {
           //     stored = window.appBridge.applyOutputStoredRegex(full);
@@ -4166,6 +4423,7 @@ ${listPart || '-（无）'}
             rawOriginal: full,
             raw: stored,
             ...parseSpecialMessage(display),
+            meta: Object.keys(meta).length ? meta : undefined,
           };
           streamCtrl.finish(parsed);
           {
@@ -4203,14 +4461,20 @@ ${listPart || '-（无）'}
             } catch {}
           }
           const rawSource = normalizeCreativeLineBreaks(stripped);
-          let stored = rawSource;
-          let display = rawSource;
+          const reasoningParsed = extractReasoningFromContent(rawSource, { depth: 0, strict: true });
+          const finalSource = normalizeCreativeLineBreaks(reasoningParsed.content || '');
+          let stored = finalSource;
+          let display = finalSource;
           try {
-            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(rawSource, { depth: 0 }));
+            stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(finalSource, { depth: 0 }));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
           } catch {}
           const meta = { renderRich: true };
           if (protocolSummary) meta.summary = protocolSummary;
+          if (reasoningParsed.reasoning) {
+            meta.reasoning = reasoningParsed.reasoning;
+            meta.reasoningDisplay = reasoningParsed.reasoningDisplay;
+          }
           const parsed = {
             role: 'assistant',
             type: 'text',
@@ -4218,7 +4482,7 @@ ${listPart || '-（无）'}
             avatar: assistantAvatar,
             time: formatNowTime(),
             rawOriginal: resultRaw,
-            rawSource,
+            rawSource: finalSource,
             raw: stored,
             content: display,
             meta,
@@ -4280,14 +4544,23 @@ ${listPart || '-（无）'}
                 if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                 const role = isMe ? 'user' : 'assistant';
                 const c = isMe ? null : resolveContactByDisplayName(speaker);
-                const parsed = {
-                  role,
-                  ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
-                  name: role === 'user' ? userName : speaker || '成员',
-                  avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
-                  time: m?.time || formatNowTime(),
-                  meta: role === 'assistant' ? { showName: true } : undefined,
-                };
+                const parsed = role === 'assistant'
+                  ? buildAssistantMessageFromText(content, {
+                      sessionId: targetGroupId,
+                      time: m?.time || formatNowTime(),
+                      name: speaker || '成员',
+                      avatar: c?.avatar || avatars.assistant,
+                      showName: true,
+                      depth: 0,
+                    })
+                  : {
+                      role: 'user',
+                      type: 'text',
+                      ...parseSpecialMessage(content),
+                      name: userName,
+                      avatar: avatars.user,
+                      time: m?.time || formatNowTime(),
+                    };
                 if (targetGroupId === sessionId) ui.addMessage(parsed);
                 const saved = chatStore.appendMessage(parsed, targetGroupId);
                 if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -4305,14 +4578,11 @@ ${listPart || '-（无）'}
               (ev.messages || []).forEach(msgText => {
                 const rawMsg = String(msgText || '');
                 if (userEchoGuard.shouldDrop(rawMsg)) return;
-                const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
-                const parsed = {
-                  role: 'assistant',
-                  ...parseSpecialMessage(cleaned),
-                  name: '助手',
-                  avatar: getAssistantAvatarForSession(targetSessionId),
+                const parsed = buildAssistantMessageFromText(rawMsg, {
+                  sessionId: targetSessionId,
                   time: formatNowTime(),
-                };
+                  depth: 0,
+                });
                 if (targetSessionId === sessionId) ui.addMessage(parsed);
                 const saved = chatStore.appendMessage(parsed, targetSessionId);
                 autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
@@ -4387,14 +4657,23 @@ ${listPart || '-（无）'}
                     if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                     const role = isMe ? 'user' : 'assistant';
                     const c = isMe ? null : resolveContactByDisplayName(speaker);
-                    const parsed = {
-                      role,
-                      ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
-                      name: role === 'user' ? userName : speaker || '成员',
-                      avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
-                      time: m?.time || formatNowTime(),
-                      meta: role === 'assistant' ? { showName: true } : undefined,
-                    };
+                    const parsed = role === 'assistant'
+                      ? buildAssistantMessageFromText(content, {
+                          sessionId: targetGroupId,
+                          time: m?.time || formatNowTime(),
+                          name: speaker || '成员',
+                          avatar: c?.avatar || avatars.assistant,
+                          showName: true,
+                          depth: 0,
+                        })
+                      : {
+                          role: 'user',
+                          type: 'text',
+                          ...parseSpecialMessage(content),
+                          name: userName,
+                          avatar: avatars.user,
+                          time: m?.time || formatNowTime(),
+                        };
                     if (targetGroupId === sessionId) ui.addMessage(parsed);
                     const saved = chatStore.appendMessage(parsed, targetGroupId);
                     if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -4409,14 +4688,11 @@ ${listPart || '-（无）'}
                   (ev.messages || []).forEach(msgText => {
                     const rawMsg = String(msgText || '');
                     if (userEchoGuard.shouldDrop(rawMsg)) return;
-                    const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
-                    const parsed = {
-                      role: 'assistant',
-                      ...parseSpecialMessage(cleaned),
-                      name: '助手',
-                      avatar: getAssistantAvatarForSession(targetSessionId),
+                    const parsed = buildAssistantMessageFromText(rawMsg, {
+                      sessionId: targetSessionId,
                       time: formatNowTime(),
-                    };
+                      depth: 0,
+                    });
                     if (targetSessionId === sessionId) ui.addMessage(parsed);
                     const saved = chatStore.appendMessage(parsed, targetSessionId);
                     autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
@@ -4477,14 +4753,23 @@ ${listPart || '-（无）'}
                       if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                       const role = isMe ? 'user' : 'assistant';
                       const c = isMe ? null : resolveContactByDisplayName(speaker);
-                      const parsed = {
-                        role,
-                        ...parseSpecialMessage(role === 'assistant' ? sanitizeAssistantReplyText(content, userName) : content),
-                        name: role === 'user' ? userName : speaker || '成员',
-                        avatar: role === 'user' ? avatars.user : c?.avatar || avatars.assistant,
-                        time: m?.time || formatNowTime(),
-                        meta: role === 'assistant' ? { showName: true } : undefined,
-                      };
+                      const parsed = role === 'assistant'
+                        ? buildAssistantMessageFromText(content, {
+                            sessionId: targetGroupId,
+                            time: m?.time || formatNowTime(),
+                            name: speaker || '成员',
+                            avatar: c?.avatar || avatars.assistant,
+                            showName: true,
+                            depth: 0,
+                          })
+                        : {
+                            role: 'user',
+                            type: 'text',
+                            ...parseSpecialMessage(content),
+                            name: userName,
+                            avatar: avatars.user,
+                            time: m?.time || formatNowTime(),
+                          };
                       if (targetGroupId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetGroupId);
                       if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -4499,14 +4784,11 @@ ${listPart || '-（无）'}
                     (ev.messages || []).forEach(msgText => {
                       const rawMsg = String(msgText || '');
                       if (userEchoGuard.shouldDrop(rawMsg)) return;
-                      const cleaned = sanitizeAssistantReplyText(rawMsg, userName);
-                      const parsed = {
-                        role: 'assistant',
-                        ...parseSpecialMessage(cleaned),
-                        name: '助手',
-                        avatar: getAssistantAvatarForSession(targetSessionId),
+                      const parsed = buildAssistantMessageFromText(rawMsg, {
+                        sessionId: targetSessionId,
                         time: formatNowTime(),
-                      };
+                        depth: 0,
+                      });
                       if (targetSessionId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetSessionId);
                       autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
@@ -4559,8 +4841,14 @@ ${listPart || '-（无）'}
           } catch {}
         }
         const cleaned = sanitizeAssistantReplyText(stripped, userName);
-        const stored = cleaned;
-        const display = cleaned;
+        const reasoningParsed = extractReasoningFromContent(cleaned, { depth: 0, strict: true });
+        const stored = reasoningParsed.content || '';
+        const display = stored;
+        const meta = {};
+        if (reasoningParsed.reasoning) {
+          meta.reasoning = reasoningParsed.reasoning;
+          meta.reasoningDisplay = reasoningParsed.reasoningDisplay;
+        }
         const parsed = {
           role: 'assistant',
           name: '助手',
@@ -4569,6 +4857,7 @@ ${listPart || '-（无）'}
           rawOriginal: resultRaw,
           raw: stored,
           ...parseSpecialMessage(display),
+          meta: Object.keys(meta).length ? meta : undefined,
         };
         ui.addMessage(parsed);
         {
@@ -4721,7 +5010,10 @@ ${listPart || '-（无）'}
     }
     if (action === 'copy-text') {
       let text = '';
-      if (message?.meta?.renderRich) {
+      if (message?.role === 'assistant' && message?.meta?.renderRich) {
+        text = resolveMessagePlainText(message, { depth: 0, preferRawSource: true });
+      }
+      if (!String(text || '').trim() && message?.meta?.renderRich) {
         try {
           text = ui.getBubbleCopyText(payload?.wrapper);
         } catch {}

@@ -9,6 +9,7 @@
  */
 
 import { PresetStore } from '../storage/preset-store.js';
+import { appSettings } from '../storage/app-settings.js';
 import { LLMClient } from '../api/client.js';
 import { logger } from '../utils/logger.js';
 
@@ -24,6 +25,7 @@ const PRESET_TYPES = [
     { id: 'chatprompts', label: '聊天提示词' },
     { id: 'context', label: '上下文模板' },
     { id: 'instruct', label: 'Instruct 模板' },
+    { id: 'reasoning', label: '推理格式' },
     { id: 'openai', label: '生成参数' },
     { id: 'custom', label: '自定义' },
 ];
@@ -296,6 +298,11 @@ export class PresetPanel {
         if (typeof obj.story_string === 'string') return 'context';
         if (typeof obj.content === 'string' && ('post_history' in obj)) return 'sysprompt';
         if (typeof obj.input_sequence === 'string' || typeof obj.output_sequence === 'string') return 'instruct';
+        if (
+            typeof obj.prefix === 'string' &&
+            typeof obj.suffix === 'string' &&
+            typeof obj.separator === 'string'
+        ) return 'reasoning';
         // OpenAI preset: ST exports are raw preset objects; prompts can be an array or an object map.
         if (
             'temperature' in obj ||
@@ -656,6 +663,10 @@ export class PresetPanel {
         }
         if (this.activeType === 'instruct') {
             root.appendChild(this.renderInstructEditor(p));
+            return;
+        }
+        if (this.activeType === 'reasoning') {
+            root.appendChild(this.renderReasoningEditor(p));
             return;
         }
         if (this.activeType === 'openai') {
@@ -1134,6 +1145,101 @@ export class PresetPanel {
         return wrap;
     }
 
+    renderReasoningEditor(p) {
+        const wrap = this.renderSection('推理格式（Reasoning）', '与 ST 相同：用于自动解析思维链（prefix/suffix），并可选写回 prompt。');
+        const settings = appSettings.get();
+
+        const flags = document.createElement('div');
+        flags.style.cssText = 'margin-top:10px; display:flex; gap:12px; flex-wrap:wrap;';
+        flags.innerHTML = `
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer;">
+                <input id="reasoning-auto-parse" type="checkbox" style="width:16px; height:16px;">
+                自动解析推理
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer;">
+                <input id="reasoning-auto-expand" type="checkbox" style="width:16px; height:16px;">
+                自动展开
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer;">
+                <input id="reasoning-show-hidden" type="checkbox" style="width:16px; height:16px;">
+                显示隐藏推理
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#334155; cursor:pointer;">
+                <input id="reasoning-add-prompts" type="checkbox" style="width:16px; height:16px;">
+                写回提示词
+            </label>
+        `;
+        const autoParse = flags.querySelector('#reasoning-auto-parse');
+        const autoExpand = flags.querySelector('#reasoning-auto-expand');
+        const showHidden = flags.querySelector('#reasoning-show-hidden');
+        const addPrompts = flags.querySelector('#reasoning-add-prompts');
+        autoParse.checked = settings.reasoningAutoParse === true;
+        autoExpand.checked = settings.reasoningAutoExpand === true;
+        showHidden.checked = settings.reasoningShowHidden === true;
+        addPrompts.checked = settings.reasoningAddToPrompts === true;
+
+        const bindSetting = (el, key) => {
+            if (!el) return;
+            el.addEventListener('change', () => {
+                appSettings.update({ [key]: el.checked === true });
+                window.dispatchEvent(new CustomEvent('reasoning-settings-changed'));
+            });
+        };
+        bindSetting(autoParse, 'reasoningAutoParse');
+        bindSetting(autoExpand, 'reasoningAutoExpand');
+        bindSetting(showHidden, 'reasoningShowHidden');
+        bindSetting(addPrompts, 'reasoningAddToPrompts');
+
+        wrap.appendChild(flags);
+
+        const maxAdditions = document.createElement('input');
+        maxAdditions.id = 'reasoning-max-additions';
+        maxAdditions.type = 'number';
+        maxAdditions.min = '0';
+        maxAdditions.step = '1';
+        maxAdditions.style.cssText = 'width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px;';
+        maxAdditions.value = String(Number.isFinite(Number(settings.reasoningMaxAdditions)) ? settings.reasoningMaxAdditions : 1);
+        maxAdditions.addEventListener('input', () => {
+            const n = Math.trunc(Number(maxAdditions.value));
+            const safe = Number.isFinite(n) ? Math.max(0, n) : 1;
+            maxAdditions.value = String(safe);
+            appSettings.update({ reasoningMaxAdditions: safe });
+            window.dispatchEvent(new CustomEvent('reasoning-settings-changed'));
+        });
+
+        wrap.appendChild(this.renderInputRow([
+            { label: '写回上限（max additions）', el: maxAdditions },
+        ]));
+
+        const makeCodeArea = (id, value, placeholder) => {
+            const box = document.createElement('div');
+            box.style.cssText = 'margin-top:10px;';
+            const label = document.createElement('div');
+            label.style.cssText = 'font-weight:700; color:#0f172a; margin-bottom:6px;';
+            label.textContent = placeholder;
+            const ta = document.createElement('textarea');
+            ta.id = id;
+            ta.spellcheck = false;
+            ta.style.cssText = `
+                width:100%; min-height:80px; resize:vertical;
+                border:1px solid #e2e8f0; border-radius:10px; padding:10px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+                font-size:12px; line-height:1.45; background:#fff; color:#0f172a;
+                box-sizing:border-box;
+            `;
+            ta.value = value || '';
+            box.appendChild(label);
+            box.appendChild(ta);
+            return box;
+        };
+
+        wrap.appendChild(makeCodeArea('reasoning-prefix', p.prefix || '', '推理前缀（prefix）'));
+        wrap.appendChild(makeCodeArea('reasoning-suffix', p.suffix || '', '推理后缀（suffix）'));
+        wrap.appendChild(makeCodeArea('reasoning-separator', p.separator || '', '推理分隔（separator）'));
+
+        return wrap;
+    }
+
     renderOpenAIParamsEditor(p) {
         const wrap = this.renderSection('生成参数', '参照 ST：编辑常用生成参数；提示词区块请到「自定义」tab 管理（不限制特定 LLM，可自行绑定连接配置）');
 
@@ -1564,6 +1670,13 @@ export class PresetPanel {
             return current;
         }
 
+        if (this.activeType === 'reasoning') {
+            current.prefix = root.querySelector('#reasoning-prefix')?.value ?? '';
+            current.suffix = root.querySelector('#reasoning-suffix')?.value ?? '';
+            current.separator = root.querySelector('#reasoning-separator')?.value ?? '';
+            return current;
+        }
+
         if (this.activeType === 'openai') {
             current.temperature = getNum(root.querySelector('#gen-temperature')?.value, current.temperature ?? 1);
             current.top_p = getNum(root.querySelector('#gen-top-p')?.value, current.top_p ?? 0.98);
@@ -1656,7 +1769,7 @@ export class PresetPanel {
             }
 
             // Also ensure active presets are saved even if not drafted (no-op update)
-            for (const st of ['sysprompt', 'context', 'instruct', 'openai']) {
+            for (const st of ['sysprompt', 'context', 'instruct', 'openai', 'reasoning']) {
                 const activeId = this.store.getActiveId(st);
                 if (!activeId) continue;
                 const key = this.getDraftKey(st, activeId);

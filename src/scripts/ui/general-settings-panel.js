@@ -7,6 +7,8 @@ export class GeneralSettingsPanel {
     this.debugToggle = null;
     this.typingDotsToggle = null;
     this.richIframeScriptsToggle = null;
+    this.creativeHistoryInput = null;
+    this.creativeWideToggle = null;
   }
 
   show() {
@@ -23,7 +25,15 @@ export class GeneralSettingsPanel {
     if (this.richIframeScriptsToggle) {
       this.richIframeScriptsToggle.checked = Boolean(settings.allowRichIframeScripts);
     }
+    if (this.creativeHistoryInput) {
+      const n = Number(settings.creativeHistoryMax);
+      this.creativeHistoryInput.value = String(Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 3);
+    }
+    if (this.creativeWideToggle) {
+      this.creativeWideToggle.checked = Boolean(settings.creativeWideBubble);
+    }
     this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
+    this.applyCreativeWideSetting(Boolean(settings.creativeWideBubble));
     this.element.style.display = 'block';
     this.overlayElement.style.display = 'block';
   }
@@ -39,6 +49,15 @@ export class GeneralSettingsPanel {
       delete document.body.dataset.typingDots;
     } else {
       document.body.dataset.typingDots = 'off';
+    }
+  }
+
+  applyCreativeWideSetting(enabled) {
+    if (!document?.body) return;
+    if (enabled) {
+      document.body.dataset.creativeWide = 'on';
+    } else {
+      delete document.body.dataset.creativeWide;
     }
   }
 
@@ -92,6 +111,25 @@ export class GeneralSettingsPanel {
           <small style="color: #666; margin-left: 26px;">高风险：脚本可访问同源数据并加载外部资源，仅信任来源启用</small>
         </div>
 
+        <div style="margin-bottom: 16px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="general-creative-wide" style="width: 18px; height: 18px;">
+            <span style="font-weight: 700;">创意写作气泡加宽</span>
+          </label>
+          <small style="color: #666; margin-left: 26px;">仅影响创意写作的回复气泡</small>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+          <label style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-weight: 700;">创意写作注入条数</span>
+          </label>
+          <div style="margin-top: 6px; display:flex; align-items:center; gap:8px;">
+            <input type="number" id="general-creative-history" min="0" step="1"
+                   style="width: 120px; padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px;">
+            <span style="color:#64748b; font-size:12px;">chat_history 中保留的创意写作回复数量</span>
+          </div>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; gap: 8px;">
           <button id="general-settings-done" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0;
                                                    background: #f8fafc; cursor: pointer; font-size: 14px; color: #475569;">
@@ -113,6 +151,8 @@ export class GeneralSettingsPanel {
     this.debugToggle = this.element.querySelector('#general-debug-toggle');
     this.typingDotsToggle = this.element.querySelector('#general-typing-dots');
     this.richIframeScriptsToggle = this.element.querySelector('#general-rich-iframe-scripts');
+    this.creativeHistoryInput = this.element.querySelector('#general-creative-history');
+    this.creativeWideToggle = this.element.querySelector('#general-creative-wide');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -140,6 +180,18 @@ export class GeneralSettingsPanel {
         }
       }
       appSettings.update({ allowRichIframeScripts: enabled });
+    });
+    this.creativeWideToggle?.addEventListener('change', (e) => {
+      const enabled = Boolean(e?.target?.checked);
+      const settings = appSettings.update({ creativeWideBubble: enabled });
+      this.applyCreativeWideSetting(Boolean(settings.creativeWideBubble));
+    });
+    this.creativeHistoryInput?.addEventListener('input', (e) => {
+      const raw = e?.target?.value;
+      const n = Math.trunc(Number(raw));
+      const safe = Number.isFinite(n) ? Math.max(0, n) : 3;
+      if (e?.target) e.target.value = String(safe);
+      appSettings.update({ creativeHistoryMax: safe });
     });
 
     this.element.querySelector('#general-settings-close')?.addEventListener('click', () => this.hide());

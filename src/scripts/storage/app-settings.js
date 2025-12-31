@@ -4,6 +4,13 @@ const defaults = {
   showDebugToggle: false,
   typingDotsEnabled: true,
   allowRichIframeScripts: false,
+  creativeHistoryMax: 3,
+  creativeWideBubble: false,
+  reasoningAutoParse: false,
+  reasoningAutoExpand: false,
+  reasoningShowHidden: false,
+  reasoningAddToPrompts: false,
+  reasoningMaxAdditions: 1,
 };
 
 const readSettings = () => {

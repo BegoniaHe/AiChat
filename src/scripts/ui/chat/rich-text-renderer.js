@@ -46,6 +46,7 @@ const buildIframeBridgeScript = () => `
   let lastH = 0;
   let pressTimer = null;
   let pressActive = false;
+  let pressStartedAt = 0;
   let touchActive = false;
   let touchStartPoint = null;
   const moveThreshold = 12;
@@ -213,28 +214,35 @@ const buildIframeBridgeScript = () => `
     document.addEventListener('pointerdown', (ev) => {
       if (touchActive) return;
       pressActive = true;
+      pressStartedAt = Date.now();
       sendPress('down', ev);
       pressTimer = setTimeout(() => {
+        if (!pressActive || !pressStartedAt) return;
+        if (Date.now() - pressStartedAt < 420) return;
         sendPress('longpress', ev);
       }, 520);
-    }, { passive: true });
+    }, { passive: true, capture: true });
     ['pointerup','pointercancel','pointerleave','pointerout'].forEach((t) => {
       document.addEventListener(t, (ev) => {
         if (!pressActive) return;
         if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
         sendPress('up', ev);
         pressActive = false;
-      }, { passive: true });
+        pressStartedAt = 0;
+      }, { passive: true, capture: true });
     });
     document.addEventListener('touchstart', (ev) => {
       touchActive = true;
       touchStartPoint = getPoint(ev);
       pressActive = true;
+      pressStartedAt = Date.now();
       sendPress('down', ev);
       pressTimer = setTimeout(() => {
+        if (!pressActive || !pressStartedAt) return;
+        if (Date.now() - pressStartedAt < 420) return;
         sendPress('longpress', ev);
       }, 520);
-    }, { passive: true });
+    }, { passive: true, capture: true });
     document.addEventListener('touchmove', (ev) => {
       if (!pressActive || !touchStartPoint) return;
       const p = getPoint(ev);
@@ -244,8 +252,9 @@ const buildIframeBridgeScript = () => `
         if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
         sendPress('cancel', ev);
         pressActive = false;
+        pressStartedAt = 0;
       }
-    }, { passive: true });
+    }, { passive: true, capture: true });
     document.addEventListener('touchend', (ev) => {
       if (!pressActive) {
         touchActive = false;
@@ -255,23 +264,29 @@ const buildIframeBridgeScript = () => `
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
       sendPress('up', ev);
       pressActive = false;
+      pressStartedAt = 0;
       touchStartPoint = null;
       setTimeout(() => { touchActive = false; }, 120);
-    }, { passive: true });
+    }, { passive: true, capture: true });
     document.addEventListener('touchcancel', (ev) => {
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
       sendPress('cancel', ev);
       pressActive = false;
+      pressStartedAt = 0;
       touchStartPoint = null;
       setTimeout(() => { touchActive = false; }, 120);
-    }, { passive: true });
+    }, { passive: true, capture: true });
     document.addEventListener('contextmenu', (ev) => {
       try { ev.preventDefault(); } catch {}
-      sendPress('longpress', ev);
-    }, { passive: false });
+      const elapsed = pressStartedAt ? (Date.now() - pressStartedAt) : 0;
+      if (pressActive && elapsed >= 420) {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        sendPress('longpress', ev);
+      }
+    }, { passive: false, capture: true });
     document.addEventListener('selectstart', (ev) => {
       try { ev.preventDefault(); } catch {}
-    }, { passive: false });
+    }, { passive: false, capture: true });
 
     requestLayout();
     try {
@@ -1108,6 +1123,16 @@ const makeCodeBlock = ({ lang, code, messageId, preserveHtmlNewlines = false }) 
 export const setupIframeResizeListener = () => {
     if (window.__chatappIframeResizeListenerInstalled) return;
     window.__chatappIframeResizeListenerInstalled = true;
+    const findIframeBySource = (source) => {
+        if (!source) return null;
+        const nodes = document.querySelectorAll('iframe[data-iframe-id]');
+        for (const iframe of nodes) {
+            try {
+                if (iframe.contentWindow === source) return iframe;
+            } catch {}
+        }
+        return null;
+    };
 
     window.addEventListener('message', (e) => {
         const data = e?.data;
@@ -1180,6 +1205,23 @@ export const setupIframeResizeListener = () => {
             }
             return;
         }
+        if (data.type === 'resizeIframe') {
+            const height = Number(data.height ?? data.newHeight);
+            if (!Number.isFinite(height)) return;
+            const iframe = findIframeBySource(e?.source) || null;
+            if (!iframe) return;
+            const clamped = Math.max(120, Math.min(height + 4, 2000));
+            iframe.style.height = `${clamped}px`;
+            const id = String(iframe.dataset.iframeId || '');
+            if (id) {
+                const st = getIframeState(id, { messageId: String(iframe.dataset.msgId || ''), createdAt: Date.now() });
+                if (st) {
+                    st.resizeCount = (st.resizeCount || 0) + 1;
+                    st.lastResizeAt = Date.now();
+                }
+            }
+            return;
+        }
 
         // Forward iframe pointer events to outer UI (for long-press context menu)
         if (data.type === 'chatapp:iframe-press') {
@@ -1211,6 +1253,23 @@ export const renderRichText = (containerEl, text, { messageId, preserveHtmlNewli
     containerEl.innerHTML = '';
 
     const rawText = String(text ?? '');
+    const escapeHtml = (value) => (
+        String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+    );
+    const appendPlainTextToHtml = (html, plainText) => {
+        const textRaw = String(plainText ?? '');
+        if (!textRaw.trim()) return html;
+        const safe = escapeHtml(textRaw).replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '<br>');
+        const tail = `<div class="__chatapp-tail-text">${safe}</div>`;
+        if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${tail}</body>`);
+        if (/<\/html>/i.test(html)) return html.replace(/<\/html>/i, `${tail}</html>`);
+        return `${html}${tail}`;
+    };
     // 酒馆助手/正则常见用法：
     // - 直接把可渲染的 HTML 片段塞进消息（例如把 <thinking> 替换为 <style>+<details>）
     // 我们保持默认安全文本渲染，但对“明显是 HTML 的整段消息”提供 iframe 渲染（沙盒）
@@ -1229,6 +1288,18 @@ export const renderRichText = (containerEl, text, { messageId, preserveHtmlNewli
             ? [{ type: 'code', lang: 'html', code: trimmed }]
             : [{ type: 'text', text: textWithBreaks }]);
     if (hasCodeFence) {
+        const firstCodeIdx = parts.findIndex(p => p.type === 'code' && (p.lang === 'html' || p.lang === 'htm'));
+        const hasOtherCode = parts.some((p, idx) => p.type === 'code' && idx !== firstCodeIdx);
+        if (firstCodeIdx === 0 && !hasOtherCode) {
+            const tailText = parts
+                .slice(1)
+                .map(p => (p.type === 'text' ? p.text : ''))
+                .join('');
+            if (String(tailText || '').trim()) {
+                const mergedHtml = appendPlainTextToHtml(String(parts[0].code || ''), tailText);
+                parts = [{ type: 'code', lang: 'html', code: mergedHtml }];
+            }
+        }
         parts = parts.map(p => {
             if (p.type !== 'text') return p;
             const normalized = String(p.text || '')

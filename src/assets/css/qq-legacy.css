@@ -249,6 +249,20 @@
   margin-left: var(--qq-spacing-lg);
 }
 
+body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] {
+  max-width: calc(100% - 16px);
+  margin-left: 8px;
+  grid-template-columns: 0 1fr;
+}
+
+body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_head {
+  display: none;
+}
+
+body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_msgdiv {
+  width: 100%;
+}
+
 /* 5.2 我的消息 - .QQ_chat_mymsg */
 .QQ_chat_mymsg {
   /* 布局 */
@@ -299,6 +313,38 @@
   user-select: none;
   -webkit-touch-callout: none;
   touch-action: manipulation;
+}
+
+.QQ_chat_msgdiv .chat-reasoning {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.QQ_chat_msgdiv .chat-reasoning-summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.QQ_chat_msgdiv .chat-reasoning-summary::marker,
+.QQ_chat_msgdiv .chat-reasoning-summary::-webkit-details-marker {
+  color: #94a3b8;
+}
+
+.QQ_chat_msgdiv .chat-reasoning-content {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+.QQ_chat_msgdiv .chat-message-content {
+  white-space: pre-wrap;
 }
 
 .QQ_chat_msgdiv img.previewable {

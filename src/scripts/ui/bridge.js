@@ -470,6 +470,32 @@ class AppBridge {
     return this.applyOutputDisplayRegex(stored);
   }
 
+  applyReasoningStoredRegex(text, { isEdit = false, depth } = {}) {
+    try {
+      return this.regex.apply(text, this.getRegexContext(), regex_placement.REASONING, {
+        isMarkdown: false,
+        isPrompt: false,
+        isEdit: Boolean(isEdit),
+        depth,
+      });
+    } catch {
+      return String(text ?? '');
+    }
+  }
+
+  applyReasoningDisplayRegex(text, { isEdit = false, depth } = {}) {
+    try {
+      return this.regex.apply(text, this.getRegexContext(), regex_placement.REASONING, {
+        isMarkdown: true,
+        isPrompt: false,
+        isEdit: Boolean(isEdit),
+        depth,
+      });
+    } catch {
+      return String(text ?? '');
+    }
+  }
+
   /**
    * 生成 AI 回复
    * @param {string} userMessage - 用户消息

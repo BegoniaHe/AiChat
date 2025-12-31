@@ -1,5 +1,64 @@
 # 開發進度追蹤（必更新）
 
+## 2025-12-31 12:07
+- 推理格式（Reasoning）：新增预设类型与默认模板（对齐 ST），支持自动解析/展开/写回提示词等设置。
+- 推理解析：AI 回复自动拆分 reasoning 与正文，推理套用 REASONING 正则并以折叠块显示。
+- chat_history：可按设定将推理块写回 prompt（限制次数），其余聊天历史逻辑保持不变。
+- 修改：
+  - `src/assets/presets/st-defaults.json`
+  - `src/scripts/storage/preset-store.js`
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/preset-panel.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/scripts/ui/regex-panel.js`
+  - `src/assets/css/qq-legacy.css`
+
+## 2025-12-31 13:22
+- 通用设定新增“创意写作注入条数”，允许自定义 chat_history 中创意写作回复的注入数量（默认 3）。
+- chat_history 在创意写作模式按该数值保留最新创意写作回复。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/app.js`
+
+## 2025-12-31 14:47
+- 通用设定新增“创意写作气泡加宽”开关，仅影响创意写作回复气泡的横向宽度。
+- 创意写作回复气泡可占满聊天横轴（保留少量边距），不影响聊天模式布局。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/assets/css/qq-legacy.css`
+
+## 2025-12-31 15:20
+- 修复 creative 发送时报错：将推理解析助手函数提到顶层作用域，避免 extractReasoningFromContent 未定义。
+- 修改：
+  - `src/scripts/ui/app.js`
+
+## 2025-12-30 17:02
+- 创意写作：复制改为优先使用输出正则后的纯文本，避免复制到美化后的显示内容。
+- 创意写作：chat_history 改为只发送最近三条消息，并使用输出/输入正则后的纯文本。
+- 修改：
+  - `src/scripts/ui/app.js`
+
+## 2025-12-30 17:15
+- 创意写作：chat_history 维持原有聊天消息注入逻辑，仅在限定历史长度内保留最新三条创意写作回复。
+- 修改：
+  - `src/scripts/ui/app.js`
+
+## 2025-12-30 18:16
+- 富文本 iframe：当首段是 html fenced code 且后续仅文本时，将文本合并进 iframe，避免出现“iframe 空白 + 正文在外层”的分离现象。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+
+## 2025-12-31 11:20
+- 富文本 iframe：兼容 SillyTavern 的 resizeIframe 消息，使用 event.source 定位对应 iframe 并更新高度。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+
 ## 2025-12-30 09:58
 - 富文本 iframe：允许脚本时改走 host + document.write 直写原始 HTML，避免 release 下 blob 脚本不执行导致高度/长按失效。
 - host 收到允许脚本时不再 DOMParser 重排，改为直写保留脚本顺序。
@@ -29,6 +88,20 @@
 - iframe 增加 data 标记，脚本从 DOM 读取 id；父页面同源观察 iframe 内容自动测高。
 - 修改：
   - `src/scripts/ui/chat/rich-text-renderer.js`
+
+## 2025-12-30 12:15
+- 富文本长按菜单：iframe 桥接补充按压时间门槛与捕获阶段监听，避免轻触触发。
+- iframe 事件不再触发外层长按计时，仅在收到 longpress 时弹出菜单。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+
+## 2025-12-30 12:54
+- 关闭流式小点时隐藏打字气泡与提示，避免仅停动画仍显示空泡。
+- 流式占位气泡标记为 typing placeholder，首段文本到来时移除。
+- 修改：
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/assets/css/main.css`
 
 ## 2025-12-29 00:12
 - 通用设定新增「富文本 iframe 执行脚本」开关，启用时弹出风险警告。
@@ -1494,7 +1567,7 @@
 
 - 2025-12-18 16:50（预设导入：对齐 ST prompt_order 选择）
   - **修复**：导入/保存 OpenAI 预设时会即时 normalize，支持 `prompts` 为对象 map（key=identifier）、`prompt_order` 为对象 map，以及 `order` 项为数字索引等变体，避免导入后区块缺失。
-  - **对齐 ST**：UI/构建 prompt 时选择 `prompt_order` 优先使用 `character_id=100001`（SillyTavern PromptManager dummyId），回退到 `100000/第一个`，避免错误选择导致“区块少很多”。
+    - **对齐 ST**：UI/构建 prompt 时选择 `prompt_order` 优先使用 `character_id=100001`（SillyTavern PromptManager dummyId），回退到 `100000/第一个`，避免错误选择导致“区块少很多”。
 
 - 2025-12-18 16:54（预设导入：仅使用 character_id=100001）
   - **调整**：OpenAI 预设导入/保存时只保留 `prompt_order.character_id=100001` 的区块顺序，不再合并/补齐其他 character_id 的 order，也不自动把未在该 order 中的 prompts 追加进去，避免出现“多余区块”。
