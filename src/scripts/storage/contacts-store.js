@@ -5,6 +5,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 
 const isQuotaError = (err) => {
     try {
@@ -42,7 +43,16 @@ const safeInvoke = async (cmd, args) => {
     return invoker(cmd, args);
 };
 
-const STORE_KEY = 'contacts_store_v1';
+const BASE_STORE_KEY = 'contacts_store_v1';
+
+const readLocalState = (key) => {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+};
 
 const normalizeId = (id) => String(id || '').trim();
 const displayNameFromId = (id) => {
@@ -51,7 +61,9 @@ const displayNameFromId = (id) => {
 };
 
 export class ContactsStore {
-    constructor() {
+    constructor({ scopeId = '' } = {}) {
+        this.scopeId = normalizeScopeId(scopeId);
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this.state = this._load();
         this.ready = this._hydrateFromDisk();
         this._lsDisabled = false;
@@ -60,22 +72,33 @@ export class ContactsStore {
     }
 
     _load() {
-        try {
-            const raw = localStorage.getItem(STORE_KEY);
-            return raw ? JSON.parse(raw) : { contacts: {} };
-        } catch (err) {
-            logger.warn('contacts store load failed, reset', err);
-            return { contacts: {} };
+        const data = readLocalState(this.storeKey);
+        if (data) return data;
+        if (this.scopeId) {
+            const legacy = readLocalState(BASE_STORE_KEY);
+            if (legacy) return legacy;
         }
+        return { contacts: {} };
     }
 
     async _hydrateFromDisk() {
         try {
-            const kv = await safeInvoke('load_kv', { name: STORE_KEY });
+            let kv = await safeInvoke('load_kv', { name: this.storeKey });
+            if (!kv && this.scopeId) {
+                const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (legacy && legacy.contacts) {
+                    kv = legacy;
+                    try {
+                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                    } catch (err) {
+                        logger.debug('contacts store legacy migrate failed (可能非 Tauri)', err);
+                    }
+                }
+            }
             if (kv && kv.contacts) {
                 this.state = kv;
                 try {
-                    localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                    localStorage.setItem(this.storeKey, JSON.stringify(this.state));
                 } catch (err) {
                     if (isQuotaError(err)) {
                         this._lsDisabled = true;
@@ -83,7 +106,7 @@ export class ContactsStore {
                             this._lsQuotaWarned = true;
                             logger.warn('contacts store: localStorage quota exceeded; will rely on Tauri KV (data should remain after restart).', err);
                         }
-                        try { localStorage.removeItem(STORE_KEY); } catch {}
+                        try { localStorage.removeItem(this.storeKey); } catch {}
                     } else {
                         logger.warn('contacts store hydrate -> localStorage failed', err);
                     }
@@ -110,12 +133,12 @@ export class ContactsStore {
 
     _persist() {
         // Always try disk first; localStorage is best-effort (may exceed quota due to base64 avatars)
-        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+        safeInvoke('save_kv', { name: this.storeKey, data: this.state }).catch((err) => {
             logger.debug('contacts store save_kv failed (可能非 Tauri)', err);
         });
         if (this._lsDisabled) return;
         try {
-            localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+            localStorage.setItem(this.storeKey, JSON.stringify(this.state));
         } catch (err) {
             if (isQuotaError(err)) {
                 this._lsDisabled = true;
@@ -123,11 +146,24 @@ export class ContactsStore {
                     this._lsQuotaWarned = true;
                     logger.warn('contacts store: localStorage quota exceeded; disabling localStorage writes and relying on Tauri KV.', err);
                 }
-                try { localStorage.removeItem(STORE_KEY); } catch {}
+                try { localStorage.removeItem(this.storeKey); } catch {}
             } else {
                 logger.warn('contacts store persist -> localStorage failed', err);
             }
         }
+    }
+
+    async setScope(scopeId = '') {
+        const nextScope = normalizeScopeId(scopeId);
+        if (nextScope === this.scopeId) return this.ready;
+        this.scopeId = nextScope;
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this._lsDisabled = false;
+        this._lsQuotaWarned = false;
+        this._hydrateRetryCount = 0;
+        this.state = this._load();
+        this.ready = this._hydrateFromDisk();
+        return this.ready;
     }
 
     listContacts() {

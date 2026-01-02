@@ -9,6 +9,9 @@ export class GeneralSettingsPanel {
     this.richIframeScriptsToggle = null;
     this.creativeHistoryInput = null;
     this.creativeWideToggle = null;
+    this.personaBindToggle = null;
+    this.memoryModeSummary = null;
+    this.memoryModeTable = null;
   }
 
   show() {
@@ -31,6 +34,16 @@ export class GeneralSettingsPanel {
     }
     if (this.creativeWideToggle) {
       this.creativeWideToggle.checked = Boolean(settings.creativeWideBubble);
+    }
+    if (this.personaBindToggle) {
+      this.personaBindToggle.checked = settings.personaBindContacts !== false;
+    }
+    const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
+    if (this.memoryModeSummary) {
+      this.memoryModeSummary.checked = memoryMode !== 'table';
+    }
+    if (this.memoryModeTable) {
+      this.memoryModeTable.checked = memoryMode === 'table';
     }
     this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
     this.applyCreativeWideSetting(Boolean(settings.creativeWideBubble));
@@ -130,6 +143,31 @@ export class GeneralSettingsPanel {
           </div>
         </div>
 
+        <div style="margin: 8px 0 12px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
+          <div style="font-size: 12px; color:#64748b; margin-bottom: 10px;">记忆与角色</div>
+
+          <div style="margin-bottom: 14px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="general-persona-bind" style="width: 18px; height: 18px;">
+              <span style="font-weight: 700;">用户角色绑定联系人/聊天记录</span>
+            </label>
+            <small style="color: #666; margin-left: 26px;">开启后每个 Persona 独立联系人、聊天记录、摘要与动态（互不影响）</small>
+          </div>
+
+          <div style="margin-bottom: 10px;">
+            <div style="font-weight: 700; margin-bottom: 8px;">记忆存储方式</div>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:8px;">
+              <input type="radio" name="general-memory-mode" id="general-memory-mode-summary" value="summary">
+              <span>摘要模式（默认，沿用现有逻辑）</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="radio" name="general-memory-mode" id="general-memory-mode-table" value="table">
+              <span>记忆表格模式（SQLite，后续实装）</span>
+            </label>
+            <small style="color:#666; margin-left: 26px;">两种方式互斥；记忆表格编辑入口将放在摘要页面</small>
+          </div>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; gap: 8px;">
           <button id="general-settings-done" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0;
                                                    background: #f8fafc; cursor: pointer; font-size: 14px; color: #475569;">
@@ -153,6 +191,9 @@ export class GeneralSettingsPanel {
     this.richIframeScriptsToggle = this.element.querySelector('#general-rich-iframe-scripts');
     this.creativeHistoryInput = this.element.querySelector('#general-creative-history');
     this.creativeWideToggle = this.element.querySelector('#general-creative-wide');
+    this.personaBindToggle = this.element.querySelector('#general-persona-bind');
+    this.memoryModeSummary = this.element.querySelector('#general-memory-mode-summary');
+    this.memoryModeTable = this.element.querySelector('#general-memory-mode-table');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -192,6 +233,46 @@ export class GeneralSettingsPanel {
       const safe = Number.isFinite(n) ? Math.max(0, n) : 3;
       if (e?.target) e.target.value = String(safe);
       appSettings.update({ creativeHistoryMax: safe });
+    });
+
+    this.personaBindToggle?.addEventListener('change', (e) => {
+      const target = e?.target;
+      const enabled = Boolean(target?.checked);
+      if (!enabled) {
+        const ok = confirm('关闭后，所有 Persona 将共享同一份联系人/聊天记录（共享区）。已绑定的数据不会丢失，但需切回绑定模式才能查看各自内容。确定继续吗？');
+        if (!ok) {
+          if (target) target.checked = true;
+          return;
+        }
+      }
+      appSettings.update({ personaBindContacts: enabled });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'personaBindContacts', value: enabled } }));
+    });
+
+    const applyMemoryMode = (mode) => {
+      const next = mode === 'table' ? 'table' : 'summary';
+      appSettings.update({ memoryStorageMode: next });
+      window.dispatchEvent(new CustomEvent('memory-storage-mode-changed', { detail: { mode: next } }));
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryStorageMode', value: next } }));
+    };
+    this.memoryModeSummary?.addEventListener('change', (e) => {
+      const checked = Boolean(e?.target?.checked);
+      if (!checked) return;
+      applyMemoryMode('summary');
+    });
+    this.memoryModeTable?.addEventListener('change', (e) => {
+      const target = e?.target;
+      const checked = Boolean(target?.checked);
+      if (!checked) return;
+      const ok = confirm(
+        '切换到记忆表格模式后，将不再使用摘要/大总结记录。\n\n建议先新建一个用户角色，并保持“用户角色绑定联系人”开启，以避免与现有摘要数据混用。\n\n确定切换吗？',
+      );
+      if (!ok) {
+        if (target) target.checked = false;
+        if (this.memoryModeSummary) this.memoryModeSummary.checked = true;
+        return;
+      }
+      applyMemoryMode('table');
     });
 
     this.element.querySelector('#general-settings-close')?.addEventListener('click', () => this.hide());

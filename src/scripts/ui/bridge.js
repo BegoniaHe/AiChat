@@ -9,6 +9,7 @@ import { ConfigManager } from '../storage/config.js';
 import { PresetStore } from '../storage/preset-store.js';
 import { RegexStore, regex_placement } from '../storage/regex-store.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
+import { makeScopedKey, normalizeScopeId } from '../storage/store-scope.js';
 import { logger } from '../utils/logger.js';
 import { MacroEngine } from '../utils/macro-engine.js';
 import { isRetryableError, retryWithBackoff } from '../utils/retry.js';
@@ -143,6 +144,7 @@ class AppBridge {
     this.initialized = false;
     this.currentCharacterId = 'default';
     this.currentWorldId = null;
+    this.scopeId = '';
     this.globalWorldId = this.loadGlobalWorldId();
     this.activeSessionId = 'default';
     this.worldSessionMap = this.loadWorldSessionMap();
@@ -234,9 +236,28 @@ class AppBridge {
     }
   }
 
+  getWorldSessionMapKey() {
+    return makeScopedKey('world_session_map_v1', this.scopeId);
+  }
+
+  getGlobalWorldIdKey() {
+    return makeScopedKey('global_world_id_v1', this.scopeId);
+  }
+
+  setPersonaScope(scopeId = '') {
+    const next = normalizeScopeId(scopeId);
+    if (next === this.scopeId) return;
+    this.scopeId = next;
+    this.worldSessionMap = this.loadWorldSessionMap();
+    this.globalWorldId = this.loadGlobalWorldId();
+    this.currentWorldId = this.activeSessionId ? this.worldSessionMap[this.activeSessionId] || null : null;
+    this.hydrateWorldSessionMap();
+    this.hydrateGlobalWorldId();
+  }
+
   loadGlobalWorldId() {
     try {
-      const raw = localStorage.getItem('global_world_id_v1');
+      const raw = localStorage.getItem(this.getGlobalWorldIdKey());
       return raw ? String(raw) : null;
     } catch {
       return null;
@@ -245,7 +266,7 @@ class AppBridge {
 
   loadWorldSessionMap() {
     try {
-      const raw = localStorage.getItem('world_session_map_v1');
+      const raw = localStorage.getItem(this.getWorldSessionMapKey());
       return raw ? JSON.parse(raw) : {};
     } catch (err) {
       logger.warn('world-session map 讀取失敗，重置', err);
@@ -255,10 +276,10 @@ class AppBridge {
 
   async hydrateWorldSessionMap() {
     try {
-      const kv = await safeInvoke('load_kv', { name: 'world_session_map_v1' });
+      const kv = await safeInvoke('load_kv', { name: this.getWorldSessionMapKey() });
       if (kv && typeof kv === 'object' && Object.keys(kv).length) {
         this.worldSessionMap = kv;
-        localStorage.setItem('world_session_map_v1', JSON.stringify(kv));
+        localStorage.setItem(this.getWorldSessionMapKey(), JSON.stringify(kv));
         // 切換當前 session 的世界書
         if (this.activeSessionId && kv[this.activeSessionId]) {
           this.currentWorldId = kv[this.activeSessionId];
@@ -273,11 +294,11 @@ class AppBridge {
 
   async hydrateGlobalWorldId() {
     try {
-      const kv = await safeInvoke('load_kv', { name: 'global_world_id_v1' });
+      const kv = await safeInvoke('load_kv', { name: this.getGlobalWorldIdKey() });
       if (kv && typeof kv === 'string' && kv.trim()) {
         this.globalWorldId = kv.trim();
         try {
-          localStorage.setItem('global_world_id_v1', this.globalWorldId);
+          localStorage.setItem(this.getGlobalWorldIdKey(), this.globalWorldId);
         } catch {}
       }
     } catch (err) {
@@ -286,16 +307,16 @@ class AppBridge {
   }
 
   persistWorldSessionMap() {
-    localStorage.setItem('world_session_map_v1', JSON.stringify(this.worldSessionMap || {}));
-    safeInvoke('save_kv', { name: 'world_session_map_v1', data: this.worldSessionMap }).catch(() => {});
+    localStorage.setItem(this.getWorldSessionMapKey(), JSON.stringify(this.worldSessionMap || {}));
+    safeInvoke('save_kv', { name: this.getWorldSessionMapKey(), data: this.worldSessionMap }).catch(() => {});
   }
 
   persistGlobalWorldId() {
     try {
-      localStorage.setItem('global_world_id_v1', this.globalWorldId || '');
+      localStorage.setItem(this.getGlobalWorldIdKey(), this.globalWorldId || '');
     } catch {}
     // 保存为 string（kv 支持任意 JSON；这里用 string 简化）
-    safeInvoke('save_kv', { name: 'global_world_id_v1', data: String(this.globalWorldId || '') }).catch(() => {});
+    safeInvoke('save_kv', { name: this.getGlobalWorldIdKey(), data: String(this.globalWorldId || '') }).catch(() => {});
   }
 
   /**
@@ -695,6 +716,8 @@ class AppBridge {
     const appendUserToHistory = context?.meta?.appendUserToHistory !== false;
     const isMomentCommentTask = String(context?.task?.type || '').toLowerCase() === 'moment_comment';
     const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
+    const memoryMode = String(context?.meta?.memoryStorageMode || '').trim().toLowerCase();
+    const useSummaryMemory = memoryMode !== 'table' && !Boolean(context?.meta?.disableSummary);
     const disableScenarioHint = Boolean(context?.meta?.disableScenarioHint);
     const overrideLastUserMessageRaw = (typeof context?.meta?.overrideLastUserMessage === 'string')
       ? String(context.meta.overrideLastUserMessage)
@@ -751,11 +774,32 @@ class AppBridge {
       : 0; // 0=system
     const personaText = personaRaw ? processTextMacrosWithPendingFlag(personaRaw, { user: name1, char: name2 }) : '';
     const historyForMatch = Array.isArray(context.history) ? context.history : [];
-    const matchText = [String(userMessage ?? ''), ...historyForMatch.map(m => String(m?.content ?? ''))].join('\n');
+    const historyMatchLines = historyForMatch.map(m => String(m?.content ?? '')).filter(Boolean);
+    const matchText = [String(userMessage ?? ''), ...historyMatchLines].join('\n');
+    const matchContext = {
+      userMessage: String(userMessage ?? ''),
+      history: historyMatchLines,
+      personaText,
+      character: {
+        description: String(context?.character?.description || ''),
+        personality: String(context?.character?.personality || ''),
+        scenario: String(context?.character?.scenario || ''),
+        depthPrompt: String(context?.character?.depthPrompt || ''),
+        creatorNotes: String(context?.character?.creatorNotes || ''),
+      },
+    };
     const groupName = String(context?.group?.name || '').trim();
     const groupMemberIds = Array.isArray(context?.group?.members) ? context.group.members.map(String) : [];
     const groupMemberNames = Array.isArray(context?.group?.memberNames) ? context.group.memberNames.map(String) : [];
     const membersText = groupMemberNames.filter(Boolean).join(',');
+    const macroContext = {
+      user: name1,
+      char: name2,
+      group: groupName || name2,
+      members: membersText,
+      scenario: context?.character?.scenario || '',
+      personality: context?.character?.personality || '',
+    };
 
     const getSessionSummaryItems = (sid, { limitPlain = 30, limitPlainGroup = 10, limitWithCompacted = 2, limitWithCompactedGroup = 3 } = {}) => {
       const id = String(sid || '').trim();
@@ -838,20 +882,22 @@ class AppBridge {
       : (() => {
           const builtinPart = disablePhoneFormat
             ? ''
-            : this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText });
+            : this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText, matchContext });
           const globalPart =
             this.globalWorldId && String(this.globalWorldId) !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID
-              ? this.formatWorldPrompt(this.globalWorldId, { matchText })
+              ? this.formatWorldPrompt(this.globalWorldId, { matchText, matchContext })
               : '';
           if (!isGroupChat) {
-            const sessionPart = this.currentWorldId ? this.formatWorldPrompt(this.currentWorldId, { matchText }) : '';
+            const sessionPart = this.currentWorldId
+              ? this.formatWorldPrompt(this.currentWorldId, { matchText, matchContext })
+              : '';
             return [builtinPart, globalPart, sessionPart].filter(Boolean).join('\n\n');
           }
           const parts = [];
           for (const memberSessionId of groupMemberIds) {
             const wid = this.worldSessionMap[String(memberSessionId) || ''] || null;
             if (!wid) continue;
-            const p = this.formatWorldPrompt(wid, { matchText });
+            const p = this.formatWorldPrompt(wid, { matchText, matchContext });
             if (p) parts.push(p);
           }
           const mergedMembers = parts.join('\n\n');
@@ -960,7 +1006,7 @@ class AppBridge {
 	    const openaiOrderBlock = pickOpenAIOrderBlock();
 	    const openaiOrder = Array.isArray(openaiOrderBlock?.order) ? openaiOrderBlock.order : null;
 
-	    // 摘要提示词：移入“聊天提示词”区块管理，并固定在系统深度=1（历史前）的位置
+	    // 摘要提示词：移入“聊天提示词”区块管理，并固定在系统深度=1（紧跟历史）
 	    const summaryPosition = (() => {
 	      if (!useSysprompt) return 3;
 	      if (!syspActive || typeof syspActive !== 'object') return 3;
@@ -968,6 +1014,7 @@ class AppBridge {
 	      return Number.isFinite(n) ? n : 3;
 	    })();
 	    const summaryEnabled = (() => {
+	      if (!useSummaryMemory) return false;
 	      if (summaryPosition === -1) return false;
 	      if (!useSysprompt) return true;
 	      if (!syspActive || typeof syspActive !== 'object') return true;
@@ -988,33 +1035,89 @@ class AppBridge {
 	        })
 	      : '';
 
-	    // 聊天提示词（私聊/群聊/动态/摘要）：统一作为 system 区块插入在 chat history 之后
-	    // - 不混入历史数组（不会落入 <history>）
-	    // - 用 <chat_guide> 包裹，便于模型区分“聊天指南”与历史回顾
-	    // - 保证摘要提示词在所有聊天提示词下方
-	    const buildChatGuideContent = () => {
-	      const mode = String(context?.meta?.chatGuideMode || '').trim().toLowerCase();
-	      if (Boolean(context?.meta?.disableChatGuide) || mode === 'none') return '';
-	      const summaryOnly = mode === 'summary-only';
-	      const parts = [];
-	      const groupSystemHint = '系统消息（我们能解析的这种）：内容';
-	      if (!summaryOnly && !isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules && dialoguePosition !== -1) {
-	        parts.push(dialogueRules);
-	      }
-	      if (!summaryOnly && !isMomentCommentTask && isGroupChat && groupEnabled && groupRules && groupPosition !== -1) {
-	        parts.push(groupRules);
-	        parts.push(groupSystemHint);
-	      }
-	      if (!summaryOnly && !isMomentCommentTask && momentCreateEnabled && momentCreateRules && momentCreatePosition !== -1) {
-	        parts.push(momentCreateRules);
-	      }
-	      if (!summaryOnly && isMomentCommentTask && momentCommentEnabled && momentCommentRules && momentCommentPosition !== -1) {
-	        parts.push(momentCommentRules);
-	      }
-	      if (summaryRules) parts.push(summaryRules);
+	    // 聊天提示词（私聊/群聊/动态/摘要）：按扩展位置注入
+	    // - IN_PROMPT / BEFORE_PROMPT / SYSTEM_DEPTH_1：包装为 <chat_guide>
+	    // - IN_CHAT：按深度插入历史
+	    const buildChatGuideBlock = (parts) => {
 	      const content = joinPromptBlocks(parts);
 	      if (!content) return '';
 	      return `<chat_guide>\n${content}\n</chat_guide>`;
+	    };
+	    const buildChatGuideHistoryMessages = (items) => {
+	      const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+	      const out = [];
+	      const list = Array.isArray(items) ? items : [];
+	      list.forEach((item, idx) => {
+	        const content = trimEdgeBlankLines(item?.content || '');
+	        if (!content) return;
+	        const role = roleMap[item?.role] || 'system';
+	        let finalContent = content;
+	        if (role !== 'system') {
+	          const normalized = normalizeHistoryLineBreaks(content, role);
+	          const speaker = role === 'assistant' ? name2 : name1;
+	          finalContent = withSpeakerPrefix(normalized, speaker);
+	        }
+	        out.push({
+	          role,
+	          content: finalContent,
+	          depth: Number(item?.depth) || 0,
+	          _seq: Number.isFinite(Number(item?._seq)) ? item._seq : idx,
+	        });
+	      });
+	      return out;
+	    };
+	    const buildChatGuidePlan = () => {
+	      const mode = String(context?.meta?.chatGuideMode || '').trim().toLowerCase();
+	      if (Boolean(context?.meta?.disableChatGuide) || mode === 'none') {
+	        return { promptContent: '', beforePromptContent: '', depthContent: '', depthMessages: [] };
+	      }
+	      const summaryOnly = mode === 'summary-only';
+	      const promptParts = [];
+	      const beforePromptParts = [];
+	      const depthParts = [];
+	      const historyItems = [];
+	      let seq = 0;
+	      const pushByPosition = (content, position, depth, role) => {
+	        const pos = Number.isFinite(Number(position)) ? Math.trunc(Number(position)) : 0;
+	        const trimmed = trimEdgeBlankLines(content);
+	        if (!trimmed || pos === -1) return;
+	        if (pos === 1) {
+	          historyItems.push({ content: trimmed, depth: Number(depth) || 0, role: Number(role) || 0, _seq: seq++ });
+	          return;
+	        }
+	        if (pos === 2) {
+	          beforePromptParts.push(trimmed);
+	          return;
+	        }
+	        if (pos === 3) {
+	          depthParts.push(trimmed);
+	          return;
+	        }
+	        promptParts.push(trimmed);
+	      };
+	      const groupSystemHint = '系统消息（我们能解析的这种）：内容';
+	      if (!summaryOnly && !isMomentCommentTask && !isGroupChat && dialogueEnabled && dialogueRules) {
+	        pushByPosition(dialogueRules, dialoguePosition, dialogueDepth, dialogueRole);
+	      }
+	      if (!summaryOnly && !isMomentCommentTask && isGroupChat && groupEnabled && groupRules) {
+	        const combined = joinPromptBlocks([groupRules, groupSystemHint]);
+	        pushByPosition(combined, groupPosition, groupDepth, groupRole);
+	      }
+	      if (!summaryOnly && !isMomentCommentTask && momentCreateEnabled && momentCreateRules) {
+	        pushByPosition(momentCreateRules, momentCreatePosition, momentCreateDepth, momentCreateRole);
+	      }
+	      if (!summaryOnly && isMomentCommentTask && momentCommentEnabled && momentCommentRules) {
+	        pushByPosition(momentCommentRules, momentCommentPosition, momentCommentDepth, momentCommentRole);
+	      }
+	      if (summaryRules) {
+	        pushByPosition(summaryRules, summaryPosition, 1, 0);
+	      }
+	      return {
+	        promptContent: buildChatGuideBlock(promptParts),
+	        beforePromptContent: buildChatGuideBlock(beforePromptParts),
+	        depthContent: buildChatGuideBlock(depthParts),
+	        depthMessages: buildChatGuideHistoryMessages(historyItems),
+	      };
 	    };
 
 	    const buildMomentCommentDataBlock = () => {
@@ -1137,6 +1240,173 @@ class AppBridge {
 	      };
 	    };
 
+      const buildWorldInjectionPlan = () => {
+        const worldBuckets = {
+          beforeChar: [],
+          afterChar: [],
+          beforeScenario: [],
+          afterScenario: [],
+          beforeExamples: [],
+          afterExamples: [],
+          defaultPrompt: [],
+          depth: [],
+        };
+        if (!isMomentCommentTask) {
+          const collectEntries = worldId => this.collectWorldEntries(worldId, { matchText, matchContext });
+          const pushEntry = entry => {
+            const pos = Number.isFinite(Number(entry?.position)) ? Math.trunc(Number(entry.position)) : 0;
+            switch (pos) {
+              case 0:
+                worldBuckets.beforeChar.push(entry);
+                break;
+              case 1:
+                worldBuckets.afterChar.push(entry);
+                break;
+              case 2:
+                worldBuckets.beforeScenario.push(entry);
+                break;
+              case 3:
+                worldBuckets.afterScenario.push(entry);
+                break;
+              case 4:
+                worldBuckets.depth.push(entry);
+                break;
+              case 5:
+                worldBuckets.beforeExamples.push(entry);
+                break;
+              case 6:
+                worldBuckets.afterExamples.push(entry);
+                break;
+              default:
+                worldBuckets.defaultPrompt.push(entry);
+                break;
+            }
+          };
+          const pushEntries = entries => {
+            const list = Array.isArray(entries) ? entries : [];
+            list.forEach(pushEntry);
+          };
+          if (!disablePhoneFormat) {
+            pushEntries(collectEntries(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID));
+          }
+          if (this.globalWorldId && String(this.globalWorldId) !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID) {
+            pushEntries(collectEntries(this.globalWorldId));
+          }
+          if (!isGroupChat) {
+            if (this.currentWorldId) pushEntries(collectEntries(this.currentWorldId));
+          } else {
+            for (const memberSessionId of groupMemberIds) {
+              const wid = this.worldSessionMap[String(memberSessionId) || ''] || null;
+              if (!wid) continue;
+              pushEntries(collectEntries(wid));
+            }
+          }
+        }
+
+        const roleMap = { 0: 'system', 1: 'user', 2: 'assistant' };
+        const formatWorldEntryContent = (entry, { applyRegex = true } = {}) => {
+          const raw = processTextMacrosWithPendingFlag(entry?.content || '', macroContext);
+          const trimmed = trimEdgeBlankLines(raw);
+          if (!trimmed) return '';
+          if (!applyRegex) return trimmed;
+          return this.regex.apply(trimmed, this.getRegexContext(), regex_placement.WORLD_INFO, {
+            isMarkdown: false,
+            isPrompt: true,
+            isEdit: false,
+            depth: 0,
+          });
+        };
+        const buildWorldMessages = (entries, { forHistory = false } = {}) => {
+          const list = Array.isArray(entries) ? entries : [];
+          const out = [];
+          list.forEach((entry, idx) => {
+            const content = formatWorldEntryContent(entry, { applyRegex: true });
+            if (!content) return;
+            const role = roleMap[entry?.role] || 'system';
+            let finalContent = content;
+            if (forHistory && role !== 'system') {
+              const normalized = normalizeHistoryLineBreaks(content, role);
+              const speaker = role === 'assistant' ? name2 : name1;
+              finalContent = withSpeakerPrefix(normalized, speaker);
+            }
+            out.push({
+              role,
+              content: finalContent,
+              depth: Number(entry?.depth) || 0,
+              _seq: Number.isFinite(Number(entry?._seq)) ? entry._seq : idx,
+            });
+          });
+          return out;
+        };
+
+        const worldPromptDefaultParts = worldBuckets.defaultPrompt
+          .map(entry => formatWorldEntryContent(entry, { applyRegex: false }))
+          .filter(Boolean);
+        const worldPromptDefault = worldPromptDefaultParts.join('\n\n');
+        const worldPromptMessages = {
+          beforeChar: buildWorldMessages(worldBuckets.beforeChar),
+          afterChar: buildWorldMessages(worldBuckets.afterChar),
+          beforeScenario: buildWorldMessages(worldBuckets.beforeScenario),
+          afterScenario: buildWorldMessages(worldBuckets.afterScenario),
+          beforeExamples: buildWorldMessages(worldBuckets.beforeExamples),
+          afterExamples: buildWorldMessages(worldBuckets.afterExamples),
+        };
+        const depthWorldMessages = buildWorldMessages(worldBuckets.depth, { forHistory: true });
+
+        return {
+          worldPromptDefault,
+          worldPromptMessages,
+          depthWorldMessages,
+        };
+      };
+
+      const cloneWorldPromptMessages = (buckets) => ({
+        beforeChar: Array.isArray(buckets?.beforeChar) ? [...buckets.beforeChar] : [],
+        afterChar: Array.isArray(buckets?.afterChar) ? [...buckets.afterChar] : [],
+        beforeScenario: Array.isArray(buckets?.beforeScenario) ? [...buckets.beforeScenario] : [],
+        afterScenario: Array.isArray(buckets?.afterScenario) ? [...buckets.afterScenario] : [],
+        beforeExamples: Array.isArray(buckets?.beforeExamples) ? [...buckets.beforeExamples] : [],
+        afterExamples: Array.isArray(buckets?.afterExamples) ? [...buckets.afterExamples] : [],
+      });
+
+      const chatGuidePlan = buildChatGuidePlan();
+      const worldInjectionPlan = buildWorldInjectionPlan();
+      const mergeDepthMessages = (...lists) => {
+        const out = [];
+        let seq = 0;
+        lists.forEach(list => {
+          const arr = Array.isArray(list) ? list : [];
+          arr.forEach(msg => {
+            if (!msg) return;
+            out.push({ ...msg, _seq: seq++ });
+          });
+        });
+        return out;
+      };
+      const insertDepthMessages = (history, depthMessages) => {
+        const list = Array.isArray(depthMessages) ? depthMessages : [];
+        if (!list.length) return;
+        const baseLen = history.length;
+        const inserts = list
+          .map((msg, idx) => {
+            const depth = Math.max(0, Math.trunc(Number(msg.depth || 0)));
+            return {
+              ...msg,
+              _seq: Number.isFinite(Number(msg._seq)) ? msg._seq : idx,
+              _index: Math.max(0, baseLen - depth),
+            };
+          })
+          .sort((a, b) => {
+            if (a._index !== b._index) return a._index - b._index;
+            return a._seq - b._seq;
+          });
+        let offset = 0;
+        inserts.forEach(item => {
+          history.splice(item._index + offset, 0, { role: item.role, content: item.content });
+          offset += 1;
+        });
+      };
+
 		    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
       const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
       // ST promptOnly scripts: apply to outgoing prompt only
@@ -1174,8 +1444,8 @@ class AppBridge {
         pendingUserInsertIndex = -1;
       };
 
-      // 聊天提示词：统一打包为 <chat_guide>，与世界书放在同一位置（worldInfo marker）。
-      // 不再按 position/depth 混入历史或 prompt 开头。
+      // 聊天提示词：按位置注入（IN_PROMPT 走 worldInfo marker，SYSTEM_DEPTH_1 在 history 后）。
+      // 世界书条目可按 position/@Depth 插入，其余默认仍走 worldInfo marker。
 
       // Persona Description (SillyTavern-like): AT_DEPTH=4 injects into chat history
       if (personaText && personaPosition === 4) {
@@ -1190,25 +1460,21 @@ class AppBridge {
         if (p?.identifier) byId.set(p.identifier, p);
       });
 
-      const macroVars = {
-        user: name1,
-        char: name2,
-        scenario: context?.character?.scenario || '',
-        personality: context?.character?.personality || '',
-      };
-      const macroContext = {
-        user: name1,
-        char: name2,
-        group: groupName || name2,
-        members: membersText,
-        scenario: macroVars.scenario,
-        personality: macroVars.personality,
-      };
       const formatScenario = processTextMacrosWithPendingFlag(scenarioFormat, macroContext);
       const formatPersonality = processTextMacrosWithPendingFlag(personalityFormat, macroContext);
+      const worldPromptDefault = worldInjectionPlan.worldPromptDefault || '';
+      const worldPromptMessages = cloneWorldPromptMessages(worldInjectionPlan.worldPromptMessages);
+      const depthWorldMessages = Array.isArray(worldInjectionPlan.depthWorldMessages)
+        ? [...worldInjectionPlan.depthWorldMessages]
+        : [];
+      const depthPromptMessages = mergeDepthMessages(depthWorldMessages, chatGuidePlan.depthMessages);
+      insertDepthMessages(history, depthPromptMessages);
+
       // WORLD_INFO placement for prompt stage (supports promptOnly scripts)
-      const chatGuideContent = buildChatGuideContent();
-      let worldForPrompt = joinPromptBlocks([worldPrompt, chatGuideContent]);
+      const chatGuideContent = chatGuidePlan.promptContent;
+      const chatGuideBeforePromptContent = chatGuidePlan.beforePromptContent;
+      const chatGuideDepthContent = chatGuidePlan.depthContent;
+      let worldForPrompt = joinPromptBlocks([worldPromptDefault, chatGuideContent]);
       if (worldForPrompt) {
         worldForPrompt = this.regex.apply(worldForPrompt, this.getRegexContext(), regex_placement.WORLD_INFO, {
           isMarkdown: false,
@@ -1219,6 +1485,18 @@ class AppBridge {
       }
       const formatWorld = worldForPrompt ? wiFormat.replace('{0}', worldForPrompt) : '';
       let worldInserted = false;
+      let chatGuideAfterHistoryInserted = false;
+      const insertChatGuideAfterHistory = () => {
+        if (chatGuideAfterHistoryInserted || !chatGuideDepthContent) return;
+        messages.push({ role: 'system', content: chatGuideDepthContent });
+        chatGuideAfterHistoryInserted = true;
+      };
+      const appendWorldBucket = key => {
+        const bucket = worldPromptMessages[key];
+        if (!bucket || !bucket.length) return;
+        bucket.forEach(msg => messages.push({ role: msg.role, content: msg.content }));
+        worldPromptMessages[key] = [];
+      };
 
       const resolveMarker = identifier => {
         switch (identifier) {
@@ -1243,6 +1521,7 @@ class AppBridge {
 
       let historyInserted = false;
       const sessionSummary = (() => {
+        if (!useSummaryMemory) return { compacted: null, summaries: [] };
         try {
           // Group chat requirement: last 10 OR (compacted + last 3).
           // Non-group: keep previous behavior (last 30).
@@ -1256,70 +1535,77 @@ class AppBridge {
           return { compacted: null, summaries: [] };
         }
       })();
-	      const historyRecallBlocks = (() => {
+      const historyRecallBlocks = (() => {
 	        const blocks = [{ role: 'system', content: HISTORY_RECALL_NOTICE }];
 	        const momentData = buildMomentCommentDataBlock();
 	        if (momentData) blocks.push(momentData);
-	        const momentSummary = buildMomentSummaryBlock();
-	        if (momentSummary) blocks.push(momentSummary);
-	        try {
-	          const compactedText = String(sessionSummary?.compacted?.text || '').trim();
-	          const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
-	          if (isGroupChat) {
-	            const rows = [];
-	            if (compactedText) rows.push(`- 大总结：${compactedText}`);
-	            rows.push(
-	              ...summaries
-	                .map(s => String(typeof s === 'string' ? s : s?.text || '').trim())
-	                .filter(Boolean)
-	                .map(t => `- ${t}`),
-	            );
-	            if (rows.length) {
-	              blocks.push({
-	                role: 'system',
-	                content: `以下为该群聊的摘要回顾：\n${rows.join('\n')}`.trim(),
-	              });
-	            }
-	          } else {
-	            if (summaries.length) {
-	              blocks.push({
-	                role: 'system',
-	                content: `以下为该聊天室的简要摘要回顾：\n${summaries
-	                  .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	        if (useSummaryMemory) {
+	          const momentSummary = buildMomentSummaryBlock();
+	          if (momentSummary) blocks.push(momentSummary);
+	          try {
+	            const compactedText = String(sessionSummary?.compacted?.text || '').trim();
+	            const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
+	            if (isGroupChat) {
+	              const rows = [];
+	              if (compactedText) rows.push(`- 大总结：${compactedText}`);
+	              rows.push(
+	                ...summaries
+	                  .map(s => String(typeof s === 'string' ? s : s?.text || '').trim())
 	                  .filter(Boolean)
-	                  .join('\n')}`.trim(),
-	              });
+	                  .map(t => `- ${t}`),
+	              );
+	              if (rows.length) {
+	                blocks.push({
+	                  role: 'system',
+	                  content: `以下为该群聊的摘要回顾：\n${rows.join('\n')}`.trim(),
+	                });
+	              }
+	            } else {
+	              if (summaries.length) {
+	                blocks.push({
+	                  role: 'system',
+	                  content: `以下为该聊天室的简要摘要回顾：\n${summaries
+	                    .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	                    .filter(Boolean)
+	                    .join('\n')}`.trim(),
+	                });
+	              }
 	            }
-	          }
-	        } catch {}
+	          } catch {}
 
-          try {
-            const groupSummary = buildPrivateChatMemberGroupSummaryBlock();
-            if (groupSummary) blocks.push(groupSummary);
-          } catch {}
-	        const priv = buildGroupMemberPrivateSummaryBlock();
-	        if (priv) blocks.push(priv);
-	        if (isMomentCommentTask) {
-	          const targetId = String(context?.task?.targetSessionId || '').trim();
-	          const targetName = String(context?.task?.targetName || '').trim();
-	          const t = buildPrivateSummaryBlockForTarget(targetId, targetName);
-	          if (t) blocks.push(t);
+            try {
+              const groupSummary = buildPrivateChatMemberGroupSummaryBlock();
+              if (groupSummary) blocks.push(groupSummary);
+            } catch {}
+	          const priv = buildGroupMemberPrivateSummaryBlock();
+	          if (priv) blocks.push(priv);
+	          if (isMomentCommentTask) {
+	            const targetId = String(context?.task?.targetSessionId || '').trim();
+	            const targetName = String(context?.task?.targetName || '').trim();
+	            const t = buildPrivateSummaryBlockForTarget(targetId, targetName);
+	            if (t) blocks.push(t);
+	          }
 	        }
-	        return blocks;
-	      })();
+        return blocks;
+      })();
+
+      if (chatGuideBeforePromptContent) {
+        messages.push({ role: 'system', content: chatGuideBeforePromptContent });
+      }
 
       for (const item of openaiOrder) {
         const identifier = item?.identifier;
         const enabled = item?.enabled !== false;
         if (!identifier || !enabled) continue;
 
-		        if (identifier === 'chatHistory') {
-		          messages.push(...historyRecallBlocks);
-		          if (history.length) messages.push(...history);
-              insertPendingUserIntoHistory();
-		          historyInserted = true;
-		          continue;
-		        }
+        if (identifier === 'chatHistory') {
+          messages.push(...historyRecallBlocks);
+          if (history.length) messages.push(...history);
+          insertPendingUserIntoHistory();
+          insertChatGuideAfterHistory();
+          historyInserted = true;
+          continue;
+        }
 
         const pr = byId.get(identifier);
         const isMarker =
@@ -1336,10 +1622,29 @@ class AppBridge {
           ].includes(identifier);
 
         if (isMarker) {
-          const content = resolveMarker(identifier);
-          if (content) {
-            messages.push({ role: 'system', content });
+          if (identifier === 'charDescription') {
+            appendWorldBucket('beforeChar');
+            const content = resolveMarker(identifier);
+            if (content) messages.push({ role: 'system', content });
+            appendWorldBucket('afterChar');
+            continue;
           }
+          if (identifier === 'scenario') {
+            appendWorldBucket('beforeScenario');
+            const content = resolveMarker(identifier);
+            if (content) messages.push({ role: 'system', content });
+            appendWorldBucket('afterScenario');
+            continue;
+          }
+          if (identifier === 'dialogueExamples') {
+            appendWorldBucket('beforeExamples');
+            const content = resolveMarker(identifier);
+            if (content) messages.push({ role: 'system', content });
+            appendWorldBucket('afterExamples');
+            continue;
+          }
+          const content = resolveMarker(identifier);
+          if (content) messages.push({ role: 'system', content });
           continue;
         }
 
@@ -1363,11 +1668,20 @@ class AppBridge {
         messages.push({ role: mappedRole, content });
       }
 
-	      if (!historyInserted) {
-	        messages.push(...historyRecallBlocks);
-	        if (history.length) messages.push(...history);
-          insertPendingUserIntoHistory();
-	      }
+      // Flush any world buckets that didn't find their markers to avoid dropping entries.
+      appendWorldBucket('beforeChar');
+      appendWorldBucket('afterChar');
+      appendWorldBucket('beforeScenario');
+      appendWorldBucket('afterScenario');
+      appendWorldBucket('beforeExamples');
+      appendWorldBucket('afterExamples');
+
+      if (!historyInserted) {
+        messages.push(...historyRecallBlocks);
+        if (history.length) messages.push(...history);
+        insertPendingUserIntoHistory();
+        insertChatGuideAfterHistory();
+      }
 
 	      // 摘要提示词包含在 <chat_guide> 内，与世界书一起注入。
 
@@ -1379,8 +1693,62 @@ class AppBridge {
       return messages;
     }
 
-    const chatGuideContent = buildChatGuideContent();
-    const worldPromptCombined = joinPromptBlocks([worldPrompt, chatGuideContent]);
+    const chatGuideContent = chatGuidePlan.promptContent;
+    const chatGuideBeforePromptContent = chatGuidePlan.beforePromptContent;
+    const chatGuideDepthContent = chatGuidePlan.depthContent;
+    const worldPromptDefault = worldInjectionPlan.worldPromptDefault || '';
+    const worldPromptMessages = cloneWorldPromptMessages(worldInjectionPlan.worldPromptMessages);
+    const depthWorldMessages = Array.isArray(worldInjectionPlan.depthWorldMessages)
+      ? [...worldInjectionPlan.depthWorldMessages]
+      : [];
+    const worldPromptCombined = joinPromptBlocks([worldPromptDefault, chatGuideContent]);
+    let worldPromptCombinedForPrompt = worldPromptCombined;
+    if (worldPromptCombinedForPrompt) {
+      worldPromptCombinedForPrompt = this.regex.apply(worldPromptCombinedForPrompt, this.getRegexContext(), regex_placement.WORLD_INFO, {
+        isMarkdown: false,
+        isPrompt: true,
+        isEdit: false,
+        depth: 0,
+      });
+    }
+    const renderWorldBucket = (bucket) => {
+      const list = Array.isArray(bucket) ? bucket : [];
+      return joinPromptBlocks(list.map(msg => msg?.content || ''));
+    };
+    const consumeWorldBucket = (bucket) => {
+      const text = renderWorldBucket(bucket);
+      if (Array.isArray(bucket)) bucket.length = 0;
+      return text;
+    };
+    const storyTemplate = useContext && typeof ctxp?.story_string === 'string' ? ctxp.story_string : '';
+    const hasDescriptionToken = /{{\s*description\s*}}/i.test(storyTemplate);
+    const hasScenarioToken = /{{\s*scenario\s*}}/i.test(storyTemplate);
+    const hasExamplesToken = /{{\s*mesExamples(?:Raw)?\s*}}/i.test(storyTemplate);
+    const descriptionBase = processTextMacrosWithPendingFlag(context?.character?.description || '', macroContext);
+    const descriptionText = hasDescriptionToken
+      ? joinPromptBlocks([consumeWorldBucket(worldPromptMessages.beforeChar), descriptionBase, consumeWorldBucket(worldPromptMessages.afterChar)])
+      : descriptionBase;
+    const personalityText = processTextMacrosWithPendingFlag(personalityFormat, {
+      user: name1,
+      char: name2,
+      group: groupName || name2,
+      members: membersText,
+      personality: context?.character?.personality || '',
+    });
+    const scenarioBase = processTextMacrosWithPendingFlag(scenarioFormat, {
+      user: name1,
+      char: name2,
+      group: groupName || name2,
+      members: membersText,
+      scenario: context?.character?.scenario || '',
+    });
+    const scenarioText = hasScenarioToken
+      ? joinPromptBlocks([consumeWorldBucket(worldPromptMessages.beforeScenario), scenarioBase, consumeWorldBucket(worldPromptMessages.afterScenario)])
+      : scenarioBase;
+    const mesExamplesBase = '';
+    const mesExamplesText = hasExamplesToken
+      ? joinPromptBlocks([consumeWorldBucket(worldPromptMessages.beforeExamples), mesExamplesBase, consumeWorldBucket(worldPromptMessages.afterExamples)])
+      : mesExamplesBase;
 
     const vars = {
       user: name1,
@@ -1396,32 +1764,47 @@ class AppBridge {
         }
         return context.systemPrompt || '';
       })(),
-      description: context?.character?.description || '',
-      personality: processTextMacrosWithPendingFlag(personalityFormat, {
-        user: name1,
-        char: name2,
-        group: groupName || name2,
-        members: membersText,
-        personality: context?.character?.personality || '',
-      }),
-      scenario: processTextMacrosWithPendingFlag(scenarioFormat, {
-        user: name1,
-        char: name2,
-        group: groupName || name2,
-        members: membersText,
-        scenario: context?.character?.scenario || '',
-      }),
+      description: descriptionText,
+      personality: personalityText,
+      scenario: scenarioText,
       persona: personaPosition === 0 ? personaText : '',
-      wiBefore: worldPromptCombined ? wiFormat.replace('{0}', worldPromptCombined) : '',
+      wiBefore: worldPromptCombinedForPrompt ? wiFormat.replace('{0}', worldPromptCombinedForPrompt) : '',
       wiAfter: '',
-      loreBefore: worldPromptCombined ? wiFormat.replace('{0}', worldPromptCombined) : '',
+      loreBefore: worldPromptCombinedForPrompt ? wiFormat.replace('{0}', worldPromptCombinedForPrompt) : '',
       loreAfter: '',
       anchorBefore: '',
       anchorAfter: '',
-      mesExamples: '',
-      mesExamplesRaw: '',
+      mesExamples: mesExamplesText,
+      mesExamplesRaw: mesExamplesText,
       trim: '',
     };
+    const worldMessagesBefore = [
+      ...(worldPromptMessages.beforeChar || []),
+      ...(worldPromptMessages.beforeScenario || []),
+      ...(worldPromptMessages.beforeExamples || []),
+    ];
+    const worldMessagesAfter = [
+      ...(worldPromptMessages.afterChar || []),
+      ...(worldPromptMessages.afterScenario || []),
+      ...(worldPromptMessages.afterExamples || []),
+    ];
+    const flushWorldMessages = (queue) => {
+      const list = Array.isArray(queue) ? queue : [];
+      list.forEach(msg => {
+        if (!msg?.content) return;
+        messages.push({ role: msg.role || 'system', content: msg.content });
+      });
+      list.length = 0;
+    };
+    const insertWorldAround = (fn) => {
+      flushWorldMessages(worldMessagesBefore);
+      fn();
+      flushWorldMessages(worldMessagesAfter);
+    };
+
+    if (chatGuideBeforePromptContent) {
+      messages.push({ role: 'system', content: chatGuideBeforePromptContent });
+    }
 
     // 1) Context preset: render story_string as ST-like template
     const combinedStoryString =
@@ -1440,35 +1823,39 @@ class AppBridge {
     const injectDepth = Math.max(0, Number(ctxp?.story_string_depth ?? 1));
     const injectRole = Number(ctxp?.story_string_role ?? 0);
 
-    // BEFORE_PROMPT: put as the very first system message
-    if (combinedStoryString && position === 2) {
-      messages.push({ role: 'system', content: combinedStoryString });
-    }
-
-    // IN_PROMPT: also system message near start (we keep same behavior as openai-style)
-    if (combinedStoryString && position === 0) {
-      messages.push({ role: 'system', content: combinedStoryString });
+    const shouldInsertStoryString = combinedStoryString && (position === 2 || position === 0);
+    // BEFORE_PROMPT or IN_PROMPT: keep story_string as a system block, wrap world buckets around it.
+    if (shouldInsertStoryString) {
+      insertWorldAround(() => {
+        messages.push({ role: 'system', content: combinedStoryString });
+      });
     }
 
 	    // 聊天提示词（私聊/群聊/动态/摘要）统一放入 <chat_guide>，与世界书同位置注入。
 
     // If context preset disabled, fall back to legacy system prompt building
     if (!useContext) {
-      if (context.systemPrompt) {
-        messages.push({ role: 'system', content: context.systemPrompt });
-      }
-      if (vars.system) {
-        messages.push({ role: 'system', content: vars.system });
-      }
-      if (worldPromptCombined) {
-        messages.push({ role: 'system', content: wiFormat.replace('{0}', worldPromptCombined) });
-      }
-      if (context.character) {
-        let characterPrompt = `你正在扮演: ${context.character.name}`;
-        if (context.character.description) characterPrompt += `\n\n角色描述:\n${context.character.description}`;
-        if (context.character.personality) characterPrompt += `\n\n性格特点:\n${context.character.personality}`;
-        messages.push({ role: 'system', content: characterPrompt });
-      }
+      insertWorldAround(() => {
+        if (context.systemPrompt) {
+          messages.push({ role: 'system', content: context.systemPrompt });
+        }
+        if (vars.system) {
+          messages.push({ role: 'system', content: vars.system });
+        }
+        if (worldPromptCombinedForPrompt) {
+          messages.push({ role: 'system', content: wiFormat.replace('{0}', worldPromptCombinedForPrompt) });
+        }
+        if (context.character) {
+          let characterPrompt = `你正在扮演: ${context.character.name}`;
+          if (context.character.description) characterPrompt += `\n\n角色描述:\n${context.character.description}`;
+          if (context.character.personality) characterPrompt += `\n\n性格特点:\n${context.character.personality}`;
+          messages.push({ role: 'system', content: characterPrompt });
+        }
+      });
+    } else if (!shouldInsertStoryString) {
+      // Context preset enabled but no story_string inserted: still flush world buckets to avoid dropping entries.
+      flushWorldMessages(worldMessagesBefore);
+      flushWorldMessages(worldMessagesAfter);
     }
 
     // 3) History
@@ -1509,7 +1896,9 @@ class AppBridge {
       const idx = Math.max(0, history.length - injectDepth);
       history.splice(idx, 0, { role, content: combinedStoryString });
     }
-	    // 聊天提示词已由 <chat_guide> 统一承载，不再插入历史数组（避免落入 <history>）。
+    const depthPromptMessages = mergeDepthMessages(depthWorldMessages, chatGuidePlan.depthMessages);
+    insertDepthMessages(history, depthPromptMessages);
+	    // 聊天提示词的 SYSTEM_DEPTH_1 由 <chat_guide> 承载，不落入 <history>。
     const postHistoryRaw = useSysprompt ? sysp?.post_history || '' : '';
     const extraPromptBlocksRaw = Array.isArray(context?.meta?.extraPromptBlocks) ? context.meta.extraPromptBlocks : [];
     const extraHasLastUser = extraPromptBlocksRaw.some(b => hasLastUserMessagePlaceholder(b?.content));
@@ -1522,65 +1911,70 @@ class AppBridge {
 	      const momentData = buildMomentCommentDataBlock();
 	      if (momentData) messages.push(momentData);
 	    } catch {}
-	    try {
-	      const momentSummary = buildMomentSummaryBlock();
-	      if (momentSummary) messages.push(momentSummary);
-	    } catch {}
-	    try {
-	      const sessionSummary = getSessionSummaryItems(sessionIdForSummary, {
-	        limitPlain: 30,
-	        limitPlainGroup: 10,
-	        limitWithCompacted: 30,
-	        limitWithCompactedGroup: 3,
-	      });
-	      const compactedText = String(sessionSummary?.compacted?.text || '').trim();
-	      const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
-	      if (isGroupChat) {
-	        const rows = [];
-	        if (compactedText) rows.push(`- 大总结：${compactedText}`);
-	        rows.push(
-	          ...summaries
-	            .map(s => String(typeof s === 'string' ? s : s?.text || '').trim())
-	            .filter(Boolean)
-	            .map(t => `- ${t}`),
-	        );
-	        if (rows.length) {
-	          messages.push({
-	            role: 'system',
-	            content: `以下为该群聊的摘要回顾：\n${rows.join('\n')}`.trim(),
-	          });
-	        }
-	      } else {
-	        if (summaries.length) {
-	          messages.push({
-	            role: 'system',
-	            content: `以下为该聊天室的简要摘要回顾：\n${summaries
-	              .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
-	              .filter(Boolean)
-	              .join('\n')}`.trim(),
-	          });
-	        }
-	      }
-	    } catch {}
-      try {
-        const groupSummary = buildPrivateChatMemberGroupSummaryBlock();
-        if (groupSummary) messages.push(groupSummary);
-      } catch {}
-	    try {
-	      const priv = buildGroupMemberPrivateSummaryBlock();
-	      if (priv) messages.push(priv);
-	    } catch {}
-	    if (isMomentCommentTask) {
+	    if (useSummaryMemory) {
 	      try {
-	        const targetId = String(context?.task?.targetSessionId || '').trim();
-	        const targetName = String(context?.task?.targetName || '').trim();
-	        const t = buildPrivateSummaryBlockForTarget(targetId, targetName);
-	        if (t) messages.push(t);
+	        const momentSummary = buildMomentSummaryBlock();
+	        if (momentSummary) messages.push(momentSummary);
 	      } catch {}
+	      try {
+	        const sessionSummary = getSessionSummaryItems(sessionIdForSummary, {
+	          limitPlain: 30,
+	          limitPlainGroup: 10,
+	          limitWithCompacted: 30,
+	          limitWithCompactedGroup: 3,
+	        });
+	        const compactedText = String(sessionSummary?.compacted?.text || '').trim();
+	        const summaries = Array.isArray(sessionSummary?.summaries) ? sessionSummary.summaries : [];
+	        if (isGroupChat) {
+	          const rows = [];
+	          if (compactedText) rows.push(`- 大总结：${compactedText}`);
+	          rows.push(
+	            ...summaries
+	              .map(s => String(typeof s === 'string' ? s : s?.text || '').trim())
+	              .filter(Boolean)
+	              .map(t => `- ${t}`),
+	          );
+	          if (rows.length) {
+	            messages.push({
+	              role: 'system',
+	              content: `以下为该群聊的摘要回顾：\n${rows.join('\n')}`.trim(),
+	            });
+	          }
+	        } else {
+	          if (summaries.length) {
+	            messages.push({
+	              role: 'system',
+	              content: `以下为该聊天室的简要摘要回顾：\n${summaries
+	                .map(s => `- ${String(typeof s === 'string' ? s : s?.text || '').trim()}`)
+	                .filter(Boolean)
+	                .join('\n')}`.trim(),
+	            });
+	          }
+	        }
+	      } catch {}
+        try {
+          const groupSummary = buildPrivateChatMemberGroupSummaryBlock();
+          if (groupSummary) messages.push(groupSummary);
+        } catch {}
+	      try {
+	        const priv = buildGroupMemberPrivateSummaryBlock();
+	        if (priv) messages.push(priv);
+	      } catch {}
+	      if (isMomentCommentTask) {
+	        try {
+	          const targetId = String(context?.task?.targetSessionId || '').trim();
+	          const targetName = String(context?.task?.targetName || '').trim();
+	          const t = buildPrivateSummaryBlockForTarget(targetId, targetName);
+	          if (t) messages.push(t);
+	        } catch {}
+	      }
 	    }
 	    if (history.length > 0) {
 	      messages.push(...history);
 	    }
+    if (chatGuideDepthContent) {
+      messages.push({ role: 'system', content: chatGuideDepthContent });
+    }
 	    // 摘要提示词包含在 <chat_guide> 内，与世界书一起注入。
 
     // 4) Post-history instructions (sysprompt.post_history)
@@ -1840,13 +2234,18 @@ class AppBridge {
     );
   }
 
-  formatWorldPrompt(worldId, label) {
+  collectWorldEntries(worldId, label) {
     const id = String(worldId || '').trim();
-    if (!id) return '';
+    if (!id) return [];
     const data = this.worldStore.load(id);
-    if (!data || !Array.isArray(data.entries)) return '';
+    if (!data || !Array.isArray(data.entries)) return [];
 
-    const matchTextRaw = typeof label === 'object' && label ? String(label.matchText || '') : '';
+    const labelObj = (label && typeof label === 'object') ? label : {};
+    const matchContext =
+      labelObj && typeof labelObj.matchContext === 'object' && labelObj.matchContext
+        ? labelObj.matchContext
+        : null;
+    const matchTextRaw = labelObj ? String(labelObj.matchText || '') : '';
     const matchText = matchTextRaw;
 
     const norm = v => String(v ?? '').trim();
@@ -1854,56 +2253,209 @@ class AppBridge {
       const keys = Array.isArray(e?.key) ? e.key : Array.isArray(e?.triggers) ? e.triggers : [];
       return keys.map(norm).filter(Boolean);
     };
+    const normalizeSecondaryKeys = e => {
+      const keys = Array.isArray(e?.keysecondary) ? e.keysecondary : Array.isArray(e?.secondary) ? e.secondary : [];
+      return keys.map(norm).filter(Boolean);
+    };
     const isRegexLiteral = k =>
       k.length >= 2 && k.startsWith('/') && k.endsWith('/') && k.indexOf('/', 1) === k.length - 1;
-    const matchKey = (key, text, caseSensitive) => {
+    const escapeRegExp = s => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hasCjk = s => /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(String(s || ''));
+    const matchKey = (key, rawText, rawTextLower, caseSensitive, matchWholeWords) => {
       const k = norm(key);
       if (!k) return false;
       if (isRegexLiteral(k)) {
         const body = k.slice(1, -1);
         try {
           const re = new RegExp(body, caseSensitive ? '' : 'i');
-          return re.test(text);
+          return re.test(rawText);
         } catch {
           return false;
         }
       }
-      if (caseSensitive) return text.includes(k);
-      return text.toLowerCase().includes(k.toLowerCase());
+      if (matchWholeWords && !hasCjk(k)) {
+        try {
+          const re = new RegExp(`\\b${escapeRegExp(k)}\\b`, caseSensitive ? '' : 'i');
+          return re.test(rawText);
+        } catch {
+          return false;
+        }
+      }
+      if (caseSensitive) return rawText.includes(k);
+      return rawTextLower.includes(k.toLowerCase());
+    };
+    const buildMatchTextForEntry = e => {
+      if (!matchContext) return matchText;
+      const parts = [];
+      const userText = String(matchContext.userMessage || '').trim();
+      if (userText) parts.push(userText);
+      const history = Array.isArray(matchContext.history) ? matchContext.history : [];
+      const scanDepthRaw = e?.scanDepth;
+      const scanDepth = Number.isFinite(Number(scanDepthRaw)) ? Math.max(0, Math.trunc(Number(scanDepthRaw))) : null;
+      const historySlice = scanDepth == null ? history : history.slice(-scanDepth);
+      if (historySlice.length) parts.push(...historySlice);
+      const personaText = String(matchContext.personaText || '').trim();
+      if (e?.matchPersonaDescription && personaText) parts.push(personaText);
+      const character = matchContext.character || {};
+      if (e?.matchCharacterDescription && character.description) parts.push(character.description);
+      if (e?.matchCharacterPersonality && character.personality) parts.push(character.personality);
+      if (e?.matchCharacterDepthPrompt && character.depthPrompt) parts.push(character.depthPrompt);
+      if (e?.matchScenario && character.scenario) parts.push(character.scenario);
+      if (e?.matchCreatorNotes && character.creatorNotes) parts.push(character.creatorNotes);
+      return parts.join('\n');
+    };
+    const hasMatchInput = () => {
+      if (String(matchTextRaw || '').trim()) return true;
+      if (!matchContext) return false;
+      const userText = String(matchContext.userMessage || '').trim();
+      const history = Array.isArray(matchContext.history) ? matchContext.history : [];
+      if (userText) return true;
+      return history.some(line => String(line || '').trim());
     };
 
     const shouldInclude = e => {
       if (!e || typeof e !== 'object') return false;
       if (Boolean(e.disable)) return false;
       // Legacy behavior: when no match text provided, include all enabled entries.
-      if (!matchTextRaw) return Boolean(e.content);
-      if (Boolean(e.constant)) return Boolean(e.content);
+      if (!hasMatchInput()) return Boolean(e.content);
+      const content = String(e.content || '').trim();
+      if (!content) return false;
+      if (Boolean(e.constant)) return true;
       const keys = normalizeKeys(e);
       if (!keys.length) return false;
+      const secondaryKeys = normalizeSecondaryKeys(e);
       const cs = Boolean(e.caseSensitive);
-      const text = cs ? matchText : matchText.toLowerCase();
-      return keys.some(k => matchKey(k, text, cs));
+      const whole = Boolean(e.matchWholeWords);
+      const entryText = buildMatchTextForEntry(e);
+      if (!entryText) return false;
+      const rawText = String(entryText || '');
+      const rawTextLower = cs ? rawText : rawText.toLowerCase();
+      const primaryMatch = keys.some(k => matchKey(k, rawText, rawTextLower, cs, whole));
+      if (!primaryMatch) return false;
+      if (!Boolean(e.selective) || secondaryKeys.length === 0) return true;
+      const secondaryMatches = secondaryKeys.map(k => matchKey(k, rawText, rawTextLower, cs, whole));
+      const anySecondary = secondaryMatches.some(Boolean);
+      const allSecondary = secondaryMatches.every(Boolean);
+      const logic = Number.isFinite(Number(e.selectiveLogic)) ? Math.trunc(Number(e.selectiveLogic)) : 0;
+      switch (logic) {
+        case 0:
+          return anySecondary;
+        case 1:
+          return !allSecondary;
+        case 2:
+          return !anySecondary;
+        case 3:
+          return allSecondary;
+        default:
+          return true;
+      }
     };
 
-    const entries = [...data.entries].filter(shouldInclude).sort((a, b) => {
-      const oa = Number.isFinite(Number(a?.order))
-        ? Number(a.order)
-        : Number.isFinite(Number(a?.priority))
-        ? Number(a.priority)
-        : 0;
-      const ob = Number.isFinite(Number(b?.order))
-        ? Number(b.order)
-        : Number.isFinite(Number(b?.priority))
-        ? Number(b.priority)
-        : 0;
-      return oa - ob;
-    });
+    const rollProbability = e => {
+      if (!e || e.useProbability === false) return true;
+      const p = Number(e.probability);
+      if (!Number.isFinite(p)) return true;
+      if (p >= 100) return true;
+      if (p <= 0) return false;
+      return Math.random() * 100 < p;
+    };
+
+    const applyProbability = hasMatchInput();
+    const parseGroups = (val) => {
+      if (Array.isArray(val)) return val.map(norm).filter(Boolean);
+      return String(val || '')
+        .split(/[,，]/)
+        .map(norm)
+        .filter(Boolean);
+    };
+
+    let entries = [...data.entries]
+      .filter(e => shouldInclude(e) && (!applyProbability || rollProbability(e)))
+      .map(e => ({ ...e, _groups: parseGroups(e?.group) }))
+      .sort((a, b) => {
+        const oa = Number.isFinite(Number(a?.order))
+          ? Number(a.order)
+          : Number.isFinite(Number(a?.priority))
+          ? Number(a.priority)
+          : 0;
+        const ob = Number.isFinite(Number(b?.order))
+          ? Number(b.order)
+          : Number.isFinite(Number(b?.priority))
+          ? Number(b.priority)
+          : 0;
+        return oa - ob;
+      });
 
     const trimEdgeBlankLines = (text) =>
       String(text ?? '').replace(/^(?:[ \t]*\r?\n)+/, '').replace(/(?:\r?\n[ \t]*)+$/, '');
-    const parts = entries.map(e => trimEdgeBlankLines(e.content)).filter(t => String(t || '').trim().length > 0);
-    if (!parts.length) return '';
-    return parts.join('\n\n');
+
+    // Group scoring: if enabled within a group, keep only highest-weight entries in that group.
+    const groupWinners = new Map();
+    const groupBuckets = new Map();
+    entries.forEach(entry => {
+      const groups = Array.isArray(entry?._groups) ? entry._groups : [];
+      groups.forEach(g => {
+        if (!groupBuckets.has(g)) groupBuckets.set(g, []);
+        groupBuckets.get(g).push(entry);
+      });
+    });
+    groupBuckets.forEach((bucket, groupName) => {
+      const enabled = bucket.some(e => e?.useGroupScoring === true || e?.groupOverride === true);
+      if (!enabled) return;
+      const override = bucket.filter(e => e?.groupOverride);
+      const pool = override.length ? override : bucket;
+      let maxWeight = null;
+      pool.forEach(e => {
+        const w = Number.isFinite(Number(e?.groupWeight)) ? Number(e.groupWeight) : 0;
+        if (maxWeight == null || w > maxWeight) maxWeight = w;
+      });
+      if (maxWeight == null) return;
+      const winners = pool.filter(e => {
+        const w = Number.isFinite(Number(e?.groupWeight)) ? Number(e.groupWeight) : 0;
+        return w === maxWeight;
+      });
+      if (winners.length) groupWinners.set(groupName, new Set(winners));
+    });
+    if (groupWinners.size) {
+      entries = entries.filter(entry => {
+        const groups = Array.isArray(entry?._groups) ? entry._groups : [];
+        if (!groups.length) return true;
+        return groups.every(g => {
+          const winners = groupWinners.get(g);
+          if (!winners) return true;
+          return winners.has(entry);
+        });
+      });
+    }
+
+    return entries
+      .map((e, idx) => {
+        const content = trimEdgeBlankLines(e?.content);
+        if (!String(content || '').trim()) return null;
+        const positionRaw = Number(e?.position);
+        const depthRaw = Number(e?.depth);
+        const roleRaw = Number(e?.role);
+        const orderRaw = Number(e?.order);
+        const position = Number.isFinite(positionRaw) ? Math.trunc(positionRaw) : 0;
+        const depth = Number.isFinite(depthRaw) ? Math.max(0, Math.trunc(depthRaw)) : 0;
+        const role = Number.isFinite(roleRaw) ? Math.max(0, Math.min(2, Math.trunc(roleRaw))) : 0;
+        const order = Number.isFinite(orderRaw) ? orderRaw : idx;
+        return {
+          content,
+          position,
+          depth,
+          role,
+          order,
+          _seq: idx,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  formatWorldPrompt(worldId, label) {
+    const entries = this.collectWorldEntries(worldId, label);
+    if (!entries.length) return '';
+    return entries.map(e => e.content).join('\n\n');
   }
 
   /**

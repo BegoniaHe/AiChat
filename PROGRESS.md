@@ -1,5 +1,48 @@
 # 開發進度追蹤（必更新）
 
+## 2026-01-02 19:47
+- 通用设定新增：Persona 绑定联系人/聊天记录开关（默认开启），切换 Persona 自动切换联系人/历史/动态/摘要。
+- 通用设定新增：记忆存储方式（摘要 / 记忆表格）切换；表格模式关闭摘要注入与摘要生成。
+- 摘要页面适配：好友/群聊设置根据记忆模式切换显示摘要区或记忆表格占位提示。
+- 存储隔离：Chat/Contacts/Groups/Moments/动态摘要按 Persona scope 分库，兼容旧未分 Persona 数据回填，世界书会话映射同步隔离。
+- 修改/新增：
+  - `src/scripts/storage/store-scope.js`
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/storage/contacts-store.js`
+  - `src/scripts/storage/group-store.js`
+  - `src/scripts/storage/moments-store.js`
+  - `src/scripts/storage/moment-summary-store.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/contact-settings-panel.js`
+  - `src/scripts/ui/group-chat-panels.js`
+
+## 2026-01-02 13:05
+- 聊天提示词：按位置拆分注入（IN_PROMPT/BEFORE_PROMPT/SYSTEM_DEPTH_1/IN_CHAT），SYSTEM_DEPTH_1 在 history 后追加。
+- 世界书 position：非 OpenAI context 模板含 description/scenario/examples 时，按占位符前后插入；缺失时回退包裹 story_string。
+- worldInfo prompt-only 正则：非 OpenAI 路径也应用。
+- 修改：
+  - `src/scripts/ui/bridge.js`
+
+## 2026-01-02 12:05
+- 世界书 @Depth 条目：非 OpenAI prompt 也注入 history，避免仅 OpenAI 生效。
+- 修改：
+  - `src/scripts/ui/bridge.js`
+
+## 2026-01-02 11:26
+- 世界书注入位置：按 position 分桶并插入到 prompt 标记（char/scenario/examples），@Depth 条目注入历史。
+- worldInfo marker 仍保留用于默认条目与 chat_guide。
+- 修改：
+  - `src/scripts/ui/bridge.js`
+
+## 2026-01-02 11:15
+- 世界书匹配：补齐 ST 风格触发逻辑（scanDepth、选择性逻辑、二级关键词、全词匹配、概率）。
+- 世界书仍在 worldInfo marker 注入，未变更 position/depth 的插入位置。
+- 修改：
+  - `src/scripts/ui/bridge.js`
+
 ## 2026-01-02 10:55
 - 对话解析：群聊/私聊标签不符合标准格式时，回退为“匹配现有群/联系人名”后再解析。
 - 修改：

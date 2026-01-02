@@ -5,6 +5,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 
 const safeInvoke = async (cmd, args) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
@@ -15,31 +16,53 @@ const safeInvoke = async (cmd, args) => {
     return invoker(cmd, args);
 };
 
-const STORE_KEY = 'contact_groups_v1';
+const BASE_STORE_KEY = 'contact_groups_v1';
+
+const readLocalState = (key) => {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+};
 
 export class GroupStore {
-    constructor() {
+    constructor({ scopeId = '' } = {}) {
+        this.scopeId = normalizeScopeId(scopeId);
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this.state = this._load();
         this.ready = this._hydrateFromDisk();
     }
 
     _load() {
-        try {
-            const raw = localStorage.getItem(STORE_KEY);
-            return raw ? JSON.parse(raw) : { groups: [] };
-        } catch (err) {
-            logger.warn('group store load failed, reset', err);
-            return { groups: [] };
+        const data = readLocalState(this.storeKey);
+        if (data) return data;
+        if (this.scopeId) {
+            const legacy = readLocalState(BASE_STORE_KEY);
+            if (legacy) return legacy;
         }
+        return { groups: [] };
     }
 
     async _hydrateFromDisk() {
         try {
-            const kv = await safeInvoke('load_kv', { name: STORE_KEY });
+            let kv = await safeInvoke('load_kv', { name: this.storeKey });
+            if (!kv && this.scopeId) {
+                const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (legacy && Array.isArray(legacy.groups)) {
+                    kv = legacy;
+                    try {
+                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                    } catch (err) {
+                        logger.debug('group store legacy migrate failed (可能非 Tauri)', err);
+                    }
+                }
+            }
             if (kv && Array.isArray(kv.groups)) {
                 this.state = kv;
                 try {
-                    localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+                    localStorage.setItem(this.storeKey, JSON.stringify(this.state));
                 } catch (err) {
                     logger.warn('group store hydrate -> localStorage failed', err);
                 }
@@ -51,14 +74,24 @@ export class GroupStore {
     }
 
     _persist() {
-        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+        safeInvoke('save_kv', { name: this.storeKey, data: this.state }).catch((err) => {
             logger.debug('group store save_kv failed (可能非 Tauri)', err);
         });
         try {
-            localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+            localStorage.setItem(this.storeKey, JSON.stringify(this.state));
         } catch (err) {
             logger.warn('group store persist -> localStorage failed', err);
         }
+    }
+
+    async setScope(scopeId = '') {
+        const nextScope = normalizeScopeId(scopeId);
+        if (nextScope === this.scopeId) return this.ready;
+        this.scopeId = nextScope;
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this.state = this._load();
+        this.ready = this._hydrateFromDisk();
+        return this.ready;
     }
 
     /**

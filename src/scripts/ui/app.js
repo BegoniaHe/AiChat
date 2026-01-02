@@ -5,6 +5,7 @@ import { MomentsStore } from '../storage/moments-store.js';
 import { MomentSummaryStore } from '../storage/moment-summary-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
 import { appSettings } from '../storage/app-settings.js';
+import { normalizeScopeId } from '../storage/store-scope.js';
 import { logger } from '../utils/logger.js';
 import { initMediaAssets, listMediaAssets, resolveMediaAsset, isAssetRef, isLikelyUrl } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
@@ -55,6 +56,11 @@ const initApp = async () => {
     }
   };
   applyCreativeWideSetting();
+  const getMemoryStorageMode = () => {
+    const mode = String(appSettings.get().memoryStorageMode || 'summary').toLowerCase();
+    return mode === 'table' ? 'table' : 'summary';
+  };
+  const isSummaryMemoryEnabled = () => getMemoryStorageMode() === 'summary';
   let updateStickerPreview = () => {};
   const originalSetInputText = ui.setInputText.bind(ui);
   ui.setInputText = (val) => {
@@ -83,15 +89,29 @@ const initApp = async () => {
     window.appBridge.setMomentSummaryStore?.(momentSummaryStore);
   } catch {}
   const personaStore = new PersonaStore();
+  let activePersonaScopeKey = '';
+  const getPersonaScopeKey = (personaId) => {
+    const settings = appSettings.get();
+    if (settings.personaBindContacts === false) return '';
+    const raw = personaId || personaStore.getActive?.()?.id || 'default';
+    return normalizeScopeId(raw);
+  };
   let lastMomentRawReply = '';
   let lastMomentRawMeta = null;
   const worldPanel = new WorldPanel({ contactsStore, getSessionId: () => chatStore.getCurrent() });
-  await chatStore.ready;
-  await contactsStore.ready;
-  await groupStore.ready;
-  await momentsStore.ready;
-  await momentSummaryStore.ready;
   await personaStore.ready;
+  const initialScopeKey = getPersonaScopeKey();
+  await Promise.all([
+    chatStore.setScope?.(initialScopeKey),
+    contactsStore.setScope?.(initialScopeKey),
+    groupStore.setScope?.(initialScopeKey),
+    momentsStore.setScope?.(initialScopeKey),
+    momentSummaryStore.setScope?.(initialScopeKey),
+  ]);
+  activePersonaScopeKey = initialScopeKey;
+  try {
+    window.appBridge?.setPersonaScope?.(initialScopeKey);
+  } catch {}
   await initMediaAssets();
   await window.appBridge?.regex?.ready;
   await window.appBridge?.presets?.ready;
@@ -246,18 +266,62 @@ const initApp = async () => {
     } catch {}
   };
 
+  const applyPersonaScope = async ({ personaId = null, force = false } = {}) => {
+    const nextKey = getPersonaScopeKey(personaId);
+    if (!force && nextKey === activePersonaScopeKey) return false;
+    activePersonaScopeKey = nextKey;
+    await Promise.all([
+      chatStore.setScope?.(nextKey),
+      contactsStore.setScope?.(nextKey),
+      groupStore.setScope?.(nextKey),
+      momentsStore.setScope?.(nextKey),
+      momentSummaryStore.setScope?.(nextKey),
+    ]);
+    try {
+      window.appBridge?.setPersonaScope?.(nextKey);
+    } catch {}
+    try {
+      window.appBridge?.setActiveSession?.(chatStore.getCurrent());
+    } catch {}
+    const sid = chatStore.getCurrent();
+    const contact = contactsStore.getContact(sid);
+    if (typeof isChatRoomVisible === 'function' && isChatRoomVisible()) {
+      enterChatRoom(sid, contact?.name || sid, chatOriginPage);
+    } else {
+      refreshChatAndContacts({ immediate: true });
+    }
+    try {
+      if (activePage === 'moments') momentsPanel.render({ preserveScroll: false });
+    } catch {}
+    return true;
+  };
+
   const personaPanel = new PersonaPanel({
     personaStore,
     chatStore,
     contactsStore,
     getSessionId: () => chatStore.getCurrent(),
-    onPersonaChanged: () => {
+    onPersonaChanged: async () => {
+      await applyPersonaScope({ personaId: personaStore.getActive?.()?.id });
       syncUserPersonaUI(chatStore.getCurrent());
       refreshChatAndContacts();
     },
   });
   // Initial sync
   syncUserPersonaUI(chatStore.getCurrent());
+
+  window.addEventListener('app-settings-changed', async (ev) => {
+    const key = String(ev?.detail?.key || '').trim();
+    if (!key) return;
+    if (key === 'personaBindContacts') {
+      await applyPersonaScope({ personaId: personaStore.getActive?.()?.id, force: true });
+      refreshChatAndContacts({ immediate: true });
+      return;
+    }
+    if (key === 'memoryStorageMode') {
+      refreshChatAndContacts({ immediate: true });
+    }
+  });
 
   const variablePanel = new VariablePanel({
     chatStore,
@@ -2845,6 +2909,7 @@ ${listPart || '-（无）'}
   // Summary compaction runner (used by auto-trigger and manual "↻" button in settings)
   const summaryCompacting = new Set();
   const requestSummaryCompaction = (sid, { force = false } = {}) => {
+    if (!isSummaryMemoryEnabled()) return Promise.resolve(false);
     const sessionId = String(sid || '').trim();
     if (!sessionId) return Promise.resolve(false);
     if (summaryCompacting.has(sessionId)) return Promise.resolve(false);
@@ -3902,6 +3967,7 @@ ${listPart || '-（无）'}
         disableScenarioHint: Boolean(creativeMode),
         disableMomentSummary: Boolean(creativeMode),
         disablePhoneFormat: Boolean(creativeMode),
+        memoryStorageMode: getMemoryStorageMode(),
       },
       group: isGroupChat
         ? {
@@ -3997,7 +4063,7 @@ ${listPart || '-（无）'}
           Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
         const protocolEnabled = !creativeMode && (momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled));
         // Always include summary request prompt; summary (if present) will be extracted from raw response.
-        disableSummaryForThis = false;
+        disableSummaryForThis = !isSummaryMemoryEnabled();
 
         if (creativeMode) {
           // 创意写作模式：完整长文输出，不解析线上格式
@@ -4033,14 +4099,20 @@ ${listPart || '-（无）'}
             streamCtrl.update(full);
           }
           chatStore.setLastRawResponse(full, sessionId);
-          const { text: stripped, summary } = extractSummaryBlock(full);
-          if (summary) {
-            try {
-              chatStore.addSummary(summary, sessionId);
-            } catch {}
-            try {
-              requestSummaryCompaction(sessionId);
-            } catch {}
+          let stripped = full;
+          let summary = '';
+          if (isSummaryMemoryEnabled()) {
+            const parsedSummary = extractSummaryBlock(full);
+            stripped = parsedSummary.text;
+            summary = parsedSummary.summary;
+            if (summary) {
+              try {
+                chatStore.addSummary(summary, sessionId);
+              } catch {}
+              try {
+                requestSummaryCompaction(sessionId);
+              } catch {}
+            }
           }
           const rawSource = normalizeCreativeLineBreaks(stripped);
           const reasoningParsed = extractReasoningFromContent(rawSource, { depth: 0, strict: true });
@@ -4202,14 +4274,16 @@ ${listPart || '-（无）'}
           if (activeGeneration?.cancelled) return;
           ui.hideTyping();
           chatStore.setLastRawResponse(fullRaw, sessionId);
-          const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
-          if (protocolSummary) {
-            try {
-              for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
-            } catch {}
-            try {
-              for (const sid of summarySessionIds) requestSummaryCompaction(sid);
-            } catch {}
+          if (isSummaryMemoryEnabled()) {
+            const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
+            if (protocolSummary) {
+              try {
+                for (const sid of summarySessionIds) chatStore.addSummary(protocolSummary, sid);
+              } catch {}
+              try {
+                for (const sid of summarySessionIds) requestSummaryCompaction(sid);
+              } catch {}
+            }
           }
           if (mutatedMoments) {
             try {
@@ -4459,11 +4533,15 @@ ${listPart || '-（无）'}
           }
           if (activeGeneration?.cancelled) return;
           chatStore.setLastRawResponse(full, sessionId);
-          const { text: stripped, summary } = extractSummaryBlock(full);
-          if (summary) {
-            try {
-              chatStore.addSummary(summary, sessionId);
-            } catch {}
+          let stripped = full;
+          if (isSummaryMemoryEnabled()) {
+            const parsedSummary = extractSummaryBlock(full);
+            stripped = parsedSummary.text;
+            if (parsedSummary.summary) {
+              try {
+                chatStore.addSummary(parsedSummary.summary, sessionId);
+              } catch {}
+            }
           }
           let stored = sanitizeAssistantReplyText(stripped, userName);
           const reasoningParsed = extractReasoningFromContent(stored, { depth: 0, strict: true });
@@ -4508,14 +4586,20 @@ ${listPart || '-（无）'}
           Boolean(sysp?.moment_create_enabled) && String(sysp?.moment_create_rules || '').trim().length > 0;
         const protocolEnabled = !creativeMode && (momentCreateEnabled || (isGroupChat ? groupEnabled : privateEnabled));
         // Always include summary request prompt; summary (if present) will be extracted from raw response.
-        disableSummaryForThis = false;
+        disableSummaryForThis = !isSummaryMemoryEnabled();
 
         ui.showTyping(assistantAvatar);
         const resultRaw = await window.appBridge.generate(text, llmContext(text));
         sendSucceeded = true;
         ui.hideTyping();
         chatStore.setLastRawResponse(resultRaw, sessionId);
-        const { text: stripped, summary: protocolSummary } = extractSummaryBlock(resultRaw);
+        let stripped = resultRaw;
+        let protocolSummary = '';
+        if (isSummaryMemoryEnabled()) {
+          const parsedSummary = extractSummaryBlock(resultRaw);
+          stripped = parsedSummary.text;
+          protocolSummary = parsedSummary.summary;
+        }
         const summarySessionIds = new Set([sessionId]);
         if (creativeMode) {
           if (protocolSummary) {

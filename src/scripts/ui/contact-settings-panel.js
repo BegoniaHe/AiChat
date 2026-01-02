@@ -4,6 +4,12 @@
  */
 import { logger } from '../utils/logger.js';
 import { avatarDataUrlFromFile } from '../utils/image.js';
+import { appSettings } from '../storage/app-settings.js';
+
+const getMemoryStorageMode = () => {
+    const mode = String(appSettings.get().memoryStorageMode || 'summary').toLowerCase();
+    return mode === 'table' ? 'table' : 'summary';
+};
 
 export class ContactSettingsPanel {
     constructor({ contactsStore, chatStore, getSessionId, onSaved } = {}) {
@@ -19,6 +25,8 @@ export class ContactSettingsPanel {
         this.archivesList = null;
         this.summariesList = null;
         this.compactedList = null;
+        this.summarySection = null;
+        this.memoryTableSection = null;
         this.currentAvatar = '';
         this.summaryBatchMode = false;
         this.summarySelectedKeys = new Set();
@@ -33,6 +41,7 @@ export class ContactSettingsPanel {
 
     show() {
         if (!this.panel) this.createUI();
+        this.applyMemoryMode();
         this.populate();
         this.renderArchives();
         this.renderSummaries();
@@ -44,6 +53,12 @@ export class ContactSettingsPanel {
     hide() {
         if (this.overlay) this.overlay.style.display = 'none';
         if (this.panel) this.panel.style.display = 'none';
+    }
+
+    applyMemoryMode() {
+        const summaryOn = getMemoryStorageMode() === 'summary';
+        if (this.summarySection) this.summarySection.style.display = summaryOn ? 'block' : 'none';
+        if (this.memoryTableSection) this.memoryTableSection.style.display = summaryOn ? 'none' : 'block';
     }
 
     createUI() {
@@ -111,6 +126,7 @@ export class ContactSettingsPanel {
                     <div style="font-size:12px; color:#64748b; margin-bottom:6px;">历史存档（点击加载）</div>
                     <div id="contact-archives-list" style="max-height:160px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#f9f9f9; padding:0;"></div>
 
+                    <div id="contact-summary-section">
 	                    <div style="margin-top:14px;">
 	                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
 	                            <div style="font-size:12px; color:#64748b;">摘要（每次对话保存一条）</div>
@@ -139,6 +155,14 @@ export class ContactSettingsPanel {
                             </div>
                             <div id="contact-compacted-summary" style="max-height:200px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#fff; padding:0;"></div>
                         </div>
+                    </div>
+
+                    <div id="contact-memory-table-section" style="display:none; margin-top:14px; padding:12px; border:1px dashed #e2e8f0; border-radius:12px; background:#f8fafc;">
+                        <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">记忆表格</div>
+                        <div style="font-size:12px; color:#64748b; line-height:1.4;">
+                            记忆表格模式已开启。后续记忆表格编辑界面将展示在这里（与当前联系人绑定）。
+                        </div>
+                    </div>
 	                </div>
 
                 <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
@@ -158,6 +182,8 @@ export class ContactSettingsPanel {
         this.archivesList = this.panel.querySelector('#contact-archives-list');
         this.summariesList = this.panel.querySelector('#contact-summaries-list');
         this.compactedList = this.panel.querySelector('#contact-compacted-summary');
+        this.summarySection = this.panel.querySelector('#contact-summary-section');
+        this.memoryTableSection = this.panel.querySelector('#contact-memory-table-section');
         this.summariesBatchBar = this.panel.querySelector('#contact-summaries-batchbar');
 
         this.panel.querySelector('#contact-settings-close').onclick = () => this.hide();
@@ -199,6 +225,12 @@ export class ContactSettingsPanel {
             this.renderCompactedSummary();
         };
 
+        window.addEventListener('memory-storage-mode-changed', () => {
+            try {
+                if (!this.panel || this.panel.style.display === 'none') return;
+                this.applyMemoryMode();
+            } catch {}
+        });
         window.addEventListener('chatapp-summaries-updated', (ev) => {
             try {
                 if (!this.panel || this.panel.style.display === 'none') return;

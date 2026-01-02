@@ -6,6 +6,12 @@
 
 import { logger } from '../utils/logger.js';
 import { avatarDataUrlFromFile } from '../utils/image.js';
+import { appSettings } from '../storage/app-settings.js';
+
+const getMemoryStorageMode = () => {
+    const mode = String(appSettings.get().memoryStorageMode || 'summary').toLowerCase();
+    return mode === 'table' ? 'table' : 'summary';
+};
 
 const genGroupId = () => `group:${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
@@ -272,6 +278,8 @@ export class GroupSettingsPanel {
         this.archivesList = null;
         this.summariesList = null;
         this.compactedList = null;
+        this.summarySection = null;
+        this.memoryTableSection = null;
         this.summaryBatchMode = false;
         this.summarySelectedKeys = new Set();
         this.summariesBatchBar = null;
@@ -292,6 +300,7 @@ export class GroupSettingsPanel {
         if (!id) return;
         if (!this.panel) this.createUI();
         this.groupId = id;
+        this.applyMemoryMode();
         this.populate();
         this.renderArchives();
         this.renderSummaries();
@@ -303,6 +312,12 @@ export class GroupSettingsPanel {
     hide() {
         if (this.overlay) this.overlay.style.display = 'none';
         if (this.panel) this.panel.style.display = 'none';
+    }
+
+    applyMemoryMode() {
+        const summaryOn = getMemoryStorageMode() === 'summary';
+        if (this.summarySection) this.summarySection.style.display = summaryOn ? 'block' : 'none';
+        if (this.memoryTableSection) this.memoryTableSection.style.display = summaryOn ? 'none' : 'block';
     }
 
     createUI() {
@@ -363,7 +378,7 @@ export class GroupSettingsPanel {
                         <div id="group-archives-list" style="max-height:160px; overflow-y:auto; border:1px solid #eee; border-radius:8px; background:#f9f9f9; padding:0;"></div>
                     </div>
 
-                    <div style="margin-top:18px; border-top:1px solid rgba(0,0,0,0.06); padding-top:14px;">
+                    <div id="group-summary-section" style="margin-top:18px; border-top:1px solid rgba(0,0,0,0.06); padding-top:14px;">
                         <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
                             <div style="font-weight:800; color:#0f172a;">摘要</div>
                             <div style="display:flex; align-items:center; gap:8px;">
@@ -378,7 +393,6 @@ export class GroupSettingsPanel {
                             <button id="group-summaries-batch-cancel" type="button" title="退出批量" style="width:34px; height:30px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#0f172a; font-size:18px;">×</button>
                         </div>
                         <div id="group-summaries-list" style="max-height:180px; overflow-y:auto; border:1px solid #eee; border-radius:10px; background:#fff; padding:0;"></div>
-                    </div>
 
 	                    <div style="margin-top:14px;">
 	                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
@@ -393,6 +407,14 @@ export class GroupSettingsPanel {
 	                        <div style="font-size:12px; color:#64748b; margin-bottom:8px;">摘要总字数超过阈值会自动生成大总结（与聊天存档绑定）</div>
 	                        <div id="group-compacted-summary" style="max-height:220px; overflow-y:auto; border:1px solid #eee; border-radius:10px; background:#fff; padding:0;"></div>
 	                    </div>
+                    </div>
+
+                    <div id="group-memory-table-section" style="display:none; margin-top:18px; padding:12px; border:1px dashed #e2e8f0; border-radius:12px; background:#f8fafc;">
+                        <div style="font-weight:800; color:#0f172a; margin-bottom:6px;">记忆表格</div>
+                        <div style="font-size:12px; color:#64748b; line-height:1.4;">
+                            记忆表格模式已开启。后续记忆表格编辑界面将展示在这里（与当前群聊绑定）。
+                        </div>
+                    </div>
 	            </div>
 
             <div style="padding:14px 16px; border-top:1px solid rgba(0,0,0,0.06); background:rgba(248,250,252,0.92); display:flex; gap:10px;">
@@ -423,6 +445,8 @@ export class GroupSettingsPanel {
         this.archivesList = this.panel.querySelector('#group-archives-list');
         this.summariesList = this.panel.querySelector('#group-summaries-list');
         this.compactedList = this.panel.querySelector('#group-compacted-summary');
+        this.summarySection = this.panel.querySelector('#group-summary-section');
+        this.memoryTableSection = this.panel.querySelector('#group-memory-table-section');
         this.summariesBatchBar = this.panel.querySelector('#group-summaries-batchbar');
 
         this.panel.querySelector('#group-settings-close').onclick = () => this.hide();
@@ -458,6 +482,12 @@ export class GroupSettingsPanel {
             this.renderCompactedSummary();
         };
 
+        window.addEventListener('memory-storage-mode-changed', () => {
+            try {
+                if (!this.panel || this.panel.style.display === 'none') return;
+                this.applyMemoryMode();
+            } catch {}
+        });
         window.addEventListener('chatapp-summaries-updated', (ev) => {
             try {
                 if (!this.panel || this.panel.style.display === 'none') return;

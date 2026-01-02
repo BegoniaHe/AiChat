@@ -11,6 +11,8 @@ const defaults = {
   reasoningShowHidden: false,
   reasoningAddToPrompts: false,
   reasoningMaxAdditions: 1,
+  personaBindContacts: true,
+  memoryStorageMode: 'summary',
 };
 
 const readSettings = () => {

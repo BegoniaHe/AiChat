@@ -1,7 +1,17 @@
 import { safeInvoke } from '../utils/tauri.js';
 import { logger } from '../utils/logger.js';
+import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 
-const STORE_KEY = 'moment_summary_store_v1';
+const BASE_STORE_KEY = 'moment_summary_store_v1';
+
+const readLocalState = (key) => {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+};
 
 const clampString = (raw, max = 120_000) => {
     const s = String(raw || '');
@@ -51,7 +61,9 @@ const makeDefaultState = () => ({
 });
 
 export class MomentSummaryStore {
-    constructor() {
+    constructor({ scopeId = '' } = {}) {
+        this.scopeId = normalizeScopeId(scopeId);
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this.state = makeDefaultState();
         this.isLoaded = false;
         this.ready = this.load();
@@ -60,10 +72,23 @@ export class MomentSummaryStore {
     async load() {
         if (this.isLoaded) return this.state;
         try {
-            let data = await safeInvoke('load_kv', { name: STORE_KEY });
+            let data = await safeInvoke('load_kv', { name: this.storeKey });
+            if (!data && this.scopeId) {
+                const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (legacy && typeof legacy === 'object') {
+                    data = legacy;
+                    try {
+                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                    } catch (err) {
+                        logger.debug('moment summary store legacy migrate failed (可能非 Tauri)', err);
+                    }
+                }
+            }
             if (!data) {
-                const raw = localStorage.getItem(STORE_KEY);
-                if (raw) data = JSON.parse(raw);
+                data = readLocalState(this.storeKey);
+            }
+            if (!data && this.scopeId) {
+                data = readLocalState(BASE_STORE_KEY);
             }
             if (!data || typeof data !== 'object') {
                 this.state = makeDefaultState();
@@ -94,13 +119,24 @@ export class MomentSummaryStore {
 
     _persist() {
         try {
-            localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+            localStorage.setItem(this.storeKey, JSON.stringify(this.state));
         } catch (err) {
             logger.warn('moment summary store persist -> localStorage failed', err);
         }
-        safeInvoke('save_kv', { name: STORE_KEY, data: this.state }).catch((err) => {
+        safeInvoke('save_kv', { name: this.storeKey, data: this.state }).catch((err) => {
             logger.warn('moment summary store save_kv failed (可能非 Tauri)', err);
         });
+    }
+
+    async setScope(scopeId = '') {
+        const nextScope = normalizeScopeId(scopeId);
+        if (nextScope === this.scopeId) return this.ready;
+        this.scopeId = nextScope;
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this.state = makeDefaultState();
+        this.isLoaded = false;
+        this.ready = this.load();
+        return this.ready;
     }
 
     getSummaries() {

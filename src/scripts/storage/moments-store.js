@@ -5,6 +5,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 
 const isQuotaError = (err) => {
     try {
@@ -42,7 +43,16 @@ const safeInvoke = async (cmd, args) => {
     return invoker(cmd, args);
 };
 
-const STORE_KEY = 'moments_store_v1';
+const BASE_STORE_KEY = 'moments_store_v1';
+
+const readLocalState = (key) => {
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+};
 
 const clone = (v) => {
     try {
@@ -56,7 +66,9 @@ const genId = (prefix = 'moment') => `${prefix}-${Date.now()}-${Math.random().to
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj || {}, key);
 
 export class MomentsStore {
-    constructor() {
+    constructor({ scopeId = '' } = {}) {
+        this.scopeId = normalizeScopeId(scopeId);
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this.state = this._load();
         this._normalizeState();
         this.ready = this._hydrateFromDisk();
@@ -90,29 +102,40 @@ export class MomentsStore {
     }
 
     _load() {
-        try {
-            const raw = localStorage.getItem(STORE_KEY);
-            return raw ? JSON.parse(raw) : { moments: [] };
-        } catch (err) {
-            logger.warn('moments store load failed, reset', err);
-            return { moments: [] };
+        const data = readLocalState(this.storeKey);
+        if (data) return data;
+        if (this.scopeId) {
+            const legacy = readLocalState(BASE_STORE_KEY);
+            if (legacy) return legacy;
         }
+        return { moments: [] };
     }
 
     async _hydrateFromDisk() {
         try {
-            const kv = await safeInvoke('load_kv', { name: STORE_KEY });
+            let kv = await safeInvoke('load_kv', { name: this.storeKey });
+            if (!kv && this.scopeId) {
+                const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (legacy && typeof legacy === 'object' && Array.isArray(legacy.moments)) {
+                    kv = legacy;
+                    try {
+                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                    } catch (err) {
+                        logger.debug('moments store legacy migrate failed (可能非 Tauri)', err);
+                    }
+                }
+            }
             if (kv && typeof kv === 'object' && Array.isArray(kv.moments)) {
                 this.state = kv;
                 this._normalizeState();
-                try { localStorage.setItem(STORE_KEY, JSON.stringify(this.state)); } catch (err) {
+                try { localStorage.setItem(this.storeKey, JSON.stringify(this.state)); } catch (err) {
                     if (isQuotaError(err)) {
                         this._lsDisabled = true;
                         if (!this._lsQuotaWarned) {
                             this._lsQuotaWarned = true;
                             logger.warn('moments store: localStorage quota exceeded; will rely on Tauri KV (data should remain after restart).', err);
                         }
-                        try { localStorage.removeItem(STORE_KEY); } catch {}
+                        try { localStorage.removeItem(this.storeKey); } catch {}
                     } else {
                         logger.warn('moments store hydrate -> localStorage failed', err);
                     }
@@ -149,14 +172,14 @@ export class MomentsStore {
 
     _persist() {
         if (!this._lsDisabled) {
-            try { localStorage.setItem(STORE_KEY, JSON.stringify(this.state)); } catch (err) {
+            try { localStorage.setItem(this.storeKey, JSON.stringify(this.state)); } catch (err) {
                 if (isQuotaError(err)) {
                     this._lsDisabled = true;
                     if (!this._lsQuotaWarned) {
                         this._lsQuotaWarned = true;
                         logger.warn('moments store: localStorage quota exceeded; disabling localStorage writes and relying on Tauri KV.', err);
                     }
-                    try { localStorage.removeItem(STORE_KEY); } catch {}
+                    try { localStorage.removeItem(this.storeKey); } catch {}
                 } else {
                     logger.warn('moments store persist -> localStorage failed', err);
                 }
@@ -164,7 +187,7 @@ export class MomentsStore {
         }
         this._pendingDiskSave = this._pendingDiskSave
             .catch(() => {}) // keep chain alive
-            .then(() => safeInvoke('save_kv', { name: STORE_KEY, data: this.state }))
+            .then(() => safeInvoke('save_kv', { name: this.storeKey, data: this.state }))
             .then(() => { this.lastDiskError = ''; })
             .catch((err) => {
                 this.lastDiskError = String(err?.message || err || '');
@@ -175,6 +198,22 @@ export class MomentsStore {
     async flush() {
         await this._pendingDiskSave.catch(() => {});
         return true;
+    }
+
+    async setScope(scopeId = '') {
+        const nextScope = normalizeScopeId(scopeId);
+        if (nextScope === this.scopeId) return this.ready;
+        await this.flush();
+        this.scopeId = nextScope;
+        this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this._lsDisabled = false;
+        this._lsQuotaWarned = false;
+        this._hydrateRetryCount = 0;
+        this.lastDiskError = '';
+        this.state = this._load();
+        this._normalizeState();
+        this.ready = this._hydrateFromDisk();
+        return this.ready;
     }
 
     list() {

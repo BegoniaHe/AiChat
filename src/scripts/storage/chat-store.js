@@ -3,6 +3,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 const MAX_PERSIST_MESSAGES_PER_SESSION = 400;
 const MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION = 600_000;
 const MAX_PERSIST_ARCHIVES_PER_SESSION = 6;
@@ -252,6 +253,15 @@ const safeInvoke = async (cmd, args) => {
   return invoker(cmd, args);
 };
 
+const readLocalState = (key) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
 const ensureId = msg => {
   if (!msg) return msg;
   if (!msg.id) {
@@ -263,10 +273,12 @@ const ensureId = msg => {
   return msg;
 };
 
-const STORE_KEY = 'chat_store_v1';
+const BASE_STORE_KEY = 'chat_store_v1';
 
 export class ChatStore {
-  constructor() {
+  constructor({ scopeId = '' } = {}) {
+    this.scopeId = normalizeScopeId(scopeId);
+    this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
     this.state = sanitizeStateForPersist(this._load());
     this.currentId = this.state.currentId || 'default';
     this.ready = this._hydrateFromDisk();
@@ -316,23 +328,34 @@ export class ChatStore {
   }
 
   _load() {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      return raw ? JSON.parse(raw) : { sessions: {}, currentId: 'default' };
-    } catch (e) {
-      logger.warn('chat store load failed, reset', e);
-      return { sessions: {}, currentId: 'default' };
+    const data = readLocalState(this.storeKey);
+    if (data) return data;
+    if (this.scopeId) {
+      const legacy = readLocalState(BASE_STORE_KEY);
+      if (legacy) return legacy;
     }
+    return { sessions: {}, currentId: 'default' };
   }
 
   async _hydrateFromDisk() {
     try {
-      const kv = await safeInvoke('load_kv', { name: STORE_KEY });
+      let kv = await safeInvoke('load_kv', { name: this.storeKey });
+      if (!kv && this.scopeId) {
+        const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+        if (legacy && legacy.sessions) {
+          kv = legacy;
+          try {
+            await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+          } catch (err) {
+            logger.debug('chat store legacy migrate failed (可能非 Tauri)', err);
+          }
+        }
+      }
       if (kv && kv.sessions) {
         this.state = sanitizeStateForPersist(kv);
         this.currentId = kv.currentId || 'default';
         try {
-          localStorage.setItem(STORE_KEY, JSON.stringify(this.state));
+          localStorage.setItem(this.storeKey, JSON.stringify(this.state));
         } catch (err) {
           if (isQuotaError(err)) {
             this._lsDisabled = true;
@@ -344,7 +367,7 @@ export class ChatStore {
               );
             }
             try {
-              localStorage.removeItem(STORE_KEY);
+              localStorage.removeItem(this.storeKey);
             } catch {}
           } else {
             logger.warn('chat store hydrate -> localStorage failed', err);
@@ -380,7 +403,7 @@ export class ChatStore {
     this._lsTimer = setTimeout(() => {
       if (this._lsDisabled) return;
       try {
-        localStorage.setItem(STORE_KEY, JSON.stringify(persistable()));
+        localStorage.setItem(this.storeKey, JSON.stringify(persistable()));
       } catch (err) {
         if (isQuotaError(err)) {
           this._lsDisabled = true;
@@ -392,7 +415,7 @@ export class ChatStore {
             );
           }
           try {
-            localStorage.removeItem(STORE_KEY);
+            localStorage.removeItem(this.storeKey);
           } catch {}
         } else {
           logger.warn('chat store persist -> localStorage failed', err);
@@ -403,10 +426,61 @@ export class ChatStore {
     // 2. Slow path: Schedule disk save (2000ms debounce) to avoid frequent fsync on Android
     if (this._diskTimer) clearTimeout(this._diskTimer);
     this._diskTimer = setTimeout(() => {
-      safeInvoke('save_kv', { name: STORE_KEY, data: persistable() }).catch(err => {
+      safeInvoke('save_kv', { name: this.storeKey, data: persistable() }).catch(err => {
         logger.debug('chat store save_kv failed (可能非 Tauri)', err);
       });
     }, 2000);
+  }
+
+  async flush() {
+    const data = sanitizeStateForPersist(this.state);
+    try {
+      if (!this._lsDisabled) {
+        localStorage.setItem(this.storeKey, JSON.stringify(data));
+      }
+    } catch (err) {
+      if (isQuotaError(err)) {
+        this._lsDisabled = true;
+        if (!this._lsQuotaWarned) {
+          this._lsQuotaWarned = true;
+          logger.warn(
+            'chat store: localStorage quota exceeded; disabling localStorage writes and relying on Tauri KV.',
+            err,
+          );
+        }
+        try {
+          localStorage.removeItem(this.storeKey);
+        } catch {}
+      } else {
+        logger.warn('chat store flush -> localStorage failed', err);
+      }
+    }
+    try {
+      await safeInvoke('save_kv', { name: this.storeKey, data });
+    } catch (err) {
+      logger.debug('chat store flush save_kv failed (可能非 Tauri)', err);
+    }
+  }
+
+  async setScope(scopeId = '') {
+    const nextScope = normalizeScopeId(scopeId);
+    if (nextScope === this.scopeId) return this.ready;
+    try {
+      await this.flush();
+    } catch {}
+    if (this._lsTimer) clearTimeout(this._lsTimer);
+    if (this._diskTimer) clearTimeout(this._diskTimer);
+    this._lsTimer = null;
+    this._diskTimer = null;
+    this.scopeId = nextScope;
+    this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+    this._lsDisabled = false;
+    this._lsQuotaWarned = false;
+    this._hydrateRetryCount = 0;
+    this.state = sanitizeStateForPersist(this._load());
+    this.currentId = this.state.currentId || 'default';
+    this.ready = this._hydrateFromDisk();
+    return this.ready;
   }
 
   _ensureRawOriginalRef(msg, sessionId) {
