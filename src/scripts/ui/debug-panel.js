@@ -13,6 +13,7 @@ export class DebugPanel {
         this.autoHideTimer = null;
         this.toggleBtn = null;
         this.enabled = false;
+        this.seenMessages = new Set();
     }
 
     init() {
@@ -122,10 +123,14 @@ export class DebugPanel {
         const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
         const prefix = type === 'error' ? '❌' : type === 'warn' ? '⚠️' : '✓';
         const color = type === 'error' ? '#ff0000' : type === 'warn' ? '#ffaa00' : '#00ff00';
+        const key = `${type}|${message}`;
+        if (this.seenMessages.has(key)) return;
+        this.seenMessages.add(key);
 
-        this.logs.push({ timestamp, message, color, prefix });
+        this.logs.push({ timestamp, message, color, prefix, key });
         if (this.logs.length > this.maxLogs) {
-            this.logs.shift();
+            const removed = this.logs.shift();
+            if (removed?.key) this.seenMessages.delete(removed.key);
         }
 
         this.render();
@@ -149,6 +154,7 @@ export class DebugPanel {
 
     clear() {
         this.logs = [];
+        this.seenMessages.clear();
         if (this.panel) {
             this.panel.innerHTML = '';
         }

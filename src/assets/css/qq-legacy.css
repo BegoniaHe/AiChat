@@ -1173,9 +1173,9 @@ body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_msgdi
   bottom: calc(68px + env(safe-area-inset-bottom, 0px));
   width: 260px;
   max-width: 72%;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(25, 154, 255, 0.25);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.14);
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(25, 154, 255, 0.18);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.1);
   border-radius: 14px;
   padding: 8px 10px;
   display: none;
@@ -1208,8 +1208,8 @@ body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_msgdi
 }
 
 .pending-float-item {
-  border: 1px solid rgba(25, 154, 255, 0.18);
-  background: rgba(25, 154, 255, 0.08);
+  border: 1px solid rgba(25, 154, 255, 0.14);
+  background: rgba(25, 154, 255, 0.06);
   color: #1a2b3b;
   border-radius: 12px;
   padding: 6px 10px;

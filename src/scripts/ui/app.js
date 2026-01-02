@@ -2492,6 +2492,25 @@ ${listPart || '-（无）'}
     refreshChatAndContacts();
     return pending;
   };
+  const finalizePendingMessages = (sessionId, sentMessages = []) => {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return;
+    const ids = new Set(sentMessages.map(m => String(m?.id || '')).filter(Boolean));
+    if (!ids.size) return;
+    const history = chatStore.getMessages(sid) || [];
+    history.forEach(m => {
+      const mid = String(m?.id || '');
+      if (!ids.has(mid)) return;
+      const updated = chatStore.updateMessage(m.id, { status: 'sent' }, sid);
+      ui.updateMessage(m.id, updated || { ...m, status: 'sent' });
+    });
+    const pendingQueue = chatStore.getPendingMessages(sid) || [];
+    pendingQueue.forEach(m => {
+      const mid = String(m?.id || '');
+      if (!ids.has(mid)) return;
+      chatStore.removePendingMessage(m.id, sid);
+    });
+  };
   const sendPendingFromFloat = async (pendingMsg, sessionId = chatStore.getCurrent()) => {
     const sid = String(sessionId || '').trim();
     if (!sid || !pendingMsg) return false;
@@ -2500,24 +2519,26 @@ ${listPart || '-（无）'}
       window.toastr?.warning?.('未找到缓存内容');
       return false;
     }
-    const draft = ui.getInputText();
-    if (draft) ui.setInputText('');
-    const removed = chatStore.removePendingMessage(pendingMsg.id, sid);
+    const msgId = String(pendingMsg?.id || '').trim();
+    if (!msgId) return false;
+    const history = chatStore.getMessages(sid) || [];
+    const existing = history.find(m => String(m?.id || '') === msgId);
+    if (existing) {
+      const updated = chatStore.updateMessage(existing.id, { status: 'pending' }, sid);
+      if (isChatRoomVisible() && String(chatStore.getCurrent() || '') === sid) {
+        ui.updateMessage(existing.id, updated || { ...existing, status: 'pending' });
+      }
+    } else {
+      const saved = chatStore.appendMessage({ ...pendingMsg, status: 'pending' }, sid);
+      if (isChatRoomVisible() && String(chatStore.getCurrent() || '') === sid) {
+        ui.addMessage(saved);
+      }
+    }
+    chatStore.removePendingMessage(msgId, sid);
     pendingFloatActive = null;
     updatePendingFloat(sid);
     refreshChatAndContacts();
-    let ok = false;
-    try {
-      ok = await handleSend(null, { overrideText: content, ignorePending: true });
-    } finally {
-      if (!ok && removed) {
-        chatStore.addPendingMessage(pendingMsg, sid);
-        updatePendingFloat(sid);
-        refreshChatAndContacts();
-      }
-      if (draft) ui.setInputText(draft);
-    }
-    return ok;
+    return true;
   };
   const autoMarkReadIfActive = (sessionId, messageId = '') => {
     try {
@@ -3298,6 +3319,9 @@ ${listPart || '-（无）'}
         chatStore.updateMessage(m.id, { status: 'sending' }, sessionId);
         ui.updateMessage(m.id, { ...m, status: 'sending' });
       });
+      // 立即刷新列表/浮层，避免发送中仍显示旧的 pending 计数
+      refreshChatAndContacts({ immediate: true });
+      updatePendingFloat(sessionId);
     } else {
       // 没有 pending 消息，使用输入框内容（兼容旧行为）
       text = overrideText || ui.getInputText();
@@ -3506,6 +3530,48 @@ ${listPart || '-（无）'}
       const fuzzy = list.find(c => normalizeLoose(c?.name || c?.id) === key);
       return fuzzy || null;
     };
+    const resolveLooseGroupTagName = tagName => {
+      const raw = normalizeName(tagName);
+      if (!raw) return '';
+      const currentContact = contactsStore.getContact(sessionId);
+      const currentIsGroup = Boolean(currentContact?.isGroup) || String(sessionId || '').startsWith('group:');
+      if (currentIsGroup) {
+        const curName = normalizeName(currentContact?.name || sessionId);
+        if (raw === curName || normalizeLoose(raw) === normalizeLoose(curName)) {
+          return currentContact?.name || curName;
+        }
+      }
+      let groupId = '';
+      try {
+        groupId = contactsStore.findGroupIdByName?.(raw) || '';
+      } catch {}
+      if (!groupId) {
+        const groups = (contactsStore.listContacts?.() || []).filter(
+          c => c && (c.isGroup || String(c.id || '').startsWith('group:')),
+        );
+        const exact = groups.find(c => normalizeName(c?.name || c?.id) === raw);
+        const fuzzy = exact ? null : groups.find(c => normalizeLoose(c?.name || c?.id) === normalizeLoose(raw));
+        groupId = exact?.id || fuzzy?.id || '';
+      }
+      if (!groupId) return '';
+      const group = contactsStore.getContact(groupId);
+      return group?.name || group?.id || raw;
+    };
+    const resolveLoosePrivateTagName = tagName => {
+      const raw = normalizeName(tagName);
+      if (!raw) return '';
+      const lower = raw.toLowerCase();
+      if (raw === userName || raw === '我' || raw === '用户' || lower === 'user') return '';
+      const contact = resolveContactByDisplayName(raw);
+      if (!contact || contact.isGroup) return '';
+      return contact?.name || contact?.id || raw;
+    };
+    const createDialogueParser = () =>
+      new DialogueStreamParser({
+        userName,
+        resolveLooseGroupTag: resolveLooseGroupTagName,
+        resolveLoosePrivateTag: resolveLoosePrivateTagName,
+      });
     const resolveMomentAuthorId = authorName => {
       const raw = normalizeName(authorName);
       if (!raw) return '';
@@ -4015,7 +4081,7 @@ ${listPart || '-（无）'}
         } else if (protocolEnabled) {
           // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
           ui.showTyping(assistantAvatar);
-          const parser = new DialogueStreamParser({ userName });
+          const parser = createDialogueParser();
           const stream = await window.appBridge.generate(text, llmContext(text));
           let fullRaw = '';
           let didAnything = false;
@@ -4157,7 +4223,7 @@ ${listPart || '-（无）'}
             try {
               const retryText = sanitizeThinkingForProtocolParse(fullRaw);
               if (retryText && retryText !== fullRaw) {
-                const retryParser = new DialogueStreamParser({ userName });
+                const retryParser = createDialogueParser();
                 const retryEvents = retryParser.push(retryText);
                 retryEvents.forEach(ev => {
                   if (ev?.type === 'moments') {
@@ -4266,7 +4332,7 @@ ${listPart || '-（无）'}
                 const miPhoneText = normalizeMiPhoneMarkers(baseText);
                 const miPhoneBlock = extractMiPhoneBlock(miPhoneText);
                 if (miPhoneBlock) {
-                  const retryParser = new DialogueStreamParser({ userName });
+                  const retryParser = createDialogueParser();
                   const retryEvents = retryParser.push(miPhoneBlock);
                   retryEvents.forEach(ev => {
                     if (ev?.type === 'moments') {
@@ -4496,7 +4562,7 @@ ${listPart || '-（无）'}
           return;
         }
         if (protocolEnabled) {
-          const parser = new DialogueStreamParser({ userName });
+          const parser = createDialogueParser();
           const events = parser.push(resultRaw);
           let didAnything = false;
           let mutatedMoments = false;
@@ -4612,7 +4678,7 @@ ${listPart || '-（无）'}
           try {
             const retryText = sanitizeThinkingForProtocolParse(resultRaw);
             if (retryText && retryText !== resultRaw) {
-              const retryParser = new DialogueStreamParser({ userName });
+              const retryParser = createDialogueParser();
               const retryEvents = retryParser.push(retryText);
               retryEvents.forEach(ev => {
                 if (ev?.type === 'moments') {
@@ -4708,7 +4774,7 @@ ${listPart || '-（无）'}
               const miPhoneText = normalizeMiPhoneMarkers(baseText);
               const miPhoneBlock = extractMiPhoneBlock(miPhoneText);
               if (miPhoneBlock) {
-                const retryParser = new DialogueStreamParser({ userName });
+                const retryParser = createDialogueParser();
                 const retryEvents = retryParser.push(miPhoneBlock);
                 retryEvents.forEach(ev => {
                   if (ev?.type === 'moments') {
@@ -4883,11 +4949,7 @@ ${listPart || '-（无）'}
     } finally {
       if (sendSucceeded) {
         if (pendingMessagesToConfirm && pendingMessagesToConfirm.length > 0) {
-          pendingMessagesToConfirm.forEach(m => {
-            chatStore.updateMessage(m.id, { status: 'sent' }, sessionId);
-            ui.updateMessage(m.id, { ...m, status: 'sent' });
-            chatStore.removePendingMessage(m.id, sessionId);
-          });
+          finalizePendingMessages(sessionId, pendingMessagesToConfirm);
         }
         movePendingFromHistoryToQueue(sessionId);
         refreshChatAndContacts();
@@ -5281,11 +5343,21 @@ ${listPart || '-（无）'}
     document.addEventListener('visibilitychange', () => uiLog('visibilitychange', { state: document.visibilityState }));
     window.addEventListener('beforeunload', () => uiLog('beforeunload'));
     window.addEventListener('unload', () => uiLog('unload'));
-    window.addEventListener('error', e =>
-      uiLog('window.error', { msg: e?.message, file: e?.filename, line: e?.lineno, col: e?.colno }),
-    );
+    window.addEventListener('error', e => {
+      const err = e?.error;
+      uiLog('window.error', {
+        msg: String(e?.message || err?.message || err || ''),
+        file: e?.filename,
+        line: e?.lineno,
+        col: e?.colno,
+        stack: err?.stack || '',
+      });
+    });
     window.addEventListener('unhandledrejection', e =>
-      uiLog('unhandledrejection', { reason: String(e?.reason?.message || e?.reason || '') }),
+      uiLog('unhandledrejection', {
+        reason: String(e?.reason?.message || e?.reason || ''),
+        stack: e?.reason?.stack || '',
+      }),
     );
   } catch {}
 

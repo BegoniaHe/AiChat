@@ -192,7 +192,12 @@ const parseGroupChatBlock = (innerText) => {
     // - Preserve "<br>" as an internal marker while extracting message segments.
     // - Only convert it to "\n" AFTER we have parsed each message's speaker/content/time.
     const normalized = normalizeNewlines(chatRaw);
-    const textMarked = normalized
+    const normalizedWithSystem = normalized.replace(/^\s*系统消息[:：]\s*(.*)$/gm, (match, content) => {
+        const cleaned = String(content || '').trim();
+        if (!cleaned) return match;
+        return `系统消息--${cleaned}`;
+    });
+    const textMarked = normalizedWithSystem
         .replace(/&lt;br\s*\/?&gt;/gi, GROUP_CHAT_BR_MARK)
         .replace(/<br\s*\/?>/gi, GROUP_CHAT_BR_MARK);
 
@@ -456,13 +461,15 @@ const findNextToken = (s) => {
 };
 
 export class DialogueStreamParser {
-    constructor({ userName = '我' } = {}) {
+    constructor({ userName = '我', resolveLooseGroupTag, resolveLoosePrivateTag } = {}) {
         this.userName = userName;
         this.preBuffer = '';
         this.inContent = false;
         this.contentBuffer = '';
         this.ended = false;
         this.contentWrapper = '';
+        this.resolveLooseGroupTag = typeof resolveLooseGroupTag === 'function' ? resolveLooseGroupTag : null;
+        this.resolveLoosePrivateTag = typeof resolveLoosePrivateTag === 'function' ? resolveLoosePrivateTag : null;
     }
 
     push(chunk) {
@@ -602,6 +609,39 @@ export class DialogueStreamParser {
                 work = work.slice(afterClose);
                 advanced = true;
                 continue;
+            }
+
+            // Fallback: treat bare group/contact tags as group/private when matching existing names.
+            // Only applied when standard tag parsing did not match.
+            const fallbackGroupName = this.resolveLooseGroupTag ? this.resolveLooseGroupTag(tagName) : '';
+            const fallbackPrivateName = this.resolveLoosePrivateTag ? this.resolveLoosePrivateTag(tagName) : '';
+            if (fallbackGroupName || fallbackPrivateName) {
+                const hasGroupMarkers = /<\s*聊天内容\s*>/i.test(inner) || /<\s*成员\s*>/i.test(inner);
+                const preferGroup = Boolean(fallbackGroupName) && (hasGroupMarkers || !fallbackPrivateName);
+                if (preferGroup) {
+                    const { members, messages } = parseGroupChatBlock(inner);
+                    if (messages.length) {
+                        events.push({
+                            type: 'group_chat',
+                            tagName,
+                            groupName: fallbackGroupName,
+                            members,
+                            messages,
+                        });
+                        work = work.slice(afterClose);
+                        advanced = true;
+                        continue;
+                    }
+                }
+                if (fallbackPrivateName) {
+                    const msgs = parsePrivateChatMessages(inner);
+                    if (msgs.length) {
+                        events.push({ type: 'private_chat', tagName, otherName: fallbackPrivateName, messages: msgs });
+                        work = work.slice(afterClose);
+                        advanced = true;
+                        continue;
+                    }
+                }
             }
 
             // Ignore other tags but consume them when closed (e.g. <action>...</action>)

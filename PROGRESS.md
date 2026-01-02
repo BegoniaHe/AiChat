@@ -1,40 +1,21 @@
 # 開發進度追蹤（必更新）
 
-## 2025-12-31 12:07
-- 推理格式（Reasoning）：新增预设类型与默认模板（对齐 ST），支持自动解析/展开/写回提示词等设置。
-- 推理解析：AI 回复自动拆分 reasoning 与正文，推理套用 REASONING 正则并以折叠块显示。
-- chat_history：可按设定将推理块写回 prompt（限制次数），其余聊天历史逻辑保持不变。
+## 2026-01-02 10:55
+- 对话解析：群聊/私聊标签不符合标准格式时，回退为“匹配现有群/联系人名”后再解析。
 - 修改：
-  - `src/assets/presets/st-defaults.json`
-  - `src/scripts/storage/preset-store.js`
-  - `src/scripts/storage/app-settings.js`
-  - `src/scripts/ui/preset-panel.js`
-  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/chat/dialogue-stream-parser.js`
   - `src/scripts/ui/app.js`
-  - `src/scripts/ui/chat/chat-ui.js`
-  - `src/scripts/ui/regex-panel.js`
+
+## 2026-01-02 10:46
+- 缓存消息浮层：点击“发送”改为仅放回聊天室缓存，不直接发请求。
+- 待发送浮层：整体样式更透明。
+- 修改：
+  - `src/scripts/ui/app.js`
   - `src/assets/css/qq-legacy.css`
 
-## 2025-12-31 13:22
-- 通用设定新增“创意写作注入条数”，允许自定义 chat_history 中创意写作回复的注入数量（默认 3）。
-- chat_history 在创意写作模式按该数值保留最新创意写作回复。
-- 修改：
-  - `src/scripts/storage/app-settings.js`
-  - `src/scripts/ui/general-settings-panel.js`
-  - `src/scripts/ui/app.js`
-
-## 2025-12-31 14:47
-- 通用设定新增“创意写作气泡加宽”开关，仅影响创意写作回复气泡的横向宽度。
-- 创意写作回复气泡可占满聊天横轴（保留少量边距），不影响聊天模式布局。
-- 修改：
-  - `src/scripts/storage/app-settings.js`
-  - `src/scripts/ui/general-settings-panel.js`
-  - `src/scripts/ui/app.js`
-  - `src/scripts/ui/chat/chat-ui.js`
-  - `src/assets/css/qq-legacy.css`
-
-## 2025-12-31 15:20
-- 修复 creative 发送时报错：将推理解析助手函数提到顶层作用域，避免 extractReasoningFromContent 未定义。
+## 2026-01-02 10:32
+- 缓存消息发送：统一修正 sent 状态并清理 pending 队列，避免蓝点计数残留。
+- 缓存消息发送：点击发送后立即刷新 pending 计数，避免发送中蓝点仍显示旧值。
 - 修改：
   - `src/scripts/ui/app.js`
 
@@ -51,11 +32,6 @@
 
 ## 2025-12-30 18:16
 - 富文本 iframe：当首段是 html fenced code 且后续仅文本时，将文本合并进 iframe，避免出现“iframe 空白 + 正文在外层”的分离现象。
-- 修改：
-  - `src/scripts/ui/chat/rich-text-renderer.js`
-
-## 2025-12-31 11:20
-- 富文本 iframe：兼容 SillyTavern 的 resizeIframe 消息，使用 event.source 定位对应 iframe 并更新高度。
 - 修改：
   - `src/scripts/ui/chat/rich-text-renderer.js`
 
@@ -1713,3 +1689,52 @@
   - 进入聊天室时优先定位未读分割线，不自动滚到底部，避免跳转失效。
   - 修改：`src/scripts/ui/app.js`
   - 修改：`src/scripts/ui/chat/chat-ui.js`
+
+## 2025-12-31 11:20
+- 富文本 iframe：兼容 SillyTavern 的 resizeIframe 消息，使用 event.source 定位对应 iframe 并更新高度。
+- 修改：
+  - `src/scripts/ui/chat/rich-text-renderer.js`
+
+## 2025-12-31 12:07
+- 推理格式（Reasoning）：新增预设类型与默认模板（对齐 ST），支持自动解析/展开/写回提示词等设置。
+- 推理解析：AI 回复自动拆分 reasoning 与正文，推理套用 REASONING 正则并以折叠块显示。
+- chat_history：可按设定将推理块写回 prompt（限制次数），其余聊天历史逻辑保持不变。
+- 修改：
+  - `src/assets/presets/st-defaults.json`
+  - `src/scripts/storage/preset-store.js`
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/preset-panel.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/scripts/ui/regex-panel.js`
+  - `src/assets/css/qq-legacy.css`
+
+## 2025-12-31 13:22
+- 通用设定新增“创意写作注入条数”，允许自定义 chat_history 中创意写作回复的注入数量（默认 3）。
+- chat_history 在创意写作模式按该数值保留最新创意写作回复。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/app.js`
+
+## 2025-12-31 14:47
+- 通用设定新增“创意写作气泡加宽”开关，仅影响创意写作回复气泡的横向宽度。
+- 创意写作回复气泡可占满聊天横轴（保留少量边距），不影响聊天模式布局。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/assets/css/qq-legacy.css`
+
+## 2025-12-31 15:20
+- 修复 creative 发送时报错：将推理解析助手函数提到顶层作用域，避免 extractReasoningFromContent 未定义。
+- 修改：
+  - `src/scripts/ui/app.js`
+
+## 2025-12-31 17:31
+  - 富文本 iframe：脚本模式未 ready 时回退到 host 加载，确保自定义脚本执行。
+  - host 端保留 body 属性与 base，并补发 DOMContentLoaded/load 事件。
+  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+  - 修改：`src/iframe-host.js`
