@@ -1,7 +1,10 @@
 // Library entry point for Android and other platforms
 
 mod commands;
+mod memory_db;
 mod storage;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,8 +27,22 @@ pub fn run() {
             commands::save_raw_reply,
             commands::load_raw_reply,
             commands::delete_raw_reply,
+            commands::init_database,
+            commands::create_memory,
+            commands::update_memory,
+            commands::delete_memory,
+            commands::get_memories,
+            commands::batch_create_memories,
+            commands::batch_delete_memories,
+            commands::save_template,
+            commands::get_templates,
+            commands::delete_template,
         ])
         .setup(|_app| {
+            let handle = _app.handle();
+            let memory_db = memory_db::MemoryDb::new(&handle)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            _app.manage(memory_db);
             #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
             {
                 use tauri::Manager;

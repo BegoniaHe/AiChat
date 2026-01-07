@@ -133,6 +133,56 @@ const formatSinceInParens = (ts) => {
   return `距今${raw.replace(/前$/, '')}`;
 };
 
+const DEFAULT_MEMORY_BUDGET = {
+  maxRows: 30,
+  maxTokens: 2000,
+  safetyRatio: 0.9,
+};
+
+const estimateTokens = (text) => {
+  const raw = String(text || '');
+  if (!raw.trim()) return 0;
+  let ascii = 0;
+  let nonAscii = 0;
+  for (const ch of raw) {
+    if (ch.charCodeAt(0) <= 0x7f) ascii += 1;
+    else nonAscii += 1;
+  }
+  return Math.max(1, Math.ceil(nonAscii + ascii / 4));
+};
+
+const normalizeMemoryCell = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const formatMemoryRowText = (rowData, columns) => {
+  const parts = [];
+  for (const col of Array.isArray(columns) ? columns : []) {
+    const colId = String(col?.id || '').trim();
+    if (!colId) continue;
+    const label = String(col?.name || colId).trim();
+    const raw = normalizeMemoryCell(rowData?.[colId]);
+    const text = String(raw || '').trim().replace(/\s*\r?\n\s*/g, ' / ');
+    if (!text) continue;
+    parts.push(label ? `${label}: ${text}` : text);
+  }
+  if (!parts.length) return '（未填写）';
+  return parts.join('；');
+};
+
+const clampText = (value, max = 140) => {
+  const raw = String(value || '').trim();
+  if (raw.length <= max) return raw;
+  return `${raw.slice(0, max)}…`;
+};
+
 class AppBridge {
   constructor() {
     this.config = new ConfigManager();
@@ -155,6 +205,11 @@ class AppBridge {
     this.macroEngine = null; // Initialized on setChatStore
     this.contactsStore = null; // Injected
     this.momentSummaryStore = null; // Injected
+    this.memoryTableStore = null; // Injected
+    this.memoryTemplateStore = null; // Injected
+    this.contextBuilder = null; // Injected (from UI)
+    this.lastMemoryPlan = null;
+    this.lastMemoryUpdateBySession = {};
     this.hydrateWorldSessionMap();
     this.hydrateGlobalWorldId();
   }
@@ -170,6 +225,18 @@ class AppBridge {
 
   setMomentSummaryStore(store) {
     this.momentSummaryStore = store;
+  }
+
+  setMemoryTableStore(store) {
+    this.memoryTableStore = store;
+  }
+
+  setMemoryTemplateStore(store) {
+    this.memoryTemplateStore = store;
+  }
+
+  setContextBuilder(fn) {
+    this.contextBuilder = typeof fn === 'function' ? fn : null;
   }
 
   processTextMacros(text, extraContext = {}) {
@@ -188,6 +255,386 @@ class AppBridge {
         this.abortController.abort();
       }
     } catch {}
+  }
+
+  async getDefaultMemoryTemplateRecord() {
+    if (!this.memoryTemplateStore || typeof this.memoryTemplateStore.getTemplates !== 'function') return null;
+    const list = await this.memoryTemplateStore.getTemplates({ is_default: true });
+    if (Array.isArray(list) && list.length) return list[0];
+    const fallback = await this.memoryTemplateStore.getTemplates({ id: 'default-v1' });
+    if (Array.isArray(fallback) && fallback.length) return fallback[0];
+    return null;
+  }
+
+  async buildMemoryPromptPlan(context = {}) {
+    const memoryMode = String(context?.meta?.memoryStorageMode || '').trim().toLowerCase();
+    const autoExtract = Boolean(context?.meta?.memoryAutoExtract);
+    const disabledPlan = (reason) => ({
+      enabled: false,
+      reason,
+      items: [],
+      truncated: [],
+      tokenTotal: 0,
+      tokenBudget: DEFAULT_MEMORY_BUDGET.maxTokens,
+      tokenBudgetSafety: Math.floor(DEFAULT_MEMORY_BUDGET.maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio),
+      tokenBudgetData: Math.floor(DEFAULT_MEMORY_BUDGET.maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio),
+      overheadTokens: 0,
+      maxRows: DEFAULT_MEMORY_BUDGET.maxRows,
+      position: 'after_persona',
+      promptText: '',
+      tableData: '',
+      templateId: '',
+      templateName: '',
+      targetId: '',
+      targetName: '',
+      scope: '',
+      autoExtract,
+      tableOrder: [],
+      rowIndexMap: {},
+    });
+
+    if (memoryMode !== 'table') return disabledPlan('memory_mode');
+    if (!this.memoryTableStore || !this.memoryTemplateStore) return disabledPlan('missing_store');
+
+    let record = null;
+    try {
+      record = await this.getDefaultMemoryTemplateRecord();
+    } catch {
+      record = null;
+    }
+    if (!record) return disabledPlan('missing_template');
+
+    const toTemplate = this.memoryTemplateStore.toTemplateDefinition?.bind(this.memoryTemplateStore);
+    const baseSchema = record?.schema && typeof record.schema === 'object' ? record.schema : {};
+    const template = toTemplate ? toTemplate(record) : { ...baseSchema, injection: record?.injection ?? null };
+    const templateId = String(template?.meta?.id || record?.id || '').trim();
+    const templateName = String(template?.meta?.name || record?.name || '').trim();
+    if (!templateId) return disabledPlan('missing_template_id');
+
+    const sessionId = String(context?.session?.id || this.activeSessionId || '').trim();
+    if (!sessionId) return disabledPlan('missing_session');
+
+    const isGroup = Boolean(context?.session?.isGroup) || sessionId.startsWith('group:');
+    const scope = isGroup ? 'group' : 'contact';
+    const targetName =
+      String(context?.character?.name || '').trim() ||
+      String(this.contactsStore?.getContact?.(sessionId)?.name || '').trim() ||
+      (isGroup ? sessionId.replace(/^group:/, '') : sessionId);
+
+    const macroVars = {
+      user: String(context?.user?.name || 'user'),
+      char: String(context?.character?.name || 'assistant'),
+      group: String(context?.group?.name || ''),
+      members: Array.isArray(context?.group?.memberNames)
+        ? context.group.memberNames.filter(Boolean).join(',')
+        : '',
+    };
+
+    const injection = (template && typeof template === 'object' && template.injection) ? template.injection : {};
+    const templateRaw = typeof injection?.template === 'string' ? injection.template : '{{tableData}}';
+    const wrapperRaw = typeof injection?.wrapper === 'string' ? injection.wrapper : '<memories>\n{{tableData}}\n</memories>';
+    const overridePositionRaw = String(context?.meta?.memoryInjectPosition || '').trim().toLowerCase();
+    const overridePosition =
+      overridePositionRaw && overridePositionRaw !== 'template' &&
+      ['after_persona', 'system_end', 'before_chat'].includes(overridePositionRaw)
+        ? overridePositionRaw
+        : '';
+    const position = overridePosition || (typeof injection?.position === 'string' ? injection.position : 'after_persona');
+
+    const tables = Array.isArray(template?.tables) ? template.tables : [];
+    const tableById = new Map();
+    const tableOrder = [];
+    tables.forEach(t => {
+      const id = String(t?.id || '').trim();
+      if (!id) return;
+      tableById.set(id, t);
+      tableOrder.push(id);
+    });
+
+    const maxRows = Number.isFinite(Number(context?.meta?.memoryMaxRows))
+      ? Math.max(1, Math.trunc(Number(context.meta.memoryMaxRows)))
+      : DEFAULT_MEMORY_BUDGET.maxRows;
+    const maxTokens = Number.isFinite(Number(context?.meta?.memoryMaxTokens))
+      ? Math.max(1, Math.trunc(Number(context.meta.memoryMaxTokens)))
+      : DEFAULT_MEMORY_BUDGET.maxTokens;
+    const tokenBudgetSafety = Math.max(0, Math.floor(maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio));
+
+    const buildMemoryEditGuide = () => {
+      const lines = [];
+      lines.push('<memory_edit_rules>');
+      lines.push('需要更新记忆表格时，在回复末尾输出 <tableEdit>...</tableEdit>，每行一个 JSON。');
+      lines.push('insert: {"action":"insert","table_id":"relationship","data":{"relation":"朋友"}}');
+      lines.push('update: {"action":"update","table_id":"relationship","row_index":0,"data":{"relation":"亲密朋友"}}');
+      lines.push('delete: {"action":"delete","table_id":"relationship","row_index":0}');
+      lines.push('若该表当前无任何行，只能使用 insert；不要输出 update/delete。');
+      lines.push('仅当 row_index 对应现有行时才使用 update/delete。');
+      lines.push('也可使用函数式语法：insertRow(tableIndex, {...}) / updateRow(tableIndex, rowIndex, {...}) / deleteRow(tableIndex, rowIndex)');
+      lines.push('row_index 对应表格中每行前的编号；table_id 见下表。');
+      lines.push('无修改则输出空 <tableEdit></tableEdit>。');
+      lines.push('表格索引:');
+      tableOrder.forEach((tableId, index) => {
+        const table = tableById.get(tableId) || { id: tableId, name: tableId, columns: [] };
+        const cols = (table?.columns || [])
+          .map(col => {
+            const cid = String(col?.id || '').trim();
+            const cname = String(col?.name || '').trim();
+            if (!cid && !cname) return '';
+            if (cid && cname && cid !== cname) return `${cid}:${cname}`;
+            return cid || cname;
+          })
+          .filter(Boolean)
+          .join(', ');
+        const scope = String(table?.scope || '').trim();
+        const meta = [scope ? `scope:${scope}` : '', cols ? `cols:${cols}` : ''].filter(Boolean).join(', ');
+        const label = String(table?.name || tableId);
+        lines.push(`[${index}] ${label} (table_id:${tableId}${meta ? `, ${meta}` : ''})`);
+        const sourceData = table?.sourceData || table?.source_data || {};
+        const ruleLines = [];
+        const note = String(sourceData?.note || '').trim();
+        const initNode = String(sourceData?.initNode || '').trim();
+        const insertNode = String(sourceData?.insertNode || '').trim();
+        const updateNode = String(sourceData?.updateNode || '').trim();
+        const deleteNode = String(sourceData?.deleteNode || '').trim();
+        if (note) ruleLines.push(`  - note: ${note}`);
+        if (initNode) ruleLines.push(`  - init: ${initNode}`);
+        if (insertNode) ruleLines.push(`  - insert: ${insertNode}`);
+        if (updateNode) ruleLines.push(`  - update: ${updateNode}`);
+        if (deleteNode) ruleLines.push(`  - delete: ${deleteNode}`);
+        if (ruleLines.length) lines.push(...ruleLines);
+      });
+      lines.push('</memory_edit_rules>');
+      return lines.join('\n').trim();
+    };
+    const editGuide = autoExtract ? buildMemoryEditGuide() : '';
+
+    const emptyTemplate = renderStTemplate(templateRaw, { ...macroVars, tableData: '' });
+    const emptyWrapped = wrapperRaw
+      ? renderStTemplate(wrapperRaw, { ...macroVars, tableData: emptyTemplate })
+      : emptyTemplate;
+    const overheadTokens = estimateTokens(emptyWrapped) + (editGuide ? estimateTokens(editGuide) : 0);
+    const tokenBudgetData = Math.max(0, tokenBudgetSafety - overheadTokens);
+    const buildPromptText = (tableData) => {
+      const renderedTemplate = renderStTemplate(templateRaw, { ...macroVars, tableData });
+      const wrapped = wrapperRaw
+        ? renderStTemplate(wrapperRaw, { ...macroVars, tableData: renderedTemplate })
+        : renderedTemplate;
+      const processed = this.processTextMacros(wrapped, { ...macroVars, sessionId });
+      let promptText = String(processed || '').trim();
+      if (autoExtract && editGuide) {
+        promptText = promptText ? `${promptText}\n\n${editGuide}` : editGuide;
+      }
+      return promptText;
+    };
+
+    let scopedRows = [];
+    let globalRows = [];
+    try {
+      if (isGroup) {
+        scopedRows = await this.memoryTableStore.getMemories({ scope: 'group', group_id: sessionId, template_id: templateId });
+      } else {
+        scopedRows = await this.memoryTableStore.getMemories({ scope: 'contact', contact_id: sessionId, template_id: templateId });
+      }
+    } catch {
+      scopedRows = [];
+    }
+    try {
+      globalRows = await this.memoryTableStore.getMemories({ scope: 'global', template_id: templateId });
+    } catch {
+      globalRows = [];
+    }
+
+    const rows = [...(Array.isArray(globalRows) ? globalRows : []), ...(Array.isArray(scopedRows) ? scopedRows : [])]
+      .filter(row => row && row.is_active !== false);
+
+    const items = [];
+    for (const row of rows) {
+      const tableId = String(row?.table_id || '').trim();
+      if (!tableId) continue;
+      if (!tableById.has(tableId)) {
+        tableById.set(tableId, { id: tableId, name: tableId, columns: [] });
+        tableOrder.push(tableId);
+      }
+      const table = tableById.get(tableId);
+      const rowText = formatMemoryRowText(row?.row_data || {}, table?.columns || []);
+      items.push({
+        id: String(row?.id || ''),
+        tableId,
+        tableName: String(table?.name || tableId),
+        rowText,
+        rowSummary: clampText(rowText, 120),
+        rowData: row?.row_data || {},
+        isPinned: Boolean(row?.is_pinned),
+        priority: Number.isFinite(Number(row?.priority)) ? Number(row.priority) : 0,
+        updatedAt: Number.isFinite(Number(row?.updated_at)) ? Number(row.updated_at) : 0,
+        scope: row?.contact_id ? 'contact' : row?.group_id ? 'group' : 'global',
+      });
+    }
+
+    if (!items.length) {
+      const promptText = autoExtract ? buildPromptText('') : '';
+      const tokenTotal = promptText ? estimateTokens(promptText) : 0;
+      return {
+        enabled: true,
+        reason: 'empty',
+        items: [],
+        truncated: [],
+        tokenTotal,
+        tokenBudget: maxTokens,
+        tokenBudgetSafety,
+        tokenBudgetData,
+        overheadTokens,
+        maxRows,
+        position,
+        promptText,
+        tableData: '',
+        templateId,
+        templateName,
+        targetId: sessionId,
+        targetName,
+        scope,
+        autoExtract,
+        tableOrder,
+        rowIndexMap: {},
+      };
+    }
+
+    const sortByPriority = (a, b) => {
+      if (a.priority !== b.priority) return b.priority - a.priority;
+      if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
+      return String(b.id).localeCompare(String(a.id));
+    };
+    const pinned = items.filter(it => it.isPinned).sort(sortByPriority);
+    const normal = items.filter(it => !it.isPinned).sort(sortByPriority);
+    const ordered = [...pinned, ...normal];
+    const rowPrefixTokens = autoExtract ? estimateTokens('- [0] ') : 0;
+
+    const selected = [];
+    const truncated = [];
+    const rowsByTable = new Map();
+    const includedTables = new Set();
+    let tokenUsed = 0;
+
+    for (const item of ordered) {
+      if (selected.length >= maxRows) {
+        truncated.push({ ...item, reason: 'max_rows' });
+        continue;
+      }
+      const tableId = item.tableId;
+      const table = tableById.get(tableId) || { id: tableId, name: tableId };
+      const headerLabel = String(table?.name || tableId);
+      const headerText = autoExtract ? `【${headerLabel}｜${tableId}】` : `【${headerLabel}】`;
+      const headerTokens = includedTables.has(tableId) ? 0 : estimateTokens(headerText);
+      const rowTokens = estimateTokens(item.rowText) + rowPrefixTokens;
+      const nextTokens = tokenUsed + headerTokens + rowTokens;
+      if (nextTokens > tokenBudgetData) {
+        truncated.push({ ...item, reason: 'max_tokens' });
+        continue;
+      }
+      if (!includedTables.has(tableId)) includedTables.add(tableId);
+      tokenUsed = nextTokens;
+      const withTokens = { ...item, tokens: rowTokens };
+      selected.push(withTokens);
+      if (!rowsByTable.has(tableId)) rowsByTable.set(tableId, []);
+      rowsByTable.get(tableId).push(withTokens);
+    }
+
+    if (!selected.length) {
+      const promptText = autoExtract ? buildPromptText('') : '';
+      const tokenTotal = promptText ? estimateTokens(promptText) : 0;
+      return {
+        enabled: true,
+        reason: 'budget_empty',
+        items: [],
+        truncated,
+        tokenTotal,
+        tokenBudget: maxTokens,
+        tokenBudgetSafety,
+        tokenBudgetData,
+        overheadTokens,
+        maxRows,
+        position,
+        promptText,
+        tableData: '',
+        templateId,
+        templateName,
+        targetId: sessionId,
+        targetName,
+        scope,
+        autoExtract,
+        tableOrder,
+        rowIndexMap: {},
+      };
+    }
+
+    const tableParts = [];
+    const rowIndexMap = {};
+    for (const tableId of tableOrder) {
+      const rowsForTable = rowsByTable.get(tableId) || [];
+      if (!rowsForTable.length) continue;
+      const table = tableById.get(tableId) || { id: tableId, name: tableId };
+      const tableLabel = String(table?.name || tableId);
+      tableParts.push(autoExtract ? `【${tableLabel}｜${tableId}】` : `【${tableLabel}】`);
+      rowsForTable.forEach((row, index) => {
+        const line = String(row?.rowText || '').trim();
+        const prefix = autoExtract ? `- [${index}] ` : '- ';
+        tableParts.push(`${prefix}${line || '（未填写）'}`);
+        if (autoExtract) {
+          if (!rowIndexMap[tableId]) rowIndexMap[tableId] = [];
+          rowIndexMap[tableId][index] = row.id;
+        }
+      });
+    }
+    const tableData = tableParts.join('\n').trim();
+
+    const promptText = buildPromptText(tableData);
+    const tokenTotal = estimateTokens(promptText);
+
+    return {
+      enabled: true,
+      reason: '',
+      items: selected,
+      truncated,
+      tokenTotal,
+      tokenBudget: maxTokens,
+      tokenBudgetSafety,
+      tokenBudgetData,
+      overheadTokens,
+      maxRows,
+      position,
+      promptText,
+      tableData,
+      templateId,
+      templateName,
+      targetId: sessionId,
+      targetName,
+      scope,
+      autoExtract,
+      tableOrder,
+      rowIndexMap,
+    };
+  }
+
+  async getMemoryPromptPlan(context = null) {
+    const ctx = context || (this.contextBuilder ? this.contextBuilder('') : null) || {};
+    const plan = await this.buildMemoryPromptPlan(ctx);
+    this.lastMemoryPlan = plan;
+    return plan;
+  }
+
+  setLastMemoryUpdate(sessionId, payload = null) {
+    const id = String(sessionId || '').trim();
+    if (!id) return;
+    if (!payload) {
+      delete this.lastMemoryUpdateBySession[id];
+      return;
+    }
+    this.lastMemoryUpdateBySession[id] = { ...(payload || {}), sessionId: id };
+  }
+
+  getLastMemoryUpdate(sessionId) {
+    const id = String(sessionId || '').trim();
+    if (!id) return null;
+    return this.lastMemoryUpdateBySession?.[id] || null;
   }
 
   async ensureBuiltinWorldbooks() {
@@ -578,6 +1025,21 @@ class AppBridge {
           userMessageProcessed: true,
         },
       };
+      try {
+        const memoryPlan = await this.buildMemoryPromptPlan(nextContext);
+        this.lastMemoryPlan = memoryPlan;
+        if (memoryPlan?.enabled && memoryPlan.promptText) {
+          nextContext.meta = {
+            ...(nextContext.meta || {}),
+            memoryPrompt: {
+              content: memoryPlan.promptText,
+              position: memoryPlan.position,
+            },
+          };
+        }
+      } catch (err) {
+        logger.warn('memory prompt plan failed', err);
+      }
       const messages = this.buildMessages(promptInput, nextContext);
       const config = this.config.get();
       const genOptions = this.getGenerationOptions();
@@ -718,6 +1180,20 @@ class AppBridge {
     const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
     const memoryMode = String(context?.meta?.memoryStorageMode || '').trim().toLowerCase();
     const useSummaryMemory = memoryMode !== 'table' && !Boolean(context?.meta?.disableSummary);
+    const memoryPromptRaw = context?.meta?.memoryPrompt;
+    const memoryPromptContent = typeof memoryPromptRaw?.content === 'string' ? String(memoryPromptRaw.content).trim() : '';
+    const memoryPromptPositionRaw = typeof memoryPromptRaw?.position === 'string' ? memoryPromptRaw.position : '';
+    const memoryPromptPosition = ['after_persona', 'system_end', 'before_chat'].includes(memoryPromptPositionRaw)
+      ? memoryPromptPositionRaw
+      : 'after_persona';
+    const memoryPromptRoleRaw = String(memoryPromptRaw?.role || 'system').toLowerCase();
+    const memoryPromptRole =
+      memoryPromptRoleRaw === 'user' || memoryPromptRoleRaw === 'assistant' || memoryPromptRoleRaw === 'system'
+        ? memoryPromptRoleRaw
+        : 'system';
+    const memoryPrompt = memoryPromptContent
+      ? { content: memoryPromptContent, position: memoryPromptPosition, role: memoryPromptRole }
+      : null;
     const disableScenarioHint = Boolean(context?.meta?.disableScenarioHint);
     const overrideLastUserMessageRaw = (typeof context?.meta?.overrideLastUserMessage === 'string')
       ? String(context.meta.overrideLastUserMessage)
@@ -1408,6 +1884,12 @@ class AppBridge {
       };
 
 		    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
+      let memoryInserted = false;
+      const insertMemoryPrompt = () => {
+        if (!memoryPrompt || memoryInserted) return;
+        messages.push({ role: memoryPrompt.role, content: memoryPrompt.content });
+        memoryInserted = true;
+      };
       const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
       // ST promptOnly scripts: apply to outgoing prompt only
       const history = historyRaw.map((m, idx) => {
@@ -1599,6 +2081,15 @@ class AppBridge {
         if (!identifier || !enabled) continue;
 
         if (identifier === 'chatHistory') {
+          if (
+            memoryPrompt &&
+            !memoryInserted &&
+            (memoryPrompt.position === 'before_chat' ||
+              memoryPrompt.position === 'system_end' ||
+              memoryPrompt.position === 'after_persona')
+          ) {
+            insertMemoryPrompt();
+          }
           messages.push(...historyRecallBlocks);
           if (history.length) messages.push(...history);
           insertPendingUserIntoHistory();
@@ -1643,6 +2134,14 @@ class AppBridge {
             appendWorldBucket('afterExamples');
             continue;
           }
+          if (identifier === 'personaDescription') {
+            const content = resolveMarker(identifier);
+            if (content) messages.push({ role: 'system', content });
+            if (memoryPrompt?.position === 'after_persona') {
+              insertMemoryPrompt();
+            }
+            continue;
+          }
           const content = resolveMarker(identifier);
           if (content) messages.push({ role: 'system', content });
           continue;
@@ -1677,6 +2176,9 @@ class AppBridge {
       appendWorldBucket('afterExamples');
 
       if (!historyInserted) {
+        if (memoryPrompt && !memoryInserted) {
+          insertMemoryPrompt();
+        }
         messages.push(...historyRecallBlocks);
         if (history.length) messages.push(...history);
         insertPendingUserIntoHistory();
@@ -1693,6 +2195,12 @@ class AppBridge {
       return messages;
     }
 
+    let memoryInserted = false;
+    const insertMemoryPrompt = () => {
+      if (!memoryPrompt || memoryInserted) return;
+      messages.push({ role: memoryPrompt.role, content: memoryPrompt.content });
+      memoryInserted = true;
+    };
     const chatGuideContent = chatGuidePlan.promptContent;
     const chatGuideBeforePromptContent = chatGuidePlan.beforePromptContent;
     const chatGuideDepthContent = chatGuidePlan.depthContent;
@@ -1830,6 +2338,9 @@ class AppBridge {
         messages.push({ role: 'system', content: combinedStoryString });
       });
     }
+    if (shouldInsertStoryString && memoryPrompt?.position === 'after_persona') {
+      insertMemoryPrompt();
+    }
 
 	    // 聊天提示词（私聊/群聊/动态/摘要）统一放入 <chat_guide>，与世界书同位置注入。
 
@@ -1856,6 +2367,13 @@ class AppBridge {
       // Context preset enabled but no story_string inserted: still flush world buckets to avoid dropping entries.
       flushWorldMessages(worldMessagesBefore);
       flushWorldMessages(worldMessagesAfter);
+    }
+    if (
+      memoryPrompt &&
+      !memoryInserted &&
+      (memoryPrompt.position === 'system_end' || memoryPrompt.position === 'after_persona')
+    ) {
+      insertMemoryPrompt();
     }
 
     // 3) History
@@ -1906,6 +2424,9 @@ class AppBridge {
       usedLastUserMessageForPendingInput = true;
     }
 
+		    if (memoryPrompt && !memoryInserted && memoryPrompt.position === 'before_chat') {
+          insertMemoryPrompt();
+        }
 		    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
 	    try {
 	      const momentData = buildMomentCommentDataBlock();

@@ -3,13 +3,17 @@ import { ContactsStore } from '../storage/contacts-store.js';
 import { GroupStore } from '../storage/group-store.js';
 import { MomentsStore } from '../storage/moments-store.js';
 import { MomentSummaryStore } from '../storage/moment-summary-store.js';
+import { MemoryTableStore } from '../storage/memory-table-store.js';
+import { MemoryTemplateStore } from '../storage/memory-template-store.js';
 import { PersonaStore } from '../storage/persona-store.js';
+import { ConfigManager } from '../storage/config.js';
 import { appSettings } from '../storage/app-settings.js';
 import { normalizeScopeId } from '../storage/store-scope.js';
 import { logger } from '../utils/logger.js';
 import { initMediaAssets, listMediaAssets, resolveMediaAsset, isAssetRef, isLikelyUrl } from '../utils/media-assets.js';
 import { safeInvoke } from '../utils/tauri.js';
 import './bridge.js';
+import { LLMClient } from '../api/client.js';
 import { ChatUI } from './chat/chat-ui.js';
 import { DialogueStreamParser } from './chat/dialogue-stream-parser.js';
 import { parseSpecialMessage } from './chat/message-parser.js';
@@ -22,6 +26,7 @@ import { GeneralSettingsPanel } from './general-settings-panel.js';
 import { GroupCreatePanel, GroupSettingsPanel } from './group-chat-panels.js';
 import { GroupPanel } from './group-panel.js';
 import { MediaPicker } from './media-picker.js';
+import { MemoryTemplatePanel } from './memory-template-panel.js';
 import { MomentsPanel } from './moments-panel.js';
 import { MomentSummaryPanel } from './moment-summary-panel.js';
 import { PersonaPanel } from './persona-panel.js';
@@ -61,6 +66,16 @@ const initApp = async () => {
     return mode === 'table' ? 'table' : 'summary';
   };
   const isSummaryMemoryEnabled = () => getMemoryStorageMode() === 'summary';
+  const getMemoryAutoExtractMode = () => {
+    const mode = String(appSettings.get().memoryAutoExtractMode || 'inline').toLowerCase();
+    return mode === 'separate' ? 'separate' : 'inline';
+  };
+  const isMemoryAutoExtractEnabled = () => {
+    const settings = appSettings.get();
+    return getMemoryStorageMode() === 'table' && settings.memoryAutoExtract === true;
+  };
+  const isMemoryAutoExtractInline = () => isMemoryAutoExtractEnabled() && getMemoryAutoExtractMode() === 'inline';
+  const isMemoryAutoExtractSeparate = () => isMemoryAutoExtractEnabled() && getMemoryAutoExtractMode() === 'separate';
   let updateStickerPreview = () => {};
   const originalSetInputText = ui.setInputText.bind(ui);
   ui.setInputText = (val) => {
@@ -73,6 +88,8 @@ const initApp = async () => {
     updateStickerPreview('');
   };
   const configPanel = new ConfigPanel();
+  const memoryUpdateConfigManager = new ConfigManager();
+  const memoryUpdateRunning = new Set();
   const generalSettingsPanel = new GeneralSettingsPanel();
   const presetPanel = new PresetPanel();
   const regexPanel = new RegexPanel();
@@ -88,6 +105,15 @@ const initApp = async () => {
   try {
     window.appBridge.setMomentSummaryStore?.(momentSummaryStore);
   } catch {}
+  const memoryTableStore = new MemoryTableStore();
+  try {
+    window.appBridge.setMemoryTableStore?.(memoryTableStore);
+  } catch {}
+  const memoryTemplateStore = new MemoryTemplateStore();
+  try {
+    window.appBridge.setMemoryTemplateStore?.(memoryTemplateStore);
+  } catch {}
+  const memoryTemplatePanel = new MemoryTemplatePanel({ templateStore: memoryTemplateStore, memoryStore: memoryTableStore });
   const personaStore = new PersonaStore();
   let activePersonaScopeKey = '';
   const getPersonaScopeKey = (personaId) => {
@@ -107,7 +133,12 @@ const initApp = async () => {
     groupStore.setScope?.(initialScopeKey),
     momentsStore.setScope?.(initialScopeKey),
     momentSummaryStore.setScope?.(initialScopeKey),
+    memoryTableStore.setScope?.(initialScopeKey),
+    memoryTemplateStore.setScope?.(initialScopeKey),
   ]);
+  try {
+    await memoryTemplateStore.ensureDefaultTemplate?.();
+  } catch {}
   activePersonaScopeKey = initialScopeKey;
   try {
     window.appBridge?.setPersonaScope?.(initialScopeKey);
@@ -276,7 +307,12 @@ const initApp = async () => {
       groupStore.setScope?.(nextKey),
       momentsStore.setScope?.(nextKey),
       momentSummaryStore.setScope?.(nextKey),
+      memoryTableStore.setScope?.(nextKey),
+      memoryTemplateStore.setScope?.(nextKey),
     ]);
+    try {
+      await memoryTemplateStore.ensureDefaultTemplate?.();
+    } catch {}
     try {
       window.appBridge?.setPersonaScope?.(nextKey);
     } catch {}
@@ -2331,6 +2367,7 @@ ${listPart || '-（无）'}
       if (action === 'persona') personaPanel.show();
       if (action === 'session') sessionPanel.show();
       if (action === 'preset') presetPanel.show();
+      if (action === 'memory-templates') memoryTemplatePanel.show();
       if (action === 'world-global') worldPanel.show({ scope: 'global' });
       if (action === 'regex') regexPanel.show();
       if (action === 'config') configPanel.show();
@@ -3726,6 +3763,843 @@ ${listPart || '-（无）'}
         .trim();
       return { text: stripped, summary };
     };
+    const stripTableEditBlocks = (text) => {
+      let out = String(text ?? '');
+      const startRe = /<tableEdit\b[^>]*>/i;
+      const endRe = /<\/tableEdit\s*>/i;
+      for (let i = 0; i < 20; i++) {
+        const start = out.match(startRe);
+        if (!start) break;
+        const startIdx = start.index ?? -1;
+        if (startIdx < 0) break;
+        const afterStart = out.slice(startIdx + start[0].length);
+        const end = afterStart.match(endRe);
+        if (!end) {
+          out = out.slice(0, startIdx);
+          break;
+        }
+        const endIdx = startIdx + start[0].length + (end.index ?? 0);
+        out = out.slice(0, startIdx) + out.slice(endIdx + end[0].length);
+      }
+      return out.replace(/\n{3,}/g, '\n\n').trim();
+    };
+    const extractTableEditBlocks = (text) => {
+      const raw = String(text ?? '');
+      const re = /<tableEdit\b[^>]*>([\s\S]*?)<\/tableEdit>/gi;
+      const blocks = [];
+      let m;
+      while ((m = re.exec(raw))) blocks.push(m[1]);
+      if (!blocks.length) return { text: raw, blocks: [], actions: [] };
+      const stripped = raw.replace(re, '').replace(/\n{3,}/g, '\n\n').trim();
+      const actions = [];
+      for (const block of blocks) {
+        actions.push(...parseTableEditActions(block));
+      }
+      return { text: stripped, blocks, actions };
+    };
+    const parseTableEditActions = (content) => {
+      const cleaned = String(content ?? '').replace(/<!--([\s\S]*?)-->/g, '$1').trim();
+      if (!cleaned) return [];
+      const actions = [];
+      const pushAction = (raw) => {
+        if (!raw || typeof raw !== 'object') return;
+        const action = String(raw.action || raw.type || '').trim().toLowerCase();
+        if (!['insert', 'update', 'delete'].includes(action)) return;
+        actions.push({
+          action,
+          tableId: raw.table_id ?? raw.tableId ?? raw.table,
+          tableIndex: raw.table_index ?? raw.tableIndex,
+          tableName: raw.table_name ?? raw.tableName,
+          rowId: raw.row_id ?? raw.rowId ?? raw.id,
+          rowIndex: raw.row_index ?? raw.rowIndex ?? raw.index,
+          data: raw.data ?? raw.row_data ?? raw.rowData ?? raw.values,
+        });
+      };
+      const tryParse = (text) => {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return null;
+        }
+      };
+      const parseArgValue = (raw) => {
+        const text = String(raw || '').trim();
+        if (!text) return null;
+        if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+          const parsed = tryParse(text);
+          return parsed == null ? null : parsed;
+        }
+        if (/^-?\d+(?:\.\d+)?$/.test(text)) return Number(text);
+        if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+          return text.slice(1, -1);
+        }
+        return text;
+      };
+      const parseIndex = (value) => {
+        if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+        if (typeof value !== 'string') return null;
+        const raw = value.trim().replace(/^['"]|['"]$/g, '');
+        if (/^-?\d+$/.test(raw)) return Math.trunc(Number(raw));
+        return null;
+      };
+      const splitFunctionArgs = (raw) => {
+        const text = String(raw || '');
+        const args = [];
+        let buf = '';
+        let depthParen = 0;
+        let depthBrace = 0;
+        let depthBracket = 0;
+        let inString = false;
+        let quote = '';
+        let escape = false;
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i];
+          if (inString) {
+            buf += ch;
+            if (escape) {
+              escape = false;
+              continue;
+            }
+            if (ch === '\\') {
+              escape = true;
+              continue;
+            }
+            if (ch === quote) {
+              inString = false;
+              quote = '';
+            }
+            continue;
+          }
+          if (ch === '"' || ch === "'") {
+            inString = true;
+            quote = ch;
+            buf += ch;
+            continue;
+          }
+          if (ch === '{') {
+            depthBrace += 1;
+            buf += ch;
+            continue;
+          }
+          if (ch === '}') {
+            depthBrace = Math.max(0, depthBrace - 1);
+            buf += ch;
+            continue;
+          }
+          if (ch === '[') {
+            depthBracket += 1;
+            buf += ch;
+            continue;
+          }
+          if (ch === ']') {
+            depthBracket = Math.max(0, depthBracket - 1);
+            buf += ch;
+            continue;
+          }
+          if (ch === '(') {
+            depthParen += 1;
+            buf += ch;
+            continue;
+          }
+          if (ch === ')') {
+            depthParen = Math.max(0, depthParen - 1);
+            buf += ch;
+            continue;
+          }
+          if (ch === ',' && depthBrace === 0 && depthBracket === 0 && depthParen === 0) {
+            args.push(buf.trim());
+            buf = '';
+            continue;
+          }
+          buf += ch;
+        }
+        if (buf.trim()) args.push(buf.trim());
+        return args;
+      };
+      const findMatchingParen = (text, openIdx) => {
+        let depth = 0;
+        let inString = false;
+        let quote = '';
+        let escape = false;
+        for (let i = openIdx; i < text.length; i++) {
+          const ch = text[i];
+          if (inString) {
+            if (escape) {
+              escape = false;
+              continue;
+            }
+            if (ch === '\\') {
+              escape = true;
+              continue;
+            }
+            if (ch === quote) {
+              inString = false;
+              quote = '';
+            }
+            continue;
+          }
+          if (ch === '"' || ch === "'") {
+            inString = true;
+            quote = ch;
+            continue;
+          }
+          if (ch === '(') {
+            depth += 1;
+            continue;
+          }
+          if (ch === ')') {
+            depth -= 1;
+            if (depth === 0) return i;
+          }
+        }
+        return -1;
+      };
+      const parseFunctionActions = (text) => {
+        const source = String(text || '');
+        const out = [];
+        const re = /(insertRow|updateRow|deleteRow)\s*\(/gi;
+        let match;
+        while ((match = re.exec(source))) {
+          const name = String(match[1] || '').toLowerCase();
+          const openIdx = source.indexOf('(', match.index);
+          if (openIdx < 0) continue;
+          const closeIdx = findMatchingParen(source, openIdx);
+          if (closeIdx < 0) continue;
+          const args = splitFunctionArgs(source.slice(openIdx + 1, closeIdx));
+          const values = args.map(parseArgValue);
+          const tableIndex = parseIndex(values[0]);
+          if (tableIndex == null) {
+            re.lastIndex = closeIdx + 1;
+            continue;
+          }
+          if (name === 'insertrow') {
+            const data = values[1];
+            if (data && typeof data === 'object') {
+              out.push({ action: 'insert', tableIndex, data });
+            }
+          } else if (name === 'updaterow') {
+            const rowIndex = parseIndex(values[1]);
+            const data = values[2];
+            if (rowIndex != null && data && typeof data === 'object') {
+              out.push({ action: 'update', tableIndex, rowIndex, data });
+            }
+          } else if (name === 'deleterow') {
+            const rowIndex = parseIndex(values[1]);
+            if (rowIndex != null) {
+              out.push({ action: 'delete', tableIndex, rowIndex });
+            }
+          }
+          re.lastIndex = closeIdx + 1;
+        }
+        return out;
+      };
+      const parsed = cleaned.startsWith('[') ? tryParse(cleaned) : null;
+      if (Array.isArray(parsed)) {
+        parsed.forEach(pushAction);
+      }
+      const lineItems = cleaned
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+      for (const line of lineItems) {
+        const normalized = line.replace(/,$/, '');
+        if (!normalized) continue;
+        const obj = tryParse(normalized);
+        if (obj) {
+          pushAction(obj);
+        }
+      }
+      const jsonActionCount = actions.length;
+      const functionActions = parseFunctionActions(cleaned);
+      if (functionActions.length) actions.push(...functionActions);
+      if (jsonActionCount > 0) return actions;
+      const matches = cleaned.match(/\{[\s\S]*?\}/g) || [];
+      for (const chunk of matches) {
+        const obj = tryParse(chunk);
+        if (obj) pushAction(obj);
+      }
+      return actions;
+    };
+    const formatMemoryEditValue = (value, maxLen = 120) => {
+      if (value === null || value === undefined) return '';
+      let text = '';
+      if (typeof value === 'string') text = value.trim();
+      else if (typeof value === 'number' || typeof value === 'boolean') text = String(value);
+      else {
+        try {
+          text = JSON.stringify(value);
+        } catch {
+          text = String(value);
+        }
+      }
+      if (text.length > maxLen) return `${text.slice(0, maxLen)}…`;
+      return text;
+    };
+    const resolveActionTableLabel = (action, tableById, planOrder) => {
+      const explicit = String(action?.tableId || action?.tableName || '').trim();
+      let tableId = explicit;
+      if (!tableId) {
+        const index = Number.isFinite(Number(action?.tableIndex)) ? Math.trunc(Number(action.tableIndex)) : null;
+        if (index !== null && index >= 0 && index < planOrder.length) {
+          tableId = String(planOrder[index] || '').trim();
+        }
+      }
+      const tableName = tableId && tableById?.has(tableId) ? String(tableById.get(tableId)?.name || '').trim() : '';
+      if (tableName && tableId) return `${tableName} (${tableId})`;
+      if (tableId) return tableId;
+      const idx = Number.isFinite(Number(action?.tableIndex)) ? Math.trunc(Number(action.tableIndex)) : null;
+      if (idx !== null) return `table#${idx}`;
+      return 'table';
+    };
+    const buildMemoryActionLine = (action, index, tableById, planOrder) => {
+      const label = resolveActionTableLabel(action, tableById, planOrder);
+      const actionType = String(action?.action || '').toLowerCase();
+      const rowIndex = Number.isFinite(Number(action?.rowIndex)) ? Math.trunc(Number(action.rowIndex)) : null;
+      const rowId = String(action?.rowId || '').trim();
+      const data = action?.data && typeof action.data === 'object' ? action.data : null;
+      let detail = '';
+      if (actionType === 'delete') {
+        detail = rowIndex !== null ? `row_index=${rowIndex}` : rowId ? `row_id=${rowId}` : '';
+      } else if (actionType === 'insert') {
+        detail = data ? formatMemoryEditValue(data) : '';
+      } else if (actionType === 'update') {
+        const target = rowIndex !== null ? `row_index=${rowIndex}` : rowId ? `row_id=${rowId}` : '';
+        const payload = data ? formatMemoryEditValue(data) : '';
+        detail = [target, payload].filter(Boolean).join(' ');
+      }
+      return `${index}. ${actionType || 'edit'} -> ${label}${detail ? `: ${detail}` : ''}`;
+    };
+    const buildMemoryConfirmText = (actions, tableById, planOrder, { title, maxLines } = {}) => {
+      const lines = [];
+      lines.push(title || '检测到记忆表格写入指令：');
+      const limit = Number.isFinite(Number(maxLines)) ? Math.max(1, Math.trunc(Number(maxLines))) : 12;
+      actions.slice(0, limit).forEach((action, idx) => {
+        lines.push(buildMemoryActionLine(action, idx + 1, tableById, planOrder));
+      });
+      if (actions.length > limit) {
+        lines.push(`... 还有 ${actions.length - limit} 条`);
+      }
+      lines.push('继续执行这些写表指令吗？');
+      return lines.join('\n');
+    };
+    const confirmMemoryEditsIfNeeded = async (actions) => {
+      const settings = appSettings.get();
+      const confirmBefore = settings.memoryAutoConfirm === true;
+      const stepByStep = settings.memoryAutoStepByStep === true;
+      if (!confirmBefore && !stepByStep) return actions;
+      let tableById = new Map();
+      try {
+        const templateInfo = await loadTemplateDefinition();
+        const tables = Array.isArray(templateInfo?.template?.tables) ? templateInfo.template.tables : [];
+        tables.forEach((table) => {
+          const id = String(table?.id || '').trim();
+          if (!id) return;
+          tableById.set(id, table);
+        });
+      } catch {}
+      const planOrder = Array.isArray(window.appBridge?.lastMemoryPlan?.tableOrder)
+        ? window.appBridge.lastMemoryPlan.tableOrder
+        : [];
+      if (stepByStep) {
+        if (confirmBefore) {
+          const ok = window.confirm(buildMemoryConfirmText(actions, tableById, planOrder));
+          if (!ok) {
+            window.toastr?.info?.('已取消写表执行');
+            return [];
+          }
+        }
+        const confirmed = [];
+        for (let i = 0; i < actions.length; i++) {
+          const action = actions[i];
+          const ok = window.confirm(
+            buildMemoryConfirmText([action], tableById, planOrder, {
+              title: `写表确认（${i + 1}/${actions.length}）`,
+              maxLines: 1,
+            }),
+          );
+          if (!ok) {
+            window.toastr?.info?.('已停止后续写表执行');
+            break;
+          }
+          confirmed.push(action);
+        }
+        return confirmed;
+      }
+      const ok = window.confirm(buildMemoryConfirmText(actions, tableById, planOrder));
+      if (!ok) {
+        window.toastr?.info?.('已取消写表执行');
+        return [];
+      }
+      return actions;
+    };
+    const normalizeMemoryCellValue = (value) => {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') return value.trim();
+      if (typeof value === 'number' || typeof value === 'boolean') return value;
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return String(value);
+      }
+    };
+    const normalizeTableRowData = (data, columns) => {
+      if (!data || typeof data !== 'object') return {};
+      const colIdMap = new Map();
+      const colNameMap = new Map();
+      const colIndexMap = new Map();
+      (columns || []).forEach((col, idx) => {
+        const id = String(col?.id || '').trim();
+        if (id) colIdMap.set(id.toLowerCase(), id);
+        const name = String(col?.name || '').trim();
+        if (name) colNameMap.set(name.toLowerCase(), id);
+        colIndexMap.set(String(idx), id);
+      });
+      const out = {};
+      for (const [rawKey, rawValue] of Object.entries(data)) {
+        const key = String(rawKey || '').trim();
+        if (!key) continue;
+        const lower = key.toLowerCase();
+        let colId = colIdMap.get(lower) || colNameMap.get(lower);
+        if (!colId && /^\d+$/.test(key)) {
+          colId = colIndexMap.get(key);
+        }
+        if (!colId) continue;
+        const value = normalizeMemoryCellValue(rawValue);
+        out[colId] = value;
+      }
+      return out;
+    };
+    const resolveDefaultTemplate = async () => {
+      if (!memoryTemplateStore) return null;
+      const list = await memoryTemplateStore.getTemplates({ is_default: true });
+      if (Array.isArray(list) && list.length) return list[0];
+      const fallback = await memoryTemplateStore.getTemplates({ id: 'default-v1' });
+      if (Array.isArray(fallback) && fallback.length) return fallback[0];
+      return null;
+    };
+    const loadTemplateDefinition = async () => {
+      const record = await resolveDefaultTemplate();
+      if (!record) return null;
+      const schema = memoryTemplateStore?.toTemplateDefinition?.(record) || record?.schema || {};
+      return { record, template: schema };
+    };
+    const buildTableMaps = (template) => {
+      const tableById = new Map();
+      const tableNameMap = new Map();
+      const tableOrder = [];
+      (template?.tables || []).forEach((table) => {
+        const id = String(table?.id || '').trim();
+        if (!id) return;
+        tableById.set(id, table);
+        tableOrder.push(id);
+        const name = String(table?.name || '').trim();
+        if (name) tableNameMap.set(name.toLowerCase(), id);
+      });
+      return { tableById, tableNameMap, tableOrder };
+    };
+    const rowDataEquals = (a, b) => {
+      const left = a && typeof a === 'object' ? a : {};
+      const right = b && typeof b === 'object' ? b : {};
+      const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+      for (const key of keys) {
+        const lv = normalizeMemoryCellValue(left[key]);
+        const rv = normalizeMemoryCellValue(right[key]);
+        if (String(lv ?? '') !== String(rv ?? '')) return false;
+      }
+      return true;
+    };
+    const applyMemoryEdits = async ({ actions, sessionId, isGroup }) => {
+      if (!Array.isArray(actions) || actions.length === 0) return null;
+      if (!memoryTableStore || !memoryTemplateStore) return null;
+
+      const plan = window.appBridge?.lastMemoryPlan || null;
+      if (plan?.enabled === false) return null;
+      if (plan?.targetId && String(plan.targetId) !== String(sessionId)) return null;
+
+      let templateInfo = null;
+      try {
+        templateInfo = await loadTemplateDefinition();
+      } catch {
+        templateInfo = null;
+      }
+      if (!templateInfo?.record) return null;
+      const templateId = String(templateInfo.record?.id || '').trim();
+      const template = templateInfo.template || {};
+      const { tableById, tableNameMap, tableOrder: templateOrder } = buildTableMaps(template);
+      const planOrder = Array.isArray(plan?.tableOrder) ? plan.tableOrder : [];
+      const tableOrder = planOrder.length ? planOrder : templateOrder;
+      const rowIndexMap = plan?.rowIndexMap && typeof plan.rowIndexMap === 'object' ? plan.rowIndexMap : {};
+
+      const scopedRows = isGroup
+        ? await memoryTableStore.getMemories({ scope: 'group', group_id: sessionId, template_id: templateId })
+        : await memoryTableStore.getMemories({ scope: 'contact', contact_id: sessionId, template_id: templateId });
+      const globalRows = await memoryTableStore.getMemories({ scope: 'global', template_id: templateId });
+      const allRows = [...(Array.isArray(globalRows) ? globalRows : []), ...(Array.isArray(scopedRows) ? scopedRows : [])];
+      const rowsById = new Map();
+      const rowsByTableScope = new Map();
+      for (const row of allRows) {
+        const id = String(row?.id || '').trim();
+        if (!id) continue;
+        rowsById.set(id, row);
+        const tableId = String(row?.table_id || '').trim();
+        if (!tableId) continue;
+        const scopeKey = row?.contact_id ? 'contact' : row?.group_id ? 'group' : 'global';
+        const key = `${tableId}:${scopeKey}`;
+        if (!rowsByTableScope.has(key)) rowsByTableScope.set(key, []);
+        rowsByTableScope.get(key).push(row);
+      }
+
+      const resolveTableId = (action) => {
+        const rawId = String(action?.tableId || '').trim();
+        if (rawId && tableById.has(rawId)) return rawId;
+        const rawName = String(action?.tableName || '').trim().toLowerCase();
+        if (rawName && tableNameMap.has(rawName)) return tableNameMap.get(rawName);
+        const idxRaw = action?.tableIndex;
+        const idx = Number.isFinite(Number(idxRaw)) ? Math.trunc(Number(idxRaw)) : null;
+        if (idx !== null && idx >= 0 && idx < tableOrder.length) {
+          const id = String(tableOrder[idx] || '').trim();
+          if (id && tableById.has(id)) return id;
+        }
+        return '';
+      };
+      const resolveRowId = (action, tableId) => {
+        const rowId = String(action?.rowId || '').trim();
+        if (rowId) return rowId;
+        const rowIndexRaw = action?.rowIndex;
+        const rowIndex = Number.isFinite(Number(rowIndexRaw)) ? Math.trunc(Number(rowIndexRaw)) : null;
+        if (rowIndex === null || rowIndex < 0) return '';
+        const map = rowIndexMap?.[tableId];
+        if (Array.isArray(map) && rowIndex < map.length) return String(map[rowIndex] || '').trim();
+        return '';
+      };
+      const resolveScopeForTable = (table) => {
+        const scope = String(table?.scope || '').trim().toLowerCase();
+        if (scope === 'global') return { key: 'global', contactId: null, groupId: null };
+        if (scope === 'group') return { key: 'group', contactId: null, groupId: sessionId };
+        if (scope === 'contact') return { key: 'contact', contactId: sessionId, groupId: null };
+        return isGroup ? { key: 'group', contactId: null, groupId: sessionId } : { key: 'contact', contactId: sessionId, groupId: null };
+      };
+
+      const createInputs = [];
+      let updated = 0;
+      let deleted = 0;
+      let skipped = 0;
+
+      const queueInsert = (tableId, table, scopeKey, contactId, groupId, data) => {
+        const countKey = `${tableId}:${scopeKey}`;
+        const maxRows = Number.isFinite(Number(table?.maxRows)) ? Math.max(0, Math.trunc(Number(table.maxRows))) : 0;
+        const existingRows = rowsByTableScope.get(countKey) || [];
+        if (maxRows && existingRows.length >= maxRows) {
+          skipped += 1;
+          return false;
+        }
+        const duplicate = existingRows.some(row => rowDataEquals(row?.row_data || {}, data));
+        if (duplicate) {
+          skipped += 1;
+          return false;
+        }
+        createInputs.push({
+          template_id: templateId,
+          table_id: tableId,
+          contact_id: contactId,
+          group_id: groupId,
+          row_data: data,
+          is_active: true,
+        });
+        existingRows.push({ row_data: data });
+        rowsByTableScope.set(countKey, existingRows);
+        return true;
+      };
+
+      for (const action of actions) {
+        const tableId = resolveTableId(action);
+        if (!tableId) {
+          skipped += 1;
+          continue;
+        }
+        const table = tableById.get(tableId);
+        if (!table) {
+          skipped += 1;
+          continue;
+        }
+        const tableScope = String(table?.scope || '').trim().toLowerCase();
+        const effectiveScope = tableScope || (isGroup ? 'group' : 'contact');
+        if ((effectiveScope === 'group' && !isGroup) || (effectiveScope === 'contact' && isGroup)) {
+          skipped += 1;
+          continue;
+        }
+        const { key: scopeKey, contactId, groupId } = resolveScopeForTable(table);
+        if (action.action === 'insert') {
+          const data = normalizeTableRowData(action.data, table.columns || []);
+          if (!Object.keys(data).length) {
+            skipped += 1;
+            continue;
+          }
+          queueInsert(tableId, table, scopeKey, contactId, groupId, data);
+        } else if (action.action === 'update') {
+          const data = normalizeTableRowData(action.data, table.columns || []);
+          if (!Object.keys(data).length) {
+            skipped += 1;
+            continue;
+          }
+          const rowId = resolveRowId(action, tableId);
+          if (!rowId) {
+            const countKey = `${tableId}:${scopeKey}`;
+            const existingRows = rowsByTableScope.get(countKey) || [];
+            if (!existingRows.length) {
+              queueInsert(tableId, table, scopeKey, contactId, groupId, data);
+            } else {
+              skipped += 1;
+            }
+            continue;
+          }
+          const row = rowsById.get(rowId);
+          if (!row) {
+            skipped += 1;
+            continue;
+          }
+          if (String(row?.table_id || '') !== tableId) {
+            skipped += 1;
+            continue;
+          }
+          if (row?.is_pinned) {
+            skipped += 1;
+            continue;
+          }
+          const merged = { ...(row?.row_data || {}), ...data };
+          if (rowDataEquals(row?.row_data || {}, merged)) {
+            skipped += 1;
+            continue;
+          }
+          await memoryTableStore.updateMemory({ id: rowId, row_data: merged });
+          rowsById.set(rowId, { ...row, row_data: merged });
+          updated += 1;
+        } else if (action.action === 'delete') {
+          const rowId = resolveRowId(action, tableId);
+          if (!rowId) {
+            skipped += 1;
+            continue;
+          }
+          const row = rowsById.get(rowId);
+          if (!row) {
+            skipped += 1;
+            continue;
+          }
+          if (String(row?.table_id || '') !== tableId) {
+            skipped += 1;
+            continue;
+          }
+          if (row?.is_pinned) {
+            skipped += 1;
+            continue;
+          }
+          await memoryTableStore.deleteMemory(rowId);
+          rowsById.delete(rowId);
+          {
+            const rowScopeKey = row?.contact_id ? 'contact' : row?.group_id ? 'group' : 'global';
+            const key = `${tableId}:${rowScopeKey}`;
+            const list = rowsByTableScope.get(key) || [];
+            rowsByTableScope.set(key, list.filter(item => String(item?.id || '') !== rowId));
+          }
+          deleted += 1;
+        }
+      }
+
+      let inserted = 0;
+      if (createInputs.length) {
+        try {
+          inserted = await memoryTableStore.batchCreateMemories(createInputs);
+        } catch {
+          for (const input of createInputs) {
+            try {
+              await memoryTableStore.createMemory(input);
+              inserted += 1;
+            } catch {}
+          }
+        }
+      }
+
+      const changed = inserted + updated + deleted;
+      if (changed > 0) {
+        window.dispatchEvent(new CustomEvent('memory-rows-updated', { detail: { sessionId, templateId } }));
+        const parts = [];
+        if (inserted) parts.push(`新增${inserted}`);
+        if (updated) parts.push(`更新${updated}`);
+        if (deleted) parts.push(`删除${deleted}`);
+        window.toastr?.info?.(`记忆表格已更新：${parts.join(' · ')}`);
+      } else if (skipped > 0) {
+        logger.debug('memory auto extract skipped actions', { skipped });
+      }
+      return { inserted, updated, deleted, skipped };
+    };
+    const buildRequestPromptText = (messages) => {
+      if (!Array.isArray(messages)) return '';
+      const parts = messages
+        .map((m) => {
+          const role = String(m?.role || 'message');
+          const content = String(m?.content ?? '').trim();
+          if (!content) return '';
+          return `${role}:\n${content}`;
+        })
+        .filter(Boolean);
+      return parts.join('\n\n');
+    };
+    const handleMemoryEditsFromRaw = async (raw, { sessionId, isGroup, force = false, requestPrompt } = {}) => {
+      if (!force && !isMemoryAutoExtractInline()) {
+        return { text: raw, actions: [] };
+      }
+      const parsed = extractTableEditBlocks(raw);
+      try {
+        const blocks = Array.isArray(parsed.blocks) ? parsed.blocks : [];
+        const tableEditRaw = blocks.join('\n\n').trim();
+        const lastEntry = window.appBridge?.getLastMemoryUpdate?.(sessionId);
+        let promptText = typeof requestPrompt === 'string' ? requestPrompt : '';
+        if (!promptText.trim()) {
+          const inferred = buildRequestPromptText(window.appBridge?.lastRequest?.messages);
+          if (inferred.trim()) promptText = inferred;
+        }
+        if (!promptText.trim() && lastEntry?.requestPrompt) {
+          promptText = String(lastEntry.requestPrompt || '');
+        }
+        window.appBridge?.setLastMemoryUpdate?.(sessionId, {
+          at: Date.now(),
+          mode: force ? 'separate' : 'inline',
+          raw: String(raw ?? ''),
+          tableEditRaw,
+          actions: Array.isArray(parsed.actions) ? parsed.actions : [],
+          requestPrompt: promptText,
+        });
+      } catch {}
+      if (parsed.actions.length) {
+        try {
+          const confirmedActions = await confirmMemoryEditsIfNeeded(parsed.actions);
+          if (confirmedActions.length) {
+            await applyMemoryEdits({ actions: confirmedActions, sessionId, isGroup });
+          }
+        } catch (err) {
+          logger.warn('apply memory edits failed', err);
+        }
+      }
+      return parsed;
+    };
+    const canInitClient = (cfg) => {
+      const c = cfg || {};
+      const hasKey = typeof c.apiKey === 'string' && c.apiKey.trim().length > 0;
+      const hasVertexSa =
+        c.provider === 'vertexai' &&
+        typeof c.vertexaiServiceAccount === 'string' &&
+        c.vertexaiServiceAccount.trim().length > 0;
+      return hasKey || hasVertexSa;
+    };
+    const buildMemoryUpdateHistoryText = (sessionId) => {
+      const messages = chatStore.getMessages(sessionId) || [];
+      const lines = [];
+      const usable = messages.filter(m => m && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
+      const settings = appSettings.get();
+      const rawLimit = Math.trunc(Number(settings.memoryUpdateContextRounds));
+      const limit = Number.isFinite(rawLimit) ? Math.max(0, rawLimit) : 6;
+      if (limit <= 0) return '';
+      const rounds = [];
+      let current = null;
+      usable.forEach((m) => {
+        if (m?.status === 'pending' || m?.status === 'sending') return;
+        if (m?.role === 'user') {
+          current = { messages: [m] };
+          rounds.push(current);
+          return;
+        }
+        if (m?.role === 'assistant') {
+          if (!current) {
+            current = { messages: [] };
+            rounds.push(current);
+          }
+          current.messages.push(m);
+          return;
+        }
+        if (m?.role === 'system') {
+          if (!current) return;
+          current.messages.push(m);
+        }
+      });
+      const selected = rounds.slice(-limit);
+      selected.forEach((round) => {
+        (round.messages || []).forEach((m) => {
+          const name = String(m?.name || (m?.role === 'assistant' ? '助手' : m?.role === 'user' ? '用户' : '系统'));
+          const rawText = String(m?.rawOriginal || m?.raw || m?.content || '');
+          const clean = m?.role === 'assistant' ? stripTableEditBlocks(rawText) : rawText;
+          const clipped = clean.length > 4000 ? `${clean.slice(0, 4000)}…` : clean;
+          if (!clipped.trim()) return;
+          lines.push(`${name}: ${clipped}`);
+        });
+      });
+      return lines.join('\n');
+    };
+    const buildMemoryUpdatePlan = async (sessionId, isGroup, baseContext) => {
+      const ctx = baseContext || {};
+      const next = {
+        ...(ctx || {}),
+        session: { id: sessionId, isGroup },
+        meta: {
+          ...(ctx?.meta || {}),
+          memoryStorageMode: 'table',
+          memoryAutoExtract: true,
+        },
+        history: [],
+      };
+      if (!window.appBridge?.buildMemoryPromptPlan) return null;
+      return window.appBridge.buildMemoryPromptPlan(next);
+    };
+    const resolveMemoryUpdateConfig = async () => {
+      const settings = appSettings.get();
+      const mode = String(settings.memoryUpdateApiMode || 'chat').toLowerCase();
+      if (mode !== 'profile') {
+        await window.appBridge.config.load();
+        return window.appBridge.config.get();
+      }
+      await memoryUpdateConfigManager.load();
+      const profileId = String(settings.memoryUpdateProfileId || memoryUpdateConfigManager.getActiveProfileId() || '');
+      if (!profileId) return null;
+      const runtime = await memoryUpdateConfigManager.getRuntimeConfigByProfileId(profileId);
+      return runtime;
+    };
+    const runMemoryUpdateAfterChat = async (sessionId, isGroup, baseContext) => {
+      if (!isMemoryAutoExtractSeparate()) return;
+      if (!sessionId) return;
+      if (memoryUpdateRunning.has(sessionId)) return;
+      memoryUpdateRunning.add(sessionId);
+      try {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+        const plan = await buildMemoryUpdatePlan(sessionId, isGroup, baseContext);
+        if (!plan?.enabled || !plan.promptText) return;
+        const historyText = buildMemoryUpdateHistoryText(sessionId);
+        if (!historyText.trim()) return;
+        const config = await resolveMemoryUpdateConfig();
+        if (!config || !canInitClient(config)) {
+          logger.warn('memory update config missing or invalid');
+          return;
+        }
+        const systemText = String(plan.promptText || '').trim();
+        const userText = [
+          '请根据以下聊天记录更新记忆表格。',
+          '只输出 <tableEdit>...</tableEdit>，不要输出任何解释。',
+          '',
+          '<chat_history>',
+          historyText,
+          '</chat_history>',
+        ].join('\n');
+        const requestPrompt = ['system:', systemText, '', 'user:', userText].join('\n');
+        const client = new LLMClient(config);
+        const response = await client.chat([
+          { role: 'system', content: systemText },
+          { role: 'user', content: userText },
+        ]);
+        await handleMemoryEditsFromRaw(response, { sessionId, isGroup, force: true, requestPrompt });
+      } catch (err) {
+        logger.warn('memory update failed', err);
+      } finally {
+        memoryUpdateRunning.delete(sessionId);
+      }
+    };
     const buildAssistantMessageFromText = (rawText, { sessionId, time, name, avatar, showName, depth } = {}) => {
       const cleaned = sanitizeAssistantReplyText(rawText, userName);
       const reasoningParsed = extractReasoningFromContent(cleaned, { depth, strict: true });
@@ -3948,37 +4822,52 @@ ${listPart || '-（无）'}
       return history;
     };
     let disableSummaryForThis = false;
-    const llmContext = pendingUserText => ({
-      user: {
-        name: userName,
-        persona: activePersona.description || '',
-        personaPosition: activePersona.position,
-        personaDepth: activePersona.depth,
-        personaRole: activePersona.role,
-      },
-      character: { name: characterName },
-      session: { id: sessionId, isGroup: isGroupChat },
-      meta: {
-        // Keep summary prompt on; creative mode restricts chat guide to summary-only.
-        disableSummary: Boolean(disableSummaryForThis),
-        skipInputRegex: Boolean(skipInputRegex),
-        chatGuideMode: creativeMode ? 'summary-only' : 'full',
-        disableChatGuide: false,
-        disableScenarioHint: Boolean(creativeMode),
-        disableMomentSummary: Boolean(creativeMode),
-        disablePhoneFormat: Boolean(creativeMode),
-        memoryStorageMode: getMemoryStorageMode(),
-      },
-      group: isGroupChat
-        ? {
-            id: sessionId,
-            name: characterName,
-            members: groupMembers.slice(),
-            memberNames: groupMembers.map(mid => contactsStore.getContact(mid)?.name || mid),
-          }
-        : null,
-      history: buildHistoryForLLM(pendingUserText),
-    });
+    const llmContext = (pendingUserText) => {
+      const settings = appSettings.get();
+      const maxRowsRaw = Math.trunc(Number(settings.memoryMaxRows));
+      const maxTokensRaw = Math.trunc(Number(settings.memoryMaxTokens));
+      const memoryMaxRows = Number.isFinite(maxRowsRaw) ? Math.min(100, Math.max(10, maxRowsRaw)) : 30;
+      const memoryMaxTokens = Number.isFinite(maxTokensRaw) ? Math.min(5000, Math.max(500, maxTokensRaw)) : 2000;
+      const memoryInjectPosition = String(settings.memoryInjectPosition || 'template').toLowerCase();
+      return {
+        user: {
+          name: userName,
+          persona: activePersona.description || '',
+          personaPosition: activePersona.position,
+          personaDepth: activePersona.depth,
+          personaRole: activePersona.role,
+        },
+        character: { name: characterName },
+        session: { id: sessionId, isGroup: isGroupChat },
+        meta: {
+          // Keep summary prompt on; creative mode restricts chat guide to summary-only.
+          disableSummary: Boolean(disableSummaryForThis),
+          skipInputRegex: Boolean(skipInputRegex),
+          chatGuideMode: creativeMode ? 'summary-only' : 'full',
+          disableChatGuide: false,
+          disableScenarioHint: Boolean(creativeMode),
+          disableMomentSummary: Boolean(creativeMode),
+          disablePhoneFormat: Boolean(creativeMode),
+          memoryStorageMode: getMemoryStorageMode(),
+          memoryAutoExtract: isMemoryAutoExtractInline(),
+          memoryMaxRows,
+          memoryMaxTokens,
+          memoryInjectPosition,
+        },
+        group: isGroupChat
+          ? {
+              id: sessionId,
+              name: characterName,
+              members: groupMembers.slice(),
+              memberNames: groupMembers.map(mid => contactsStore.getContact(mid)?.name || mid),
+            }
+          : null,
+        history: buildHistoryForLLM(pendingUserText),
+      };
+    };
+    try {
+      window.appBridge.setContextBuilder?.(llmContext);
+    } catch {}
 
     // slash command support
     if (text.startsWith('/')) {
@@ -4084,7 +4973,8 @@ ${listPart || '-（无）'}
               });
               if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
             }
-            streamCtrl.update(full);
+            const streamText = isMemoryAutoExtractInline() ? stripTableEditBlocks(full) : full;
+            streamCtrl.update(streamText);
           }
           if (activeGeneration?.cancelled) return;
           ui.hideTyping();
@@ -4096,10 +4986,12 @@ ${listPart || '-（无）'}
               typing: false,
             });
             if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
-            streamCtrl.update(full);
+            const streamText = isMemoryAutoExtractInline() ? stripTableEditBlocks(full) : full;
+            streamCtrl.update(streamText);
           }
           chatStore.setLastRawResponse(full, sessionId);
-          let stripped = full;
+          const memoryParsed = await handleMemoryEditsFromRaw(full, { sessionId, isGroup: isGroupChat });
+          let stripped = memoryParsed.text;
           let summary = '';
           if (isSummaryMemoryEnabled()) {
             const parsedSummary = extractSummaryBlock(full);
@@ -4285,6 +5177,7 @@ ${listPart || '-（无）'}
               } catch {}
             }
           }
+          await handleMemoryEditsFromRaw(fullRaw, { sessionId, isGroup: isGroupChat });
           if (mutatedMoments) {
             try {
               await momentsStore.flush();
@@ -4529,11 +5422,13 @@ ${listPart || '-（无）'}
           for await (const chunk of stream) {
             if (activeGeneration?.cancelled) break;
             full += chunk;
-            streamCtrl.update(full);
+            const streamText = isMemoryAutoExtractInline() ? stripTableEditBlocks(full) : full;
+            streamCtrl.update(streamText);
           }
           if (activeGeneration?.cancelled) return;
           chatStore.setLastRawResponse(full, sessionId);
-          let stripped = full;
+          const memoryParsed = await handleMemoryEditsFromRaw(full, { sessionId, isGroup: isGroupChat });
+          let stripped = memoryParsed.text;
           if (isSummaryMemoryEnabled()) {
             const parsedSummary = extractSummaryBlock(full);
             stripped = parsedSummary.text;
@@ -4594,6 +5489,10 @@ ${listPart || '-（无）'}
         ui.hideTyping();
         chatStore.setLastRawResponse(resultRaw, sessionId);
         let stripped = resultRaw;
+        if (!protocolEnabled) {
+          const memoryParsed = await handleMemoryEditsFromRaw(resultRaw, { sessionId, isGroup: isGroupChat });
+          stripped = memoryParsed.text;
+        }
         let protocolSummary = '';
         if (isSummaryMemoryEnabled()) {
           const parsedSummary = extractSummaryBlock(resultRaw);
@@ -4650,6 +5549,7 @@ ${listPart || '-（无）'}
           const events = parser.push(resultRaw);
           let didAnything = false;
           let mutatedMoments = false;
+          handleMemoryEditsFromRaw(resultRaw, { sessionId, isGroup: isGroupChat }).catch(() => {});
           events.forEach(ev => {
             if (ev?.type === 'moments') {
               momentsStore.addMany(ingestMoments(ev.moments || []));
@@ -5037,6 +5937,7 @@ ${listPart || '-（无）'}
         }
         movePendingFromHistoryToQueue(sessionId);
         refreshChatAndContacts();
+        runMemoryUpdateAfterChat(sessionId, isGroupChat, llmContext('')).catch(() => {});
       }
       updatePendingFloat(sessionId);
       ui.setSendingState(false);
@@ -5341,6 +6242,27 @@ ${listPart || '-（无）'}
   window.addEventListener('worldinfo-changed', () => {
     updateWorldIndicator();
     rerenderCurrentSession();
+  });
+  window.addEventListener('memory-table-push', (ev) => {
+    const detail = ev?.detail || {};
+    const sessionId = String(detail.sessionId || '').trim();
+    const content = String(detail.content || '').trim();
+    if (!sessionId || !content) return;
+    const msg = {
+      role: 'assistant',
+      type: 'text',
+      name: '助手',
+      avatar: getAssistantAvatarForSession(sessionId),
+      time: formatNowTime(),
+      content,
+      meta: { renderRich: true, kind: 'memory-table-push' },
+    };
+    if (String(chatStore.getCurrent() || '') === sessionId) {
+      ui.addMessage(msg);
+    }
+    const saved = chatStore.appendMessage(msg, sessionId);
+    autoMarkReadIfActive(sessionId, saved?.id || msg?.id || '');
+    refreshChatAndContacts();
   });
   window.addEventListener('preset-changed', async () => {
     try {

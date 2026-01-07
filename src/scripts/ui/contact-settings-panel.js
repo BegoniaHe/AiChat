@@ -5,6 +5,7 @@
 import { logger } from '../utils/logger.js';
 import { avatarDataUrlFromFile } from '../utils/image.js';
 import { appSettings } from '../storage/app-settings.js';
+import { MemoryTableEditor } from './memory-table-editor.js';
 
 const getMemoryStorageMode = () => {
     const mode = String(appSettings.get().memoryStorageMode || 'summary').toLowerCase();
@@ -27,6 +28,8 @@ export class ContactSettingsPanel {
         this.compactedList = null;
         this.summarySection = null;
         this.memoryTableSection = null;
+        this.memoryTableContent = null;
+        this.memoryTableEditor = null;
         this.currentAvatar = '';
         this.summaryBatchMode = false;
         this.summarySelectedKeys = new Set();
@@ -46,8 +49,11 @@ export class ContactSettingsPanel {
         this.renderArchives();
         this.renderSummaries();
         this.renderCompactedSummary();
+        if (getMemoryStorageMode() === 'table') {
+            this.memoryTableEditor?.render?.();
+        }
         this.overlay.style.display = 'block';
-        this.panel.style.display = 'block';
+        this.panel.style.display = 'flex';
     }
 
     hide() {
@@ -59,6 +65,7 @@ export class ContactSettingsPanel {
         const summaryOn = getMemoryStorageMode() === 'summary';
         if (this.summarySection) this.summarySection.style.display = summaryOn ? 'block' : 'none';
         if (this.memoryTableSection) this.memoryTableSection.style.display = summaryOn ? 'none' : 'block';
+        if (!summaryOn) this.memoryTableEditor?.render?.();
     }
 
     createUI() {
@@ -159,9 +166,7 @@ export class ContactSettingsPanel {
 
                     <div id="contact-memory-table-section" style="display:none; margin-top:14px; padding:12px; border:1px dashed #e2e8f0; border-radius:12px; background:#f8fafc;">
                         <div style="font-weight:700; color:#0f172a; margin-bottom:6px;">记忆表格</div>
-                        <div style="font-size:12px; color:#64748b; line-height:1.4;">
-                            记忆表格模式已开启。后续记忆表格编辑界面将展示在这里（与当前联系人绑定）。
-                        </div>
+                        <div id="contact-memory-table-content"></div>
                     </div>
 	                </div>
 
@@ -184,6 +189,7 @@ export class ContactSettingsPanel {
         this.compactedList = this.panel.querySelector('#contact-compacted-summary');
         this.summarySection = this.panel.querySelector('#contact-summary-section');
         this.memoryTableSection = this.panel.querySelector('#contact-memory-table-section');
+        this.memoryTableContent = this.panel.querySelector('#contact-memory-table-content');
         this.summariesBatchBar = this.panel.querySelector('#contact-summaries-batchbar');
 
         this.panel.querySelector('#contact-settings-close').onclick = () => this.hide();
@@ -224,6 +230,16 @@ export class ContactSettingsPanel {
             try { this.chatStore?.clearCompactedSummary?.(sid); } catch {}
             this.renderCompactedSummary();
         };
+
+        if (this.memoryTableContent && window.appBridge) {
+            this.memoryTableEditor = new MemoryTableEditor({
+                container: this.memoryTableContent,
+                getContext: () => ({ type: 'contact', contactId: this.getSessionId() }),
+                memoryStore: window.appBridge.memoryTableStore,
+                templateStore: window.appBridge.memoryTemplateStore,
+                includeGlobal: false,
+            });
+        }
 
         window.addEventListener('memory-storage-mode-changed', () => {
             try {

@@ -1,4 +1,5 @@
 import { appSettings } from '../storage/app-settings.js';
+import { ConfigManager } from '../storage/config.js';
 
 export class GeneralSettingsPanel {
   constructor() {
@@ -12,6 +13,22 @@ export class GeneralSettingsPanel {
     this.personaBindToggle = null;
     this.memoryModeSummary = null;
     this.memoryModeTable = null;
+    this.memoryAutoToggle = null;
+    this.memoryAutoModeInline = null;
+    this.memoryAutoModeSeparate = null;
+    this.memoryAutoOptions = null;
+    this.memoryUpdateApiChat = null;
+    this.memoryUpdateApiProfile = null;
+    this.memoryUpdateProfileSelect = null;
+    this.memoryUpdateApiBlock = null;
+    this.memoryUpdateContextInput = null;
+    this.memoryBudgetBlock = null;
+    this.memoryMaxRowsInput = null;
+    this.memoryMaxTokensInput = null;
+    this.memoryInjectPositionSelect = null;
+    this.memoryAutoConfirmToggle = null;
+    this.memoryAutoStepToggle = null;
+    this.configManager = new ConfigManager();
   }
 
   show() {
@@ -45,6 +62,54 @@ export class GeneralSettingsPanel {
     if (this.memoryModeTable) {
       this.memoryModeTable.checked = memoryMode === 'table';
     }
+    if (this.memoryAutoToggle) {
+      this.memoryAutoToggle.checked = Boolean(settings.memoryAutoExtract);
+    }
+    const memoryAutoMode = String(settings.memoryAutoExtractMode || 'inline').toLowerCase();
+    if (this.memoryAutoModeInline) {
+      this.memoryAutoModeInline.checked = memoryAutoMode !== 'separate';
+    }
+    if (this.memoryAutoModeSeparate) {
+      this.memoryAutoModeSeparate.checked = memoryAutoMode === 'separate';
+    }
+    const memoryApiMode = String(settings.memoryUpdateApiMode || 'chat').toLowerCase();
+    if (this.memoryUpdateApiChat) {
+      this.memoryUpdateApiChat.checked = memoryApiMode !== 'profile';
+    }
+    if (this.memoryUpdateApiProfile) {
+      this.memoryUpdateApiProfile.checked = memoryApiMode === 'profile';
+    }
+    if (this.memoryUpdateProfileSelect) {
+      this.memoryUpdateProfileSelect.value = String(settings.memoryUpdateProfileId || '');
+    }
+    if (this.memoryUpdateContextInput) {
+      const raw = Math.trunc(Number(settings.memoryUpdateContextRounds ?? settings.memoryUpdateContextCount));
+      const safe = Number.isFinite(raw) ? Math.max(0, raw) : 6;
+      this.memoryUpdateContextInput.value = String(safe);
+    }
+    if (this.memoryAutoConfirmToggle) {
+      this.memoryAutoConfirmToggle.checked = settings.memoryAutoConfirm === true;
+    }
+    if (this.memoryAutoStepToggle) {
+      this.memoryAutoStepToggle.checked = settings.memoryAutoStepByStep === true;
+    }
+    if (this.memoryMaxRowsInput) {
+      const raw = Math.trunc(Number(settings.memoryMaxRows));
+      const safe = Number.isFinite(raw) ? Math.min(100, Math.max(10, raw)) : 30;
+      this.memoryMaxRowsInput.value = String(safe);
+    }
+    if (this.memoryMaxTokensInput) {
+      const raw = Math.trunc(Number(settings.memoryMaxTokens));
+      const safe = Number.isFinite(raw) ? Math.min(5000, Math.max(500, raw)) : 2000;
+      this.memoryMaxTokensInput.value = String(safe);
+    }
+    if (this.memoryInjectPositionSelect) {
+      const raw = String(settings.memoryInjectPosition || 'template').toLowerCase();
+      const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat']);
+      this.memoryInjectPositionSelect.value = allowed.has(raw) ? raw : 'template';
+    }
+    this.refreshMemoryUpdateProfiles().catch(() => {});
+    this.updateMemoryAutoVisibility();
     this.applyTypingDotsSetting(settings.typingDotsEnabled !== false);
     this.applyCreativeWideSetting(Boolean(settings.creativeWideBubble));
     this.element.style.display = 'block';
@@ -72,6 +137,63 @@ export class GeneralSettingsPanel {
     } else {
       delete document.body.dataset.creativeWide;
     }
+  }
+
+  updateMemoryAutoVisibility() {
+    const settings = appSettings.get();
+    const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
+    const showMemoryTable = memoryMode === 'table';
+    const enabled = settings.memoryAutoExtract === true;
+    const mode = String(settings.memoryAutoExtractMode || 'inline').toLowerCase();
+    const showAuto = showMemoryTable && Boolean(enabled);
+    if (this.memoryAutoOptions) {
+      this.memoryAutoOptions.style.display = showAuto ? 'block' : 'none';
+    }
+    const showApi = showAuto && mode === 'separate';
+    if (this.memoryUpdateApiBlock) {
+      this.memoryUpdateApiBlock.style.display = showApi ? 'block' : 'none';
+    }
+    if (this.memoryUpdateContextInput) {
+      this.memoryUpdateContextInput.disabled = !showApi;
+    }
+    const apiMode = String(settings.memoryUpdateApiMode || 'chat').toLowerCase();
+    if (this.memoryUpdateProfileSelect) {
+      this.memoryUpdateProfileSelect.disabled = !showApi || apiMode !== 'profile';
+    }
+    if (this.memoryBudgetBlock) {
+      this.memoryBudgetBlock.style.display = showMemoryTable ? 'block' : 'none';
+    }
+    if (this.memoryMaxRowsInput) {
+      this.memoryMaxRowsInput.disabled = !showMemoryTable;
+    }
+    if (this.memoryMaxTokensInput) {
+      this.memoryMaxTokensInput.disabled = !showMemoryTable;
+    }
+    if (this.memoryInjectPositionSelect) {
+      this.memoryInjectPositionSelect.disabled = !showMemoryTable;
+    }
+  }
+
+  async refreshMemoryUpdateProfiles() {
+    if (!this.memoryUpdateProfileSelect) return;
+    try {
+      await this.configManager.load();
+      const profiles = this.configManager.getProfiles();
+      const activeId = this.configManager.getActiveProfileId();
+      const current = appSettings.get().memoryUpdateProfileId || activeId || '';
+      this.memoryUpdateProfileSelect.innerHTML = '';
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = profiles.length ? '选择 API 配置…' : '暂无配置';
+      this.memoryUpdateProfileSelect.appendChild(placeholder);
+      profiles.forEach((profile) => {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        option.textContent = profile.name || profile.id;
+        if (profile.id === current) option.selected = true;
+        this.memoryUpdateProfileSelect.appendChild(option);
+      });
+    } catch {}
   }
 
   createUI() {
@@ -158,13 +280,92 @@ export class GeneralSettingsPanel {
             <div style="font-weight: 700; margin-bottom: 8px;">记忆存储方式</div>
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:8px;">
               <input type="radio" name="general-memory-mode" id="general-memory-mode-summary" value="summary">
-              <span>摘要模式（默认，沿用现有逻辑）</span>
+              <span>摘要模式（推荐）</span>
             </label>
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
               <input type="radio" name="general-memory-mode" id="general-memory-mode-table" value="table">
-              <span>记忆表格模式（SQLite，后续实装）</span>
+              <span>记忆表格模式（手动管理，更精确）</span>
             </label>
-            <small style="color:#666; margin-left: 26px;">两种方式互斥；记忆表格编辑入口将放在摘要页面</small>
+            <small style="color:#666; margin-left: 26px;">两种方式互斥，切换后立即生效</small>
+          </div>
+
+          <div style="margin-bottom: 10px;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" id="general-memory-auto" style="width: 18px; height: 18px;">
+              <span style="font-weight: 700;">AI 自动写入记忆表格</span>
+            </label>
+            <small style="color:#666; margin-left: 26px;">仅在记忆表格模式生效，AI 会在回复末尾输出 &lt;tableEdit&gt; 指令写入表格</small>
+          </div>
+
+          <div id="general-memory-auto-options" style="margin-left: 26px; margin-top: 6px; display: none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">写表方式</div>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:6px;">
+              <input type="radio" name="general-memory-auto-mode" id="general-memory-auto-inline" value="inline">
+              <span>随聊天回复一起（同一请求）</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="radio" name="general-memory-auto-mode" id="general-memory-auto-separate" value="separate">
+              <span>聊天后独立请求</span>
+            </label>
+            <div style="margin-top: 8px; display:flex; flex-direction: column; gap: 6px;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="general-memory-auto-confirm" style="width: 16px; height: 16px;">
+                <span>写表前确认</span>
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="general-memory-auto-step" style="width: 16px; height: 16px;">
+                <span>逐条执行（每条指令确认）</span>
+              </label>
+              <small style="color:#94a3b8;">逐条执行会依次弹窗确认每条指令</small>
+            </div>
+
+            <div id="general-memory-update-api" style="margin-top: 10px; padding: 8px; border: 1px dashed #e2e8f0; border-radius: 10px; display: none;">
+              <div style="font-size:12px; color:#64748b; margin-bottom:8px;">记忆更新 API</div>
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:6px;">
+                <input type="radio" name="general-memory-update-api" id="general-memory-update-chat" value="chat">
+                <span>使用聊天配置</span>
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:6px;">
+                <input type="radio" name="general-memory-update-api" id="general-memory-update-profile" value="profile">
+                <span>选择 API 配置</span>
+              </label>
+              <select id="general-memory-update-profile-select" style="width:100%; padding:6px 8px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; margin-top:4px;"></select>
+              <small style="color:#94a3b8; display:block; margin-top:6px;">可在 API 配置中新增多个配置</small>
+              <div id="general-memory-update-context" style="margin-top: 10px;">
+                <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; color:#0f172a;">
+                  <span>记忆更新上下文轮数</span>
+                  <input type="number" id="general-memory-update-context-rounds" min="0" step="1"
+                         style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
+                </label>
+                <small style="color:#94a3b8; display:block; margin-top:4px;">默认 6 轮（用户+助手），0 表示不发送历史</small>
+              </div>
+            </div>
+          </div>
+
+          <div id="general-memory-budget-block" style="margin-left: 26px; margin-top: 10px; padding: 8px; border: 1px dashed #e2e8f0; border-radius: 10px; display: none;">
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">记忆注入预算</div>
+            <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; color:#0f172a; margin-bottom:6px;">
+              <span>最大条目数</span>
+              <input type="number" id="general-memory-max-rows" min="10" max="100" step="1"
+                     style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
+            </label>
+            <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; color:#0f172a;">
+              <span>最大 tokens</span>
+              <input type="number" id="general-memory-max-tokens" min="500" max="5000" step="100"
+                     style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
+            </label>
+            <small style="color:#94a3b8; display:block; margin-top:4px;">建议范围：10-100 条 / 500-5000 tokens</small>
+
+            <div style="margin-top: 10px;">
+              <div style="font-size:12px; color:#64748b; margin-bottom:6px;">记忆注入位置</div>
+              <select id="general-memory-inject-position" style="width:100%; padding:6px 8px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px;">
+                <option value="template">跟随模板</option>
+                <option value="after_persona">角色设定后</option>
+                <option value="system_end">系统提示末尾</option>
+                <option value="before_chat">对话前</option>
+              </select>
+              <small style="color:#94a3b8; display:block; margin-top:4px;">可覆盖模板注入位置</small>
+            </div>
           </div>
         </div>
 
@@ -194,6 +395,21 @@ export class GeneralSettingsPanel {
     this.personaBindToggle = this.element.querySelector('#general-persona-bind');
     this.memoryModeSummary = this.element.querySelector('#general-memory-mode-summary');
     this.memoryModeTable = this.element.querySelector('#general-memory-mode-table');
+    this.memoryAutoToggle = this.element.querySelector('#general-memory-auto');
+    this.memoryAutoModeInline = this.element.querySelector('#general-memory-auto-inline');
+    this.memoryAutoModeSeparate = this.element.querySelector('#general-memory-auto-separate');
+    this.memoryAutoOptions = this.element.querySelector('#general-memory-auto-options');
+    this.memoryUpdateApiChat = this.element.querySelector('#general-memory-update-chat');
+    this.memoryUpdateApiProfile = this.element.querySelector('#general-memory-update-profile');
+    this.memoryUpdateProfileSelect = this.element.querySelector('#general-memory-update-profile-select');
+    this.memoryUpdateApiBlock = this.element.querySelector('#general-memory-update-api');
+    this.memoryUpdateContextInput = this.element.querySelector('#general-memory-update-context-rounds');
+    this.memoryBudgetBlock = this.element.querySelector('#general-memory-budget-block');
+    this.memoryMaxRowsInput = this.element.querySelector('#general-memory-max-rows');
+    this.memoryMaxTokensInput = this.element.querySelector('#general-memory-max-tokens');
+    this.memoryInjectPositionSelect = this.element.querySelector('#general-memory-inject-position');
+    this.memoryAutoConfirmToggle = this.element.querySelector('#general-memory-auto-confirm');
+    this.memoryAutoStepToggle = this.element.querySelector('#general-memory-auto-step');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -254,18 +470,96 @@ export class GeneralSettingsPanel {
       appSettings.update({ memoryStorageMode: next });
       window.dispatchEvent(new CustomEvent('memory-storage-mode-changed', { detail: { mode: next } }));
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryStorageMode', value: next } }));
+      this.updateMemoryAutoVisibility();
     };
     this.memoryModeSummary?.addEventListener('change', (e) => {
       const checked = Boolean(e?.target?.checked);
       if (!checked) return;
       applyMemoryMode('summary');
     });
+    this.memoryAutoToggle?.addEventListener('change', (e) => {
+      const enabled = Boolean(e?.target?.checked);
+      appSettings.update({ memoryAutoExtract: enabled });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoExtract', value: enabled } }));
+      this.updateMemoryAutoVisibility();
+    });
+    const applyAutoMode = (mode) => {
+      const next = mode === 'separate' ? 'separate' : 'inline';
+      appSettings.update({ memoryAutoExtractMode: next });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoExtractMode', value: next } }));
+      this.updateMemoryAutoVisibility();
+    };
+    this.memoryAutoModeInline?.addEventListener('change', (e) => {
+      if (!e?.target?.checked) return;
+      applyAutoMode('inline');
+    });
+    this.memoryAutoModeSeparate?.addEventListener('change', (e) => {
+      if (!e?.target?.checked) return;
+      applyAutoMode('separate');
+    });
+    const applyMemoryApiMode = (mode) => {
+      const next = mode === 'profile' ? 'profile' : 'chat';
+      appSettings.update({ memoryUpdateApiMode: next });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryUpdateApiMode', value: next } }));
+      this.updateMemoryAutoVisibility();
+    };
+    this.memoryUpdateApiChat?.addEventListener('change', (e) => {
+      if (!e?.target?.checked) return;
+      applyMemoryApiMode('chat');
+    });
+    this.memoryUpdateApiProfile?.addEventListener('change', (e) => {
+      if (!e?.target?.checked) return;
+      applyMemoryApiMode('profile');
+    });
+    this.memoryUpdateProfileSelect?.addEventListener('change', (e) => {
+      const value = String(e?.target?.value || '').trim();
+      appSettings.update({ memoryUpdateProfileId: value });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryUpdateProfileId', value } }));
+    });
+    this.memoryUpdateContextInput?.addEventListener('input', (e) => {
+      const raw = Math.trunc(Number(e?.target?.value));
+      const safe = Number.isFinite(raw) ? Math.max(0, raw) : 6;
+      if (e?.target) e.target.value = String(safe);
+      appSettings.update({ memoryUpdateContextRounds: safe });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryUpdateContextRounds', value: safe } }));
+    });
+    this.memoryAutoConfirmToggle?.addEventListener('change', (e) => {
+      const enabled = Boolean(e?.target?.checked);
+      appSettings.update({ memoryAutoConfirm: enabled });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoConfirm', value: enabled } }));
+    });
+    this.memoryAutoStepToggle?.addEventListener('change', (e) => {
+      const enabled = Boolean(e?.target?.checked);
+      appSettings.update({ memoryAutoStepByStep: enabled });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoStepByStep', value: enabled } }));
+    });
+    this.memoryMaxRowsInput?.addEventListener('input', (e) => {
+      const raw = Math.trunc(Number(e?.target?.value));
+      const safe = Number.isFinite(raw) ? Math.min(100, Math.max(10, raw)) : 30;
+      if (e?.target) e.target.value = String(safe);
+      appSettings.update({ memoryMaxRows: safe });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryMaxRows', value: safe } }));
+    });
+    this.memoryMaxTokensInput?.addEventListener('input', (e) => {
+      const raw = Math.trunc(Number(e?.target?.value));
+      const safe = Number.isFinite(raw) ? Math.min(5000, Math.max(500, raw)) : 2000;
+      if (e?.target) e.target.value = String(safe);
+      appSettings.update({ memoryMaxTokens: safe });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryMaxTokens', value: safe } }));
+    });
+    this.memoryInjectPositionSelect?.addEventListener('change', (e) => {
+      const raw = String(e?.target?.value || 'template').toLowerCase();
+      const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat']);
+      const next = allowed.has(raw) ? raw : 'template';
+      appSettings.update({ memoryInjectPosition: next });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryInjectPosition', value: next } }));
+    });
     this.memoryModeTable?.addEventListener('change', (e) => {
       const target = e?.target;
       const checked = Boolean(target?.checked);
       if (!checked) return;
       const ok = confirm(
-        '切换到记忆表格模式后，将不再使用摘要/大总结记录。\n\n建议先新建一个用户角色，并保持“用户角色绑定联系人”开启，以避免与现有摘要数据混用。\n\n确定切换吗？',
+        '切换到记忆表格模式？\n\n• 新对话将使用记忆表格\n• 历史摘要数据保留，不会丢失\n• 你可以随时切换回摘要模式\n\n确定切换？',
       );
       if (!ok) {
         if (target) target.checked = false;

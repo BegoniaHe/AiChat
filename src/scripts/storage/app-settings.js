@@ -13,6 +13,16 @@ const defaults = {
   reasoningMaxAdditions: 1,
   personaBindContacts: true,
   memoryStorageMode: 'summary',
+  memoryAutoExtract: false,
+  memoryAutoExtractMode: 'inline',
+  memoryUpdateApiMode: 'chat',
+  memoryUpdateProfileId: '',
+  memoryUpdateContextRounds: 6,
+  memoryMaxRows: 30,
+  memoryMaxTokens: 2000,
+  memoryInjectPosition: 'template',
+  memoryAutoConfirm: false,
+  memoryAutoStepByStep: false,
 };
 
 const readSettings = () => {
@@ -32,12 +42,22 @@ const writeSettings = (next) => {
   } catch {}
 };
 
+const migrateSettings = (settings = {}) => {
+  const next = { ...(settings || {}) };
+  if (next.memoryUpdateContextRounds == null && next.memoryUpdateContextCount != null) {
+    const raw = Math.trunc(Number(next.memoryUpdateContextCount));
+    const safe = Number.isFinite(raw) ? Math.max(0, raw) : defaults.memoryUpdateContextRounds;
+    next.memoryUpdateContextRounds = safe;
+  }
+  return next;
+};
+
 export const appSettings = {
   get() {
-    return { ...defaults, ...readSettings() };
+    return { ...defaults, ...migrateSettings(readSettings()) };
   },
   update(patch = {}) {
-    const next = { ...defaults, ...readSettings(), ...patch };
+    const next = { ...defaults, ...migrateSettings(readSettings()), ...patch };
     writeSettings(next);
     return next;
   },

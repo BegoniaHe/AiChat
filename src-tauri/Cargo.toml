@@ -24,6 +24,7 @@ base64 = "0.22"
 chrono = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 libc = "0.2"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-shell = "2.0"

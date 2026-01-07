@@ -393,6 +393,13 @@ export class ConfigManager {
         return firstId ? normalizeProfile(this.profileStore.profiles[firstId]) : normalizeProfile({ name: '默认' });
     }
 
+    getProfileById(profileId) {
+        const id = String(profileId || '').trim();
+        if (!id) return null;
+        const p = this.profileStore?.profiles?.[id];
+        return p ? normalizeProfile(p) : null;
+    }
+
     async setActiveProfile(profileId) {
         await this.ensureStores();
         if (!profileId || !this.profileStore?.profiles?.[profileId]) {
@@ -598,6 +605,13 @@ export class ConfigManager {
             runtime.apiKey = '';
         }
         return runtime;
+    }
+
+    async getRuntimeConfigByProfileId(profileId) {
+        await this.ensureStores();
+        const p = this.getProfileById(profileId);
+        if (!p) return null;
+        return this.buildRuntimeConfig(p);
     }
 
     /**

@@ -1,6 +1,16 @@
+use crate::memory_db::{
+    MemoryCreateInput,
+    MemoryDb,
+    MemoryQuery,
+    MemoryRecord,
+    MemoryUpdateInput,
+    TemplateInput,
+    TemplateQuery,
+    TemplateRecord,
+};
 use crate::storage::{simple_decrypt, simple_encrypt, ChatMessage};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -575,4 +585,82 @@ pub async fn log_js(tag: String, level: Option<String>, message: String, data: O
         eprintln!("[js][{}][{}] {}", tag, lvl, msg);
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn init_database(db: State<'_, MemoryDb>, scope_id: Option<String>) -> Result<(), String> {
+    db.init_database(scope_id)
+}
+
+#[tauri::command]
+pub async fn create_memory(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    input: MemoryCreateInput,
+) -> Result<String, String> {
+    db.create_memory(scope_id, input)
+}
+
+#[tauri::command]
+pub async fn update_memory(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    input: MemoryUpdateInput,
+) -> Result<(), String> {
+    db.update_memory(scope_id, input)
+}
+
+#[tauri::command]
+pub async fn delete_memory(db: State<'_, MemoryDb>, scope_id: Option<String>, id: String) -> Result<(), String> {
+    db.delete_memory(scope_id, id)
+}
+
+#[tauri::command]
+pub async fn get_memories(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    query: MemoryQuery,
+) -> Result<Vec<MemoryRecord>, String> {
+    db.get_memories(scope_id, query)
+}
+
+#[tauri::command]
+pub async fn batch_create_memories(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    memories: Vec<MemoryCreateInput>,
+) -> Result<usize, String> {
+    db.batch_create_memories(scope_id, memories)
+}
+
+#[tauri::command]
+pub async fn batch_delete_memories(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    db.batch_delete_memories(scope_id, ids)
+}
+
+#[tauri::command]
+pub async fn save_template(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    input: TemplateInput,
+) -> Result<(), String> {
+    db.save_template(scope_id, input)
+}
+
+#[tauri::command]
+pub async fn get_templates(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    query: TemplateQuery,
+) -> Result<Vec<TemplateRecord>, String> {
+    db.get_templates(scope_id, query)
+}
+
+#[tauri::command]
+pub async fn delete_template(db: State<'_, MemoryDb>, scope_id: Option<String>, id: String) -> Result<(), String> {
+    db.delete_template(scope_id, id)
 }

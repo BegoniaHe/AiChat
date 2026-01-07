@@ -1,5 +1,123 @@
 # 開發進度追蹤（必更新）
 
+## 2026-01-06 10:11
+- Phase 7：记忆表格 AI 自动提取（<tableEdit> JSON 指令 + 自动写表）。
+- Prompt 注入新增记忆表格编辑规则，行索引/表索引指引；记忆注入支持行编号与表 ID 标注。
+- 自动写表解析：前端抽取 <tableEdit>、解析 JSON 操作并执行批量新增/更新/删除；表格面板监听自动刷新。
+- 通用设定新增“AI 自动写入记忆表格”开关（仅表格模式生效）。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/memory-table-editor.js`
+  - `src/scripts/ui/bridge.js`
+
+## 2026-01-06 14:29
+- 记忆表格：编辑处新增提示词模板编辑与发送预览（注入位置/包裹可调）。
+- 记忆表格：自动写表支持“同请求/独立请求”模式，独立请求可选 API 配置。
+- 独立写表：新增记忆更新请求（使用当前表格提示词 + 最近聊天记录），解析 <tableEdit> 写入。
+- 配置层：支持读取指定配置档运行时参数。
+- 记忆表格：支持查看最近写表原始输出；独立写表可配置上下文条数。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/storage/config.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/memory-table-editor.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/bridge.js`
+
+## 2026-01-06 16:58
+- 记忆更新上下文改为“轮数”配置（用户+助手），通用设定文案同步。
+- 写表记录新增“请求提示词”存档与查看入口，支持同请求/独立请求回溯。
+- 修改：
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/memory-table-editor.js`
+  - `src/scripts/ui/app.js`
+
+## 2026-01-05 09:54
+- 修复记忆表格搜索输入失焦问题：工具栏独立渲染，搜索与批量操作不再重建 DOM。
+- 修改：
+  - `src/scripts/ui/memory-table-editor.js`
+
+## 2026-01-05 09:44
+- Phase 3：记忆表格支持搜索、批量操作（启用/禁用/删除）、行状态标识与最大行数限制提示。
+- 聊天室记忆表格默认隐藏全局表格，批量模式下禁用单行操作。
+- 修改：
+  - `src/scripts/ui/memory-table-editor.js`
+
+## 2026-01-03 00:06
+- Phase 3：聊天室面板内记忆表格 UI（联系人/群聊）落地，支持表格分组展示、增删改、启用/置顶/优先级。
+- 设置菜单新增“记忆表格”入口，提供模板导入/导出与默认模板切换面板。
+- 修改/新增：
+  - `src/scripts/ui/memory-table-editor.js`
+  - `src/scripts/ui/contact-settings-panel.js`
+  - `src/scripts/ui/group-chat-panels.js`
+  - `src/scripts/ui/memory-template-panel.js`
+  - `src/scripts/storage/memory-template-store.js`
+  - `src/scripts/ui/app.js`
+  - `src/index.html`
+  - `src-tauri/src/memory_db.rs`
+
+## 2026-01-02 23:50
+- 记忆表格：联系人面板改为 flex 以支持滚动；聊天面板不再显示全局表格，改由“记忆表格管理”面板编辑全局表格。
+- 默认模板调整：新增“角色档案”表格；用户档案保留为全局。
+- 修改：
+  - `src/scripts/ui/contact-settings-panel.js`
+  - `src/scripts/ui/group-chat-panels.js`
+  - `src/scripts/ui/memory-table-editor.js`
+  - `src/scripts/ui/memory-template-panel.js`
+  - `src/scripts/storage/memory-template-store.js`
+  - `src/scripts/memory/default-template.js`
+  - `src/scripts/ui/app.js`
+
+## 2026-01-02 23:08
+- Phase 2：默认记忆模板落地（模板结构 + 首次启动写入 templates 表）。
+- 新增模板 CRUD 命令与前端模板 Store，Persona 切换时同步写入默认模板。
+- 修改/新增：
+  - `src-tauri/src/memory_db.rs`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/scripts/memory/default-template.js`
+  - `src/scripts/storage/memory-template-store.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/bridge.js`
+
+## 2026-01-02 22:52
+- 修复 Memory DB 编译错误：补足 Manager trait 引入、AppHandle 获取、事务提交借用冲突处理。
+- 修改：
+  - `src-tauri/src/memory_db.rs`
+  - `src-tauri/src/lib.rs`
+
+## 2026-01-02 22:42
+- Debug 面板新增“Memory DB 烟测”按钮，便于 Android 端快速验证 SQLite 读写初始化。
+- 修改：
+  - `src/scripts/ui/debug-panel.js`
+
+## 2026-01-02 22:24
+- 记忆表格：Persona 改为分库（`memories__{scope}.db`），切换 Persona 同步切换 DB。
+- 前端 MemoryTableStore 支持 scope，并在 Persona 切换时同步。
+- 修改：
+  - `src-tauri/src/memory_db.rs`
+  - `src-tauri/src/commands.rs`
+  - `src/scripts/storage/memory-table-store.js`
+  - `src/scripts/ui/app.js`
+
+## 2026-01-02 20:47
+- 记忆表格 Phase 0/1：SQLite schema + MemoryDb（初始化、WAL/外键、CRUD、批量/事务）落地。
+- Tauri 命令注册与前端 MemoryTableStore 接口完成，桥接层挂载。
+- 模板 Schema 辅助文件建立（后续模板/渲染使用）。
+- 修改/新增：
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/memory_db.rs`
+  - `src-tauri/src/memory_schema.sql`
+  - `src/scripts/storage/memory-table-store.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/memory/template-schema.js`
+
 ## 2026-01-02 19:47
 - 通用设定新增：Persona 绑定联系人/聊天记录开关（默认开启），切换 Persona 自动切换联系人/历史/动态/摘要。
 - 通用设定新增：记忆存储方式（摘要 / 记忆表格）切换；表格模式关闭摘要注入与摘要生成。
@@ -1781,3 +1899,24 @@
   - host 端保留 body 属性与 base，并补发 DOMContentLoaded/load 事件。
   - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
   - 修改：`src/iframe-host.js`
+
+## 2026-01-05
+- Phase 4：记忆表格注入 prompt（预算截断 + wrapper + 位置控制）。
+- 新增记忆检查器（调试入口）：展示注入/截断列表、Token 统计、Prompt 预览、刷新与复制。
+- Phase 5A：记忆模式灰度开关（调试面板切换，默认摘要）。
+- Phase 6A：模板导入导出补强（校验提示、导入确认、内置/导入分区）。
+- Phase 5B：记忆模式切换 UI（通用设定入口 + 切换确认提示）。
+- Phase 6B：记忆数据导入导出（范围选择、冲突处理、模板切换数据处理）。
+- Phase 6B：导入去重与冲突确认（内容重复检测 + 预导入统计）。
+- Phase 6B：冲突处理 UI（面板选择代替 prompt/confirm）。
+- Phase 6B：模板切换迁移/清空流程改为面板选择。
+- Phase 6B：模板导入覆盖/设默认改为面板确认。
+- Phase 6B：导出范围与对象选择改为面板式 UI；导入支持保留原 ID/重命名；创建支持自定义 ID。
+- Phase 6B：内容相似检测提示与跳过策略补齐。
+- 修改：
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/debug-panel.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/memory-template-panel.js`
+  - `src/scripts/memory/template-schema.js`
