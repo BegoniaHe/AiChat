@@ -1,9 +1,11 @@
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rusqlite::types::Value as SqlValue;
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "android"))]
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "android"))]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -108,6 +110,7 @@ pub struct MemoryRecord {
 
 pub struct MemoryDb {
     base_dir: PathBuf,
+    #[cfg(not(target_os = "android"))]
     connections: Mutex<HashMap<String, Connection>>,
 }
 
@@ -119,6 +122,7 @@ impl MemoryDb {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             base_dir: data_dir,
+            #[cfg(not(target_os = "android"))]
             connections: Mutex::new(HashMap::new()),
         })
     }
@@ -481,21 +485,32 @@ impl MemoryDb {
         F: FnOnce(&mut Connection) -> Result<T, String>,
     {
         let scope_key = normalize_scope_id(scope_id);
-        let mut guard = self
-            .connections
-            .lock()
-            .map_err(|_| "db lock poisoned".to_string())?;
-        if !guard.contains_key(&scope_key) {
+        #[cfg(target_os = "android")]
+        {
             let path = self.db_path_for(&scope_key);
             let existed = path.exists();
             let mut conn = open_connection(&path)?;
             ensure_schema(&mut conn, &path, existed)?;
-            guard.insert(scope_key.clone(), conn);
+            return f(&mut conn);
         }
-        let conn = guard
-            .get_mut(&scope_key)
-            .ok_or_else(|| "db unavailable".to_string())?;
-        f(conn)
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut guard = self
+                .connections
+                .lock()
+                .map_err(|_| "db lock poisoned".to_string())?;
+            if !guard.contains_key(&scope_key) {
+                let path = self.db_path_for(&scope_key);
+                let existed = path.exists();
+                let mut conn = open_connection(&path)?;
+                ensure_schema(&mut conn, &path, existed)?;
+                guard.insert(scope_key.clone(), conn);
+            }
+            let conn = guard
+                .get_mut(&scope_key)
+                .ok_or_else(|| "db unavailable".to_string())?;
+            f(conn)
+        }
     }
 
     fn db_path_for(&self, scope_key: &str) -> PathBuf {

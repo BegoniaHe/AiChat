@@ -38,6 +38,7 @@ import { StickerPicker } from './sticker-picker.js';
 import { VariablePanel } from './variable-panel.js';
 import { WorldPanel } from './world-panel.js';
 import { WorldInfoIndicator } from './worldinfo-indicator.js';
+import { extractTableEditBlocks, stripTableEditBlocks } from '../memory/memory-edit-parser.js';
 
 const initApp = async () => {
   const ui = new ChatUI();
@@ -133,12 +134,23 @@ const initApp = async () => {
     groupStore.setScope?.(initialScopeKey),
     momentsStore.setScope?.(initialScopeKey),
     momentSummaryStore.setScope?.(initialScopeKey),
-    memoryTableStore.setScope?.(initialScopeKey),
-    memoryTemplateStore.setScope?.(initialScopeKey),
   ]);
-  try {
-    await memoryTemplateStore.ensureDefaultTemplate?.();
-  } catch {}
+  const initMemoryStores = async () => {
+    const results = await Promise.allSettled([
+      memoryTableStore.setScope?.(initialScopeKey),
+      memoryTemplateStore.setScope?.(initialScopeKey),
+    ]);
+    const failed = results.filter(item => item?.status === 'rejected');
+    if (failed.length) {
+      logger.warn('memory store scope init failed', failed.map(item => item.reason));
+    }
+    try {
+      await memoryTemplateStore.ensureDefaultTemplate?.();
+    } catch (err) {
+      logger.warn('ensure default memory template failed', err);
+    }
+  };
+  void initMemoryStores();
   activePersonaScopeKey = initialScopeKey;
   try {
     window.appBridge?.setPersonaScope?.(initialScopeKey);
@@ -3763,263 +3775,6 @@ ${listPart || '-（无）'}
         .trim();
       return { text: stripped, summary };
     };
-    const stripTableEditBlocks = (text) => {
-      let out = String(text ?? '');
-      const startRe = /<tableEdit\b[^>]*>/i;
-      const endRe = /<\/tableEdit\s*>/i;
-      for (let i = 0; i < 20; i++) {
-        const start = out.match(startRe);
-        if (!start) break;
-        const startIdx = start.index ?? -1;
-        if (startIdx < 0) break;
-        const afterStart = out.slice(startIdx + start[0].length);
-        const end = afterStart.match(endRe);
-        if (!end) {
-          out = out.slice(0, startIdx);
-          break;
-        }
-        const endIdx = startIdx + start[0].length + (end.index ?? 0);
-        out = out.slice(0, startIdx) + out.slice(endIdx + end[0].length);
-      }
-      return out.replace(/\n{3,}/g, '\n\n').trim();
-    };
-    const extractTableEditBlocks = (text) => {
-      const raw = String(text ?? '');
-      const re = /<tableEdit\b[^>]*>([\s\S]*?)<\/tableEdit>/gi;
-      const blocks = [];
-      let m;
-      while ((m = re.exec(raw))) blocks.push(m[1]);
-      if (!blocks.length) return { text: raw, blocks: [], actions: [] };
-      const stripped = raw.replace(re, '').replace(/\n{3,}/g, '\n\n').trim();
-      const actions = [];
-      for (const block of blocks) {
-        actions.push(...parseTableEditActions(block));
-      }
-      return { text: stripped, blocks, actions };
-    };
-    const parseTableEditActions = (content) => {
-      const cleaned = String(content ?? '').replace(/<!--([\s\S]*?)-->/g, '$1').trim();
-      if (!cleaned) return [];
-      const actions = [];
-      const pushAction = (raw) => {
-        if (!raw || typeof raw !== 'object') return;
-        const action = String(raw.action || raw.type || '').trim().toLowerCase();
-        if (!['insert', 'update', 'delete'].includes(action)) return;
-        actions.push({
-          action,
-          tableId: raw.table_id ?? raw.tableId ?? raw.table,
-          tableIndex: raw.table_index ?? raw.tableIndex,
-          tableName: raw.table_name ?? raw.tableName,
-          rowId: raw.row_id ?? raw.rowId ?? raw.id,
-          rowIndex: raw.row_index ?? raw.rowIndex ?? raw.index,
-          data: raw.data ?? raw.row_data ?? raw.rowData ?? raw.values,
-        });
-      };
-      const tryParse = (text) => {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return null;
-        }
-      };
-      const parseArgValue = (raw) => {
-        const text = String(raw || '').trim();
-        if (!text) return null;
-        if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
-          const parsed = tryParse(text);
-          return parsed == null ? null : parsed;
-        }
-        if (/^-?\d+(?:\.\d+)?$/.test(text)) return Number(text);
-        if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-          return text.slice(1, -1);
-        }
-        return text;
-      };
-      const parseIndex = (value) => {
-        if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
-        if (typeof value !== 'string') return null;
-        const raw = value.trim().replace(/^['"]|['"]$/g, '');
-        if (/^-?\d+$/.test(raw)) return Math.trunc(Number(raw));
-        return null;
-      };
-      const splitFunctionArgs = (raw) => {
-        const text = String(raw || '');
-        const args = [];
-        let buf = '';
-        let depthParen = 0;
-        let depthBrace = 0;
-        let depthBracket = 0;
-        let inString = false;
-        let quote = '';
-        let escape = false;
-        for (let i = 0; i < text.length; i++) {
-          const ch = text[i];
-          if (inString) {
-            buf += ch;
-            if (escape) {
-              escape = false;
-              continue;
-            }
-            if (ch === '\\') {
-              escape = true;
-              continue;
-            }
-            if (ch === quote) {
-              inString = false;
-              quote = '';
-            }
-            continue;
-          }
-          if (ch === '"' || ch === "'") {
-            inString = true;
-            quote = ch;
-            buf += ch;
-            continue;
-          }
-          if (ch === '{') {
-            depthBrace += 1;
-            buf += ch;
-            continue;
-          }
-          if (ch === '}') {
-            depthBrace = Math.max(0, depthBrace - 1);
-            buf += ch;
-            continue;
-          }
-          if (ch === '[') {
-            depthBracket += 1;
-            buf += ch;
-            continue;
-          }
-          if (ch === ']') {
-            depthBracket = Math.max(0, depthBracket - 1);
-            buf += ch;
-            continue;
-          }
-          if (ch === '(') {
-            depthParen += 1;
-            buf += ch;
-            continue;
-          }
-          if (ch === ')') {
-            depthParen = Math.max(0, depthParen - 1);
-            buf += ch;
-            continue;
-          }
-          if (ch === ',' && depthBrace === 0 && depthBracket === 0 && depthParen === 0) {
-            args.push(buf.trim());
-            buf = '';
-            continue;
-          }
-          buf += ch;
-        }
-        if (buf.trim()) args.push(buf.trim());
-        return args;
-      };
-      const findMatchingParen = (text, openIdx) => {
-        let depth = 0;
-        let inString = false;
-        let quote = '';
-        let escape = false;
-        for (let i = openIdx; i < text.length; i++) {
-          const ch = text[i];
-          if (inString) {
-            if (escape) {
-              escape = false;
-              continue;
-            }
-            if (ch === '\\') {
-              escape = true;
-              continue;
-            }
-            if (ch === quote) {
-              inString = false;
-              quote = '';
-            }
-            continue;
-          }
-          if (ch === '"' || ch === "'") {
-            inString = true;
-            quote = ch;
-            continue;
-          }
-          if (ch === '(') {
-            depth += 1;
-            continue;
-          }
-          if (ch === ')') {
-            depth -= 1;
-            if (depth === 0) return i;
-          }
-        }
-        return -1;
-      };
-      const parseFunctionActions = (text) => {
-        const source = String(text || '');
-        const out = [];
-        const re = /(insertRow|updateRow|deleteRow)\s*\(/gi;
-        let match;
-        while ((match = re.exec(source))) {
-          const name = String(match[1] || '').toLowerCase();
-          const openIdx = source.indexOf('(', match.index);
-          if (openIdx < 0) continue;
-          const closeIdx = findMatchingParen(source, openIdx);
-          if (closeIdx < 0) continue;
-          const args = splitFunctionArgs(source.slice(openIdx + 1, closeIdx));
-          const values = args.map(parseArgValue);
-          const tableIndex = parseIndex(values[0]);
-          if (tableIndex == null) {
-            re.lastIndex = closeIdx + 1;
-            continue;
-          }
-          if (name === 'insertrow') {
-            const data = values[1];
-            if (data && typeof data === 'object') {
-              out.push({ action: 'insert', tableIndex, data });
-            }
-          } else if (name === 'updaterow') {
-            const rowIndex = parseIndex(values[1]);
-            const data = values[2];
-            if (rowIndex != null && data && typeof data === 'object') {
-              out.push({ action: 'update', tableIndex, rowIndex, data });
-            }
-          } else if (name === 'deleterow') {
-            const rowIndex = parseIndex(values[1]);
-            if (rowIndex != null) {
-              out.push({ action: 'delete', tableIndex, rowIndex });
-            }
-          }
-          re.lastIndex = closeIdx + 1;
-        }
-        return out;
-      };
-      const parsed = cleaned.startsWith('[') ? tryParse(cleaned) : null;
-      if (Array.isArray(parsed)) {
-        parsed.forEach(pushAction);
-      }
-      const lineItems = cleaned
-        .split(/\r?\n/)
-        .map(line => line.trim())
-        .filter(Boolean);
-      for (const line of lineItems) {
-        const normalized = line.replace(/,$/, '');
-        if (!normalized) continue;
-        const obj = tryParse(normalized);
-        if (obj) {
-          pushAction(obj);
-        }
-      }
-      const jsonActionCount = actions.length;
-      const functionActions = parseFunctionActions(cleaned);
-      if (functionActions.length) actions.push(...functionActions);
-      if (jsonActionCount > 0) return actions;
-      const matches = cleaned.match(/\{[\s\S]*?\}/g) || [];
-      for (const chunk of matches) {
-        const obj = tryParse(chunk);
-        if (obj) pushAction(obj);
-      }
-      return actions;
-    };
     const formatMemoryEditValue = (value, maxLen = 120) => {
       if (value === null || value === undefined) return '';
       let text = '';
@@ -4829,6 +4584,9 @@ ${listPart || '-（无）'}
       const memoryMaxRows = Number.isFinite(maxRowsRaw) ? Math.min(100, Math.max(10, maxRowsRaw)) : 30;
       const memoryMaxTokens = Number.isFinite(maxTokensRaw) ? Math.min(5000, Math.max(500, maxTokensRaw)) : 2000;
       const memoryInjectPosition = String(settings.memoryInjectPosition || 'template').toLowerCase();
+      const memoryInjectDepthRaw = Math.trunc(Number(settings.memoryInjectDepth));
+      const memoryInjectDepth = Number.isFinite(memoryInjectDepthRaw) ? Math.max(0, memoryInjectDepthRaw) : 4;
+      const memoryTokenMode = String(settings.memoryTokenMode || 'rough').toLowerCase();
       return {
         user: {
           name: userName,
@@ -4853,6 +4611,8 @@ ${listPart || '-（无）'}
           memoryMaxRows,
           memoryMaxTokens,
           memoryInjectPosition,
+          memoryInjectDepth,
+          memoryTokenMode,
         },
         group: isGroupChat
           ? {

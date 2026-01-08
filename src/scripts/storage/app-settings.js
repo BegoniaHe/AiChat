@@ -21,6 +21,8 @@ const defaults = {
   memoryMaxRows: 30,
   memoryMaxTokens: 2000,
   memoryInjectPosition: 'template',
+  memoryInjectDepth: 4,
+  memoryTokenMode: 'rough',
   memoryAutoConfirm: false,
   memoryAutoStepByStep: false,
 };

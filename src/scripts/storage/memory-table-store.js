@@ -15,6 +15,7 @@ export class MemoryTableStore {
   constructor({ scopeId = '' } = {}) {
     this.scopeId = String(scopeId || '').trim();
     this.ready = initDatabase(this.scopeId);
+    this.writeChain = Promise.resolve();
   }
 
   async ensureReady() {
@@ -26,22 +27,35 @@ export class MemoryTableStore {
     if (next === this.scopeId) return this.ready;
     this.scopeId = next;
     this.ready = initDatabase(this.scopeId);
+    this.writeChain = Promise.resolve();
     return this.ready;
   }
 
+  queueWrite(task) {
+    const run = this.writeChain.then(() => task());
+    this.writeChain = run.catch(() => {});
+    return run;
+  }
+
   async createMemory(input) {
-    await this.ensureReady();
-    return safeInvoke('create_memory', { scopeId: this.scopeId, input });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('create_memory', { scopeId: this.scopeId, input });
+    });
   }
 
   async updateMemory(input) {
-    await this.ensureReady();
-    return safeInvoke('update_memory', { scopeId: this.scopeId, input });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('update_memory', { scopeId: this.scopeId, input });
+    });
   }
 
   async deleteMemory(id) {
-    await this.ensureReady();
-    return safeInvoke('delete_memory', { scopeId: this.scopeId, id });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('delete_memory', { scopeId: this.scopeId, id });
+    });
   }
 
   async getMemories(query = {}) {
@@ -50,12 +64,16 @@ export class MemoryTableStore {
   }
 
   async batchCreateMemories(memories = []) {
-    await this.ensureReady();
-    return safeInvoke('batch_create_memories', { scopeId: this.scopeId, memories });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('batch_create_memories', { scopeId: this.scopeId, memories });
+    });
   }
 
   async batchDeleteMemories(ids = []) {
-    await this.ensureReady();
-    return safeInvoke('batch_delete_memories', { scopeId: this.scopeId, ids });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('batch_delete_memories', { scopeId: this.scopeId, ids });
+    });
   }
 }

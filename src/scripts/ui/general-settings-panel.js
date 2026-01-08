@@ -26,6 +26,9 @@ export class GeneralSettingsPanel {
     this.memoryMaxRowsInput = null;
     this.memoryMaxTokensInput = null;
     this.memoryInjectPositionSelect = null;
+    this.memoryInjectDepthWrap = null;
+    this.memoryInjectDepthInput = null;
+    this.memoryTokenModeSelect = null;
     this.memoryAutoConfirmToggle = null;
     this.memoryAutoStepToggle = null;
     this.configManager = new ConfigManager();
@@ -105,8 +108,18 @@ export class GeneralSettingsPanel {
     }
     if (this.memoryInjectPositionSelect) {
       const raw = String(settings.memoryInjectPosition || 'template').toLowerCase();
-      const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat']);
+      const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat', 'history_depth', 'system_end+before_chat']);
       this.memoryInjectPositionSelect.value = allowed.has(raw) ? raw : 'template';
+    }
+    if (this.memoryInjectDepthInput) {
+      const raw = Math.trunc(Number(settings.memoryInjectDepth));
+      const safe = Number.isFinite(raw) ? Math.max(0, raw) : 4;
+      this.memoryInjectDepthInput.value = String(safe);
+    }
+    if (this.memoryTokenModeSelect) {
+      const raw = String(settings.memoryTokenMode || 'rough').toLowerCase();
+      const allowed = new Set(['rough', 'strict']);
+      this.memoryTokenModeSelect.value = allowed.has(raw) ? raw : 'rough';
     }
     this.refreshMemoryUpdateProfiles().catch(() => {});
     this.updateMemoryAutoVisibility();
@@ -171,6 +184,17 @@ export class GeneralSettingsPanel {
     }
     if (this.memoryInjectPositionSelect) {
       this.memoryInjectPositionSelect.disabled = !showMemoryTable;
+    }
+    if (this.memoryTokenModeSelect) {
+      this.memoryTokenModeSelect.disabled = !showMemoryTable;
+    }
+    const position = String(settings.memoryInjectPosition || 'template').toLowerCase();
+    const showDepth = showMemoryTable && position === 'history_depth';
+    if (this.memoryInjectDepthWrap) {
+      this.memoryInjectDepthWrap.style.display = showDepth ? 'block' : 'none';
+    }
+    if (this.memoryInjectDepthInput) {
+      this.memoryInjectDepthInput.disabled = !showDepth;
     }
   }
 
@@ -363,8 +387,28 @@ export class GeneralSettingsPanel {
                 <option value="after_persona">角色设定后</option>
                 <option value="system_end">系统提示末尾</option>
                 <option value="before_chat">对话前</option>
+                <option value="history_depth">深度注入（插入到聊天记录）</option>
+                <option value="system_end+before_chat">双重注入（系统末尾 + 对话前）</option>
               </select>
               <small style="color:#94a3b8; display:block; margin-top:4px;">可覆盖模板注入位置</small>
+            </div>
+
+            <div id="general-memory-inject-depth-wrap" style="margin-top: 10px; display:none;">
+              <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; color:#0f172a;">
+                <span>深度注入位置</span>
+                <input type="number" id="general-memory-inject-depth" min="0" step="1"
+                       style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
+              </label>
+              <small style="color:#94a3b8; display:block; margin-top:4px;">距聊天末尾 N 条插入，0 表示追加到末尾</small>
+            </div>
+
+            <div style="margin-top: 10px;">
+              <div style="font-size:12px; color:#64748b; margin-bottom:6px;">Token 估算模式</div>
+              <select id="general-memory-token-mode" style="width:100%; padding:6px 8px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px;">
+                <option value="rough">粗略估算</option>
+                <option value="strict">严格（保守估算）</option>
+              </select>
+              <small style="color:#94a3b8; display:block; margin-top:4px;">严格模式更保守，避免超预算但可能更少注入</small>
             </div>
           </div>
         </div>
@@ -408,6 +452,9 @@ export class GeneralSettingsPanel {
     this.memoryMaxRowsInput = this.element.querySelector('#general-memory-max-rows');
     this.memoryMaxTokensInput = this.element.querySelector('#general-memory-max-tokens');
     this.memoryInjectPositionSelect = this.element.querySelector('#general-memory-inject-position');
+    this.memoryInjectDepthWrap = this.element.querySelector('#general-memory-inject-depth-wrap');
+    this.memoryInjectDepthInput = this.element.querySelector('#general-memory-inject-depth');
+    this.memoryTokenModeSelect = this.element.querySelector('#general-memory-token-mode');
     this.memoryAutoConfirmToggle = this.element.querySelector('#general-memory-auto-confirm');
     this.memoryAutoStepToggle = this.element.querySelector('#general-memory-auto-step');
     this.debugToggle?.addEventListener('change', async (e) => {
@@ -549,10 +596,25 @@ export class GeneralSettingsPanel {
     });
     this.memoryInjectPositionSelect?.addEventListener('change', (e) => {
       const raw = String(e?.target?.value || 'template').toLowerCase();
-      const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat']);
+      const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat', 'history_depth', 'system_end+before_chat']);
       const next = allowed.has(raw) ? raw : 'template';
       appSettings.update({ memoryInjectPosition: next });
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryInjectPosition', value: next } }));
+      this.updateMemoryAutoVisibility();
+    });
+    this.memoryInjectDepthInput?.addEventListener('input', (e) => {
+      const raw = Math.trunc(Number(e?.target?.value));
+      const safe = Number.isFinite(raw) ? Math.max(0, raw) : 4;
+      if (e?.target) e.target.value = String(safe);
+      appSettings.update({ memoryInjectDepth: safe });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryInjectDepth', value: safe } }));
+    });
+    this.memoryTokenModeSelect?.addEventListener('change', (e) => {
+      const raw = String(e?.target?.value || 'rough').toLowerCase();
+      const allowed = new Set(['rough', 'strict']);
+      const next = allowed.has(raw) ? raw : 'rough';
+      appSettings.update({ memoryTokenMode: next });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryTokenMode', value: next } }));
     });
     this.memoryModeTable?.addEventListener('change', (e) => {
       const target = e?.target;

@@ -10,6 +10,12 @@ import { PresetStore } from '../storage/preset-store.js';
 import { RegexStore, regex_placement } from '../storage/regex-store.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
 import { makeScopedKey, normalizeScopeId } from '../storage/store-scope.js';
+import {
+  buildMemoryTablePlan,
+  estimateTokens,
+  normalizeTokenMode,
+  parseMemoryPromptPositions,
+} from '../memory/memory-prompt-utils.js';
 import { logger } from '../utils/logger.js';
 import { MacroEngine } from '../utils/macro-engine.js';
 import { isRetryableError, retryWithBackoff } from '../utils/retry.js';
@@ -139,50 +145,6 @@ const DEFAULT_MEMORY_BUDGET = {
   safetyRatio: 0.9,
 };
 
-const estimateTokens = (text) => {
-  const raw = String(text || '');
-  if (!raw.trim()) return 0;
-  let ascii = 0;
-  let nonAscii = 0;
-  for (const ch of raw) {
-    if (ch.charCodeAt(0) <= 0x7f) ascii += 1;
-    else nonAscii += 1;
-  }
-  return Math.max(1, Math.ceil(nonAscii + ascii / 4));
-};
-
-const normalizeMemoryCell = (value) => {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-};
-
-const formatMemoryRowText = (rowData, columns) => {
-  const parts = [];
-  for (const col of Array.isArray(columns) ? columns : []) {
-    const colId = String(col?.id || '').trim();
-    if (!colId) continue;
-    const label = String(col?.name || colId).trim();
-    const raw = normalizeMemoryCell(rowData?.[colId]);
-    const text = String(raw || '').trim().replace(/\s*\r?\n\s*/g, ' / ');
-    if (!text) continue;
-    parts.push(label ? `${label}: ${text}` : text);
-  }
-  if (!parts.length) return '（未填写）';
-  return parts.join('；');
-};
-
-const clampText = (value, max = 140) => {
-  const raw = String(value || '').trim();
-  if (raw.length <= max) return raw;
-  return `${raw.slice(0, max)}…`;
-};
-
 class AppBridge {
   constructor() {
     this.config = new ConfigManager();
@@ -281,6 +243,7 @@ class AppBridge {
       overheadTokens: 0,
       maxRows: DEFAULT_MEMORY_BUDGET.maxRows,
       position: 'after_persona',
+      injectDepth: 4,
       promptText: '',
       tableData: '',
       templateId: '',
@@ -334,12 +297,17 @@ class AppBridge {
     const templateRaw = typeof injection?.template === 'string' ? injection.template : '{{tableData}}';
     const wrapperRaw = typeof injection?.wrapper === 'string' ? injection.wrapper : '<memories>\n{{tableData}}\n</memories>';
     const overridePositionRaw = String(context?.meta?.memoryInjectPosition || '').trim().toLowerCase();
-    const overridePosition =
-      overridePositionRaw && overridePositionRaw !== 'template' &&
-      ['after_persona', 'system_end', 'before_chat'].includes(overridePositionRaw)
-        ? overridePositionRaw
-        : '';
-    const position = overridePosition || (typeof injection?.position === 'string' ? injection.position : 'after_persona');
+    const overridePositions =
+      overridePositionRaw && overridePositionRaw !== 'template'
+        ? parseMemoryPromptPositions(overridePositionRaw)
+        : [];
+    const injectionPositions = parseMemoryPromptPositions(injection?.position);
+    const positions = overridePositions.length
+      ? overridePositions
+      : injectionPositions.length
+        ? injectionPositions
+        : ['after_persona'];
+    const position = positions.join('+');
 
     const tables = Array.isArray(template?.tables) ? template.tables : [];
     const tableById = new Map();
@@ -358,6 +326,9 @@ class AppBridge {
       ? Math.max(1, Math.trunc(Number(context.meta.memoryMaxTokens)))
       : DEFAULT_MEMORY_BUDGET.maxTokens;
     const tokenBudgetSafety = Math.max(0, Math.floor(maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio));
+    const tokenMode = normalizeTokenMode(context?.meta?.memoryTokenMode);
+    const injectDepthRaw = Math.trunc(Number(context?.meta?.memoryInjectDepth));
+    const injectDepth = Number.isFinite(injectDepthRaw) ? Math.max(0, injectDepthRaw) : 4;
 
     const buildMemoryEditGuide = () => {
       const lines = [];
@@ -411,7 +382,7 @@ class AppBridge {
     const emptyWrapped = wrapperRaw
       ? renderStTemplate(wrapperRaw, { ...macroVars, tableData: emptyTemplate })
       : emptyTemplate;
-    const overheadTokens = estimateTokens(emptyWrapped) + (editGuide ? estimateTokens(editGuide) : 0);
+    const overheadTokens = estimateTokens(emptyWrapped, tokenMode) + (editGuide ? estimateTokens(editGuide, tokenMode) : 0);
     const tokenBudgetData = Math.max(0, tokenBudgetSafety - overheadTokens);
     const buildPromptText = (tableData) => {
       const renderedTemplate = renderStTemplate(templateRaw, { ...macroVars, tableData });
@@ -446,33 +417,24 @@ class AppBridge {
     const rows = [...(Array.isArray(globalRows) ? globalRows : []), ...(Array.isArray(scopedRows) ? scopedRows : [])]
       .filter(row => row && row.is_active !== false);
 
-    const items = [];
-    for (const row of rows) {
-      const tableId = String(row?.table_id || '').trim();
-      if (!tableId) continue;
-      if (!tableById.has(tableId)) {
-        tableById.set(tableId, { id: tableId, name: tableId, columns: [] });
-        tableOrder.push(tableId);
-      }
-      const table = tableById.get(tableId);
-      const rowText = formatMemoryRowText(row?.row_data || {}, table?.columns || []);
-      items.push({
-        id: String(row?.id || ''),
-        tableId,
-        tableName: String(table?.name || tableId),
-        rowText,
-        rowSummary: clampText(rowText, 120),
-        rowData: row?.row_data || {},
-        isPinned: Boolean(row?.is_pinned),
-        priority: Number.isFinite(Number(row?.priority)) ? Number(row.priority) : 0,
-        updatedAt: Number.isFinite(Number(row?.updated_at)) ? Number(row.updated_at) : 0,
-        scope: row?.contact_id ? 'contact' : row?.group_id ? 'group' : 'global',
-      });
-    }
+    const planResult = buildMemoryTablePlan({
+      rows,
+      tableById,
+      tableOrder,
+      autoExtract,
+      maxRows,
+      tokenBudgetData,
+      tokenMode,
+    });
+    const selected = planResult.items || [];
+    const truncated = planResult.truncated || [];
+    const tableData = planResult.tableData || '';
+    const rowIndexMap = planResult.rowIndexMap || {};
+    const tableOrderNext = planResult.tableOrder || tableOrder;
 
-    if (!items.length) {
+    if (!selected.length && !truncated.length) {
       const promptText = autoExtract ? buildPromptText('') : '';
-      const tokenTotal = promptText ? estimateTokens(promptText) : 0;
+      const tokenTotal = promptText ? estimateTokens(promptText, tokenMode) : 0;
       return {
         enabled: true,
         reason: 'empty',
@@ -485,6 +447,7 @@ class AppBridge {
         overheadTokens,
         maxRows,
         position,
+        injectDepth,
         promptText,
         tableData: '',
         templateId,
@@ -493,54 +456,14 @@ class AppBridge {
         targetName,
         scope,
         autoExtract,
-        tableOrder,
+        tableOrder: tableOrderNext,
         rowIndexMap: {},
       };
     }
 
-    const sortByPriority = (a, b) => {
-      if (a.priority !== b.priority) return b.priority - a.priority;
-      if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
-      return String(b.id).localeCompare(String(a.id));
-    };
-    const pinned = items.filter(it => it.isPinned).sort(sortByPriority);
-    const normal = items.filter(it => !it.isPinned).sort(sortByPriority);
-    const ordered = [...pinned, ...normal];
-    const rowPrefixTokens = autoExtract ? estimateTokens('- [0] ') : 0;
-
-    const selected = [];
-    const truncated = [];
-    const rowsByTable = new Map();
-    const includedTables = new Set();
-    let tokenUsed = 0;
-
-    for (const item of ordered) {
-      if (selected.length >= maxRows) {
-        truncated.push({ ...item, reason: 'max_rows' });
-        continue;
-      }
-      const tableId = item.tableId;
-      const table = tableById.get(tableId) || { id: tableId, name: tableId };
-      const headerLabel = String(table?.name || tableId);
-      const headerText = autoExtract ? `【${headerLabel}｜${tableId}】` : `【${headerLabel}】`;
-      const headerTokens = includedTables.has(tableId) ? 0 : estimateTokens(headerText);
-      const rowTokens = estimateTokens(item.rowText) + rowPrefixTokens;
-      const nextTokens = tokenUsed + headerTokens + rowTokens;
-      if (nextTokens > tokenBudgetData) {
-        truncated.push({ ...item, reason: 'max_tokens' });
-        continue;
-      }
-      if (!includedTables.has(tableId)) includedTables.add(tableId);
-      tokenUsed = nextTokens;
-      const withTokens = { ...item, tokens: rowTokens };
-      selected.push(withTokens);
-      if (!rowsByTable.has(tableId)) rowsByTable.set(tableId, []);
-      rowsByTable.get(tableId).push(withTokens);
-    }
-
     if (!selected.length) {
       const promptText = autoExtract ? buildPromptText('') : '';
-      const tokenTotal = promptText ? estimateTokens(promptText) : 0;
+      const tokenTotal = promptText ? estimateTokens(promptText, tokenMode) : 0;
       return {
         enabled: true,
         reason: 'budget_empty',
@@ -553,6 +476,7 @@ class AppBridge {
         overheadTokens,
         maxRows,
         position,
+        injectDepth,
         promptText,
         tableData: '',
         templateId,
@@ -561,33 +485,13 @@ class AppBridge {
         targetName,
         scope,
         autoExtract,
-        tableOrder,
+        tableOrder: tableOrderNext,
         rowIndexMap: {},
       };
     }
 
-    const tableParts = [];
-    const rowIndexMap = {};
-    for (const tableId of tableOrder) {
-      const rowsForTable = rowsByTable.get(tableId) || [];
-      if (!rowsForTable.length) continue;
-      const table = tableById.get(tableId) || { id: tableId, name: tableId };
-      const tableLabel = String(table?.name || tableId);
-      tableParts.push(autoExtract ? `【${tableLabel}｜${tableId}】` : `【${tableLabel}】`);
-      rowsForTable.forEach((row, index) => {
-        const line = String(row?.rowText || '').trim();
-        const prefix = autoExtract ? `- [${index}] ` : '- ';
-        tableParts.push(`${prefix}${line || '（未填写）'}`);
-        if (autoExtract) {
-          if (!rowIndexMap[tableId]) rowIndexMap[tableId] = [];
-          rowIndexMap[tableId][index] = row.id;
-        }
-      });
-    }
-    const tableData = tableParts.join('\n').trim();
-
     const promptText = buildPromptText(tableData);
-    const tokenTotal = estimateTokens(promptText);
+    const tokenTotal = estimateTokens(promptText, tokenMode);
 
     return {
       enabled: true,
@@ -601,6 +505,7 @@ class AppBridge {
       overheadTokens,
       maxRows,
       position,
+      injectDepth,
       promptText,
       tableData,
       templateId,
@@ -609,7 +514,7 @@ class AppBridge {
       targetName,
       scope,
       autoExtract,
-      tableOrder,
+      tableOrder: tableOrderNext,
       rowIndexMap,
     };
   }
@@ -1034,6 +939,7 @@ class AppBridge {
             memoryPrompt: {
               content: memoryPlan.promptText,
               position: memoryPlan.position,
+              depth: memoryPlan.injectDepth,
             },
           };
         }
@@ -1182,17 +1088,18 @@ class AppBridge {
     const useSummaryMemory = memoryMode !== 'table' && !Boolean(context?.meta?.disableSummary);
     const memoryPromptRaw = context?.meta?.memoryPrompt;
     const memoryPromptContent = typeof memoryPromptRaw?.content === 'string' ? String(memoryPromptRaw.content).trim() : '';
-    const memoryPromptPositionRaw = typeof memoryPromptRaw?.position === 'string' ? memoryPromptRaw.position : '';
-    const memoryPromptPosition = ['after_persona', 'system_end', 'before_chat'].includes(memoryPromptPositionRaw)
-      ? memoryPromptPositionRaw
-      : 'after_persona';
+    const memoryPromptPositionRaw = memoryPromptRaw?.position ?? '';
+    const parsedPositions = parseMemoryPromptPositions(memoryPromptPositionRaw);
+    const memoryPromptPositions = parsedPositions.length ? parsedPositions : ['after_persona'];
+    const memoryPromptDepthRaw = Math.trunc(Number(memoryPromptRaw?.depth));
+    const memoryPromptDepth = Number.isFinite(memoryPromptDepthRaw) ? Math.max(0, memoryPromptDepthRaw) : 4;
     const memoryPromptRoleRaw = String(memoryPromptRaw?.role || 'system').toLowerCase();
     const memoryPromptRole =
       memoryPromptRoleRaw === 'user' || memoryPromptRoleRaw === 'assistant' || memoryPromptRoleRaw === 'system'
         ? memoryPromptRoleRaw
         : 'system';
     const memoryPrompt = memoryPromptContent
-      ? { content: memoryPromptContent, position: memoryPromptPosition, role: memoryPromptRole }
+      ? { content: memoryPromptContent, positions: memoryPromptPositions, role: memoryPromptRole, depth: memoryPromptDepth }
       : null;
     const disableScenarioHint = Boolean(context?.meta?.disableScenarioHint);
     const overrideLastUserMessageRaw = (typeof context?.meta?.overrideLastUserMessage === 'string')
@@ -1884,11 +1791,20 @@ class AppBridge {
       };
 
 		    if (useOpenAIPreset && openp && openaiOrder && openaiOrder.length) {
-      let memoryInserted = false;
-      const insertMemoryPrompt = () => {
-        if (!memoryPrompt || memoryInserted) return;
+      const memoryInserted = new Set();
+      const canInsertMemoryAt = (pos) =>
+        Boolean(memoryPrompt && memoryPrompt.positions.includes(pos) && !memoryInserted.has(pos));
+      const insertMemoryPromptAt = (pos) => {
+        if (!canInsertMemoryAt(pos)) return;
         messages.push({ role: memoryPrompt.role, content: memoryPrompt.content });
-        memoryInserted = true;
+        memoryInserted.add(pos);
+      };
+      const insertMemoryPromptIntoHistory = (history) => {
+        if (!canInsertMemoryAt('history_depth')) return;
+        const depth = Math.max(0, Math.trunc(Number(memoryPrompt?.depth || 0)));
+        const idx = Math.max(0, history.length - depth);
+        history.splice(idx, 0, { role: memoryPrompt.role, content: memoryPrompt.content });
+        memoryInserted.add('history_depth');
       };
       const historyRaw = Array.isArray(context.history) ? context.history.slice() : [];
       // ST promptOnly scripts: apply to outgoing prompt only
@@ -1951,6 +1867,7 @@ class AppBridge {
         : [];
       const depthPromptMessages = mergeDepthMessages(depthWorldMessages, chatGuidePlan.depthMessages);
       insertDepthMessages(history, depthPromptMessages);
+      insertMemoryPromptIntoHistory(history);
 
       // WORLD_INFO placement for prompt stage (supports promptOnly scripts)
       const chatGuideContent = chatGuidePlan.promptContent;
@@ -2081,15 +1998,9 @@ class AppBridge {
         if (!identifier || !enabled) continue;
 
         if (identifier === 'chatHistory') {
-          if (
-            memoryPrompt &&
-            !memoryInserted &&
-            (memoryPrompt.position === 'before_chat' ||
-              memoryPrompt.position === 'system_end' ||
-              memoryPrompt.position === 'after_persona')
-          ) {
-            insertMemoryPrompt();
-          }
+          insertMemoryPromptAt('after_persona');
+          insertMemoryPromptAt('system_end');
+          insertMemoryPromptAt('before_chat');
           messages.push(...historyRecallBlocks);
           if (history.length) messages.push(...history);
           insertPendingUserIntoHistory();
@@ -2137,9 +2048,7 @@ class AppBridge {
           if (identifier === 'personaDescription') {
             const content = resolveMarker(identifier);
             if (content) messages.push({ role: 'system', content });
-            if (memoryPrompt?.position === 'after_persona') {
-              insertMemoryPrompt();
-            }
+            insertMemoryPromptAt('after_persona');
             continue;
           }
           const content = resolveMarker(identifier);
@@ -2176,9 +2085,9 @@ class AppBridge {
       appendWorldBucket('afterExamples');
 
       if (!historyInserted) {
-        if (memoryPrompt && !memoryInserted) {
-          insertMemoryPrompt();
-        }
+        insertMemoryPromptAt('after_persona');
+        insertMemoryPromptAt('system_end');
+        insertMemoryPromptAt('before_chat');
         messages.push(...historyRecallBlocks);
         if (history.length) messages.push(...history);
         insertPendingUserIntoHistory();
@@ -2195,11 +2104,20 @@ class AppBridge {
       return messages;
     }
 
-    let memoryInserted = false;
-    const insertMemoryPrompt = () => {
-      if (!memoryPrompt || memoryInserted) return;
+    const memoryInserted = new Set();
+    const canInsertMemoryAt = (pos) =>
+      Boolean(memoryPrompt && memoryPrompt.positions.includes(pos) && !memoryInserted.has(pos));
+    const insertMemoryPromptAt = (pos) => {
+      if (!canInsertMemoryAt(pos)) return;
       messages.push({ role: memoryPrompt.role, content: memoryPrompt.content });
-      memoryInserted = true;
+      memoryInserted.add(pos);
+    };
+    const insertMemoryPromptIntoHistory = (history) => {
+      if (!canInsertMemoryAt('history_depth')) return;
+      const depth = Math.max(0, Math.trunc(Number(memoryPrompt?.depth || 0)));
+      const idx = Math.max(0, history.length - depth);
+      history.splice(idx, 0, { role: memoryPrompt.role, content: memoryPrompt.content });
+      memoryInserted.add('history_depth');
     };
     const chatGuideContent = chatGuidePlan.promptContent;
     const chatGuideBeforePromptContent = chatGuidePlan.beforePromptContent;
@@ -2338,8 +2256,8 @@ class AppBridge {
         messages.push({ role: 'system', content: combinedStoryString });
       });
     }
-    if (shouldInsertStoryString && memoryPrompt?.position === 'after_persona') {
-      insertMemoryPrompt();
+    if (shouldInsertStoryString) {
+      insertMemoryPromptAt('after_persona');
     }
 
 	    // 聊天提示词（私聊/群聊/动态/摘要）统一放入 <chat_guide>，与世界书同位置注入。
@@ -2368,13 +2286,8 @@ class AppBridge {
       flushWorldMessages(worldMessagesBefore);
       flushWorldMessages(worldMessagesAfter);
     }
-    if (
-      memoryPrompt &&
-      !memoryInserted &&
-      (memoryPrompt.position === 'system_end' || memoryPrompt.position === 'after_persona')
-    ) {
-      insertMemoryPrompt();
-    }
+    insertMemoryPromptAt('after_persona');
+    insertMemoryPromptAt('system_end');
 
     // 3) History
     const history = Array.isArray(context.history) ? context.history.map(m => ({ ...m })) : [];
@@ -2416,6 +2329,7 @@ class AppBridge {
     }
     const depthPromptMessages = mergeDepthMessages(depthWorldMessages, chatGuidePlan.depthMessages);
     insertDepthMessages(history, depthPromptMessages);
+    insertMemoryPromptIntoHistory(history);
 	    // 聊天提示词的 SYSTEM_DEPTH_1 由 <chat_guide> 承载，不落入 <history>。
     const postHistoryRaw = useSysprompt ? sysp?.post_history || '' : '';
     const extraPromptBlocksRaw = Array.isArray(context?.meta?.extraPromptBlocks) ? context.meta.extraPromptBlocks : [];
@@ -2424,9 +2338,7 @@ class AppBridge {
       usedLastUserMessageForPendingInput = true;
     }
 
-		    if (memoryPrompt && !memoryInserted && memoryPrompt.position === 'before_chat') {
-          insertMemoryPrompt();
-        }
+		    insertMemoryPromptAt('before_chat');
 		    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
 	    try {
 	      const momentData = buildMomentCommentDataBlock();

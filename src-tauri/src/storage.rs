@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use base64::Engine;
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub provider: String,

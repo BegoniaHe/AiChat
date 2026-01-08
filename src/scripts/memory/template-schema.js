@@ -1,6 +1,6 @@
 const COLUMN_TYPES = ['text', 'number', 'select', 'multiline'];
 const SCOPE_TYPES = ['global', 'contact', 'group'];
-const INJECTION_POSITIONS = ['system_end', 'after_persona', 'before_chat'];
+const INJECTION_POSITIONS = ['system_end', 'after_persona', 'before_chat', 'history_depth'];
 const RULE_FIELDS = ['note', 'initNode', 'insertNode', 'updateNode', 'deleteNode'];
 
 export const templateSchema = {
@@ -14,6 +14,19 @@ export const validateTemplate = (template) => {
   const errors = [];
   const isPlainObject = (val) => val && typeof val === 'object' && !Array.isArray(val);
   const isStringArray = (val) => Array.isArray(val) && val.every(item => typeof item === 'string');
+  const parseInjectionPositions = (value) => {
+    if (Array.isArray(value)) {
+      return value
+        .map(item => String(item || '').trim().toLowerCase())
+        .filter(Boolean);
+    }
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return [];
+    return text
+      .split(/[+,]/)
+      .map(part => part.trim())
+      .filter(Boolean);
+  };
   if (!template || typeof template !== 'object') {
     return { ok: false, errors: ['template must be an object'] };
   }
@@ -97,8 +110,11 @@ export const validateTemplate = (template) => {
     });
   }
   if (template.injection && typeof template.injection === 'object') {
-    const pos = String(template.injection.position || '');
-    if (pos && !INJECTION_POSITIONS.includes(pos)) errors.push('injection.position is invalid');
+    const positions = parseInjectionPositions(template.injection.position);
+    if (positions.length) {
+      const invalid = positions.filter(pos => !INJECTION_POSITIONS.includes(pos));
+      if (invalid.length) errors.push('injection.position is invalid');
+    }
     if (template.injection.template && typeof template.injection.template !== 'string') {
       errors.push('injection.template must be a string');
     }

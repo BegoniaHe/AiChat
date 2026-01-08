@@ -69,6 +69,7 @@ export class MemoryTemplateStore {
   constructor({ scopeId = '' } = {}) {
     this.scopeId = String(scopeId || '').trim();
     this.ready = initDatabase(this.scopeId);
+    this.writeChain = Promise.resolve();
   }
 
   async ensureReady() {
@@ -80,12 +81,21 @@ export class MemoryTemplateStore {
     if (next === this.scopeId) return this.ready;
     this.scopeId = next;
     this.ready = initDatabase(this.scopeId);
+    this.writeChain = Promise.resolve();
     return this.ready;
   }
 
+  queueWrite(task) {
+    const run = this.writeChain.then(() => task());
+    this.writeChain = run.catch(() => {});
+    return run;
+  }
+
   async saveTemplate(input) {
-    await this.ensureReady();
-    return safeInvoke('save_template', { scopeId: this.scopeId, input });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('save_template', { scopeId: this.scopeId, input });
+    });
   }
 
   async saveTemplateDefinition(template, { isDefault = false, isBuiltin = false } = {}) {
@@ -106,17 +116,21 @@ export class MemoryTemplateStore {
   }
 
   async updateTemplateInjection(id, injection = {}) {
-    await this.ensureReady();
-    const record = await this.getTemplateById(id);
-    if (!record) throw new Error('template not found');
-    const input = buildTemplateInputFromRecord(record, { isDefault: record?.is_default, isBuiltin: record?.is_builtin });
-    input.injection = injection || null;
-    return this.saveTemplate(input);
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      const record = await this.getTemplateById(id);
+      if (!record) throw new Error('template not found');
+      const input = buildTemplateInputFromRecord(record, { isDefault: record?.is_default, isBuiltin: record?.is_builtin });
+      input.injection = injection || null;
+      return this.saveTemplate(input);
+    });
   }
 
   async deleteTemplate(id) {
-    await this.ensureReady();
-    return safeInvoke('delete_template', { scopeId: this.scopeId, id });
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      return safeInvoke('delete_template', { scopeId: this.scopeId, id });
+    });
   }
 
   toTemplateDefinition(record) {
@@ -124,35 +138,39 @@ export class MemoryTemplateStore {
   }
 
   async setDefaultTemplate(id) {
-    await this.ensureReady();
-    const list = await this.getTemplates({});
-    if (!Array.isArray(list) || !list.length) return false;
-    for (const record of list) {
-      const isDefault = String(record?.id || '') === String(id || '');
-      const input = buildTemplateInputFromRecord(record, { isDefault });
-      if (!input.id || !input.name) continue;
-      await this.saveTemplate(input);
-    }
-    return true;
+    return this.queueWrite(async () => {
+      await this.ensureReady();
+      const list = await this.getTemplates({});
+      if (!Array.isArray(list) || !list.length) return false;
+      for (const record of list) {
+        const isDefault = String(record?.id || '') === String(id || '');
+        const input = buildTemplateInputFromRecord(record, { isDefault });
+        if (!input.id || !input.name) continue;
+        await this.saveTemplate(input);
+      }
+      return true;
+    });
   }
 
   async ensureDefaultTemplate(template = DEFAULT_MEMORY_TEMPLATE) {
-    const templateId = String(template?.meta?.id || '').trim();
-    if (!templateId) return false;
-    try {
-      const existing = await this.getTemplateById(templateId);
-      if (existing) {
-        if (existing.is_builtin) {
-          await this.saveTemplateDefinition(template, { isDefault: existing.is_default, isBuiltin: true });
-          return true;
+    return this.queueWrite(async () => {
+      const templateId = String(template?.meta?.id || '').trim();
+      if (!templateId) return false;
+      try {
+        const existing = await this.getTemplateById(templateId);
+        if (existing) {
+          if (existing.is_builtin) {
+            await this.saveTemplateDefinition(template, { isDefault: existing.is_default, isBuiltin: true });
+            return true;
+          }
+          return false;
         }
+        await this.saveTemplateDefinition(template, { isDefault: true, isBuiltin: true });
+        return true;
+      } catch (err) {
+        logger.warn('ensure default template failed', err);
         return false;
       }
-      await this.saveTemplateDefinition(template, { isDefault: true, isBuiltin: true });
-      return true;
-    } catch (err) {
-      logger.warn('ensure default template failed', err);
-      return false;
-    }
+    });
   }
 }
