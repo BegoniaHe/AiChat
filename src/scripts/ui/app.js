@@ -39,6 +39,7 @@ import { VariablePanel } from './variable-panel.js';
 import { WorldPanel } from './world-panel.js';
 import { WorldInfoIndicator } from './worldinfo-indicator.js';
 import { extractTableEditBlocks, stripTableEditBlocks } from '../memory/memory-edit-parser.js';
+import { isSummaryTableId, normalizeMemoryUpdateMode } from '../memory/memory-prompt-utils.js';
 
 const initApp = async () => {
   const ui = new ChatUI();
@@ -4017,16 +4018,40 @@ ${listPart || '-（无）'}
         }
         return '';
       };
-      const resolveRowId = (action, tableId) => {
-        const rowId = String(action?.rowId || '').trim();
-        if (rowId) return rowId;
-        const rowIndexRaw = action?.rowIndex;
-        const rowIndex = Number.isFinite(Number(rowIndexRaw)) ? Math.trunc(Number(rowIndexRaw)) : null;
-        if (rowIndex === null || rowIndex < 0) return '';
-        const map = rowIndexMap?.[tableId];
-        if (Array.isArray(map) && rowIndex < map.length) return String(map[rowIndex] || '').trim();
-        return '';
-      };
+    const resolveRowId = (action, tableId) => {
+      const rowId = String(action?.rowId || '').trim();
+      if (rowId) return rowId;
+      const rowIndexRaw = action?.rowIndex;
+      const rowIndex = Number.isFinite(Number(rowIndexRaw)) ? Math.trunc(Number(rowIndexRaw)) : null;
+      if (rowIndex === null || rowIndex < 0) return '';
+      const map = rowIndexMap?.[tableId];
+      if (Array.isArray(map) && rowIndex < map.length) return String(map[rowIndex] || '').trim();
+      return '';
+    };
+    const resolveRowIdByData = (tableId, scopeKey, data, table) => {
+      if (!data || typeof data !== 'object') return '';
+      const rows = rowsByTableScope.get(`${tableId}:${scopeKey}`) || [];
+      if (!rows.length) return '';
+      const normalize = (value) => String(normalizeMemoryCellValue(value ?? '')).trim();
+      const candidates = [];
+      const preferredKeys = ['name', 'time', 'title', 'id'];
+      preferredKeys.forEach((key) => {
+        const v = normalize(data[key]);
+        if (v) candidates.push({ key, value: v });
+      });
+      if (!candidates.length) {
+        const firstColId = String(table?.columns?.[0]?.id || '').trim();
+        const v = normalize(firstColId ? data[firstColId] : '');
+        if (firstColId && v) candidates.push({ key: firstColId, value: v });
+      }
+      for (const candidate of candidates) {
+        const matches = rows.filter((row) => normalize(row?.row_data?.[candidate.key]) === candidate.value);
+        if (matches.length === 1) return String(matches[0]?.id || '').trim();
+        if (matches.length > 1) return '';
+      }
+      if (rows.length === 1) return String(rows[0]?.id || '').trim();
+      return '';
+    };
       const resolveScopeForTable = (table) => {
         const scope = String(table?.scope || '').trim().toLowerCase();
         if (scope === 'global') return { key: 'global', contactId: null, groupId: null };
@@ -4040,7 +4065,7 @@ ${listPart || '-（无）'}
       let deleted = 0;
       let skipped = 0;
 
-      const queueInsert = (tableId, table, scopeKey, contactId, groupId, data) => {
+      const queueInsert = (tableId, table, scopeKey, contactId, groupId, data, { allowDuplicate = false } = {}) => {
         const countKey = `${tableId}:${scopeKey}`;
         const maxRows = Number.isFinite(Number(table?.maxRows)) ? Math.max(0, Math.trunc(Number(table.maxRows))) : 0;
         const existingRows = rowsByTableScope.get(countKey) || [];
@@ -4048,10 +4073,12 @@ ${listPart || '-（无）'}
           skipped += 1;
           return false;
         }
-        const duplicate = existingRows.some(row => rowDataEquals(row?.row_data || {}, data));
-        if (duplicate) {
-          skipped += 1;
-          return false;
+        if (!allowDuplicate) {
+          const duplicate = existingRows.some(row => rowDataEquals(row?.row_data || {}, data));
+          if (duplicate) {
+            skipped += 1;
+            return false;
+          }
         }
         createInputs.push({
           template_id: templateId,
@@ -4066,6 +4093,9 @@ ${listPart || '-（无）'}
         return true;
       };
 
+      const updateMode = normalizeMemoryUpdateMode(plan?.updateMode, 'full');
+      const allowSummaryTables = updateMode === 'summary' || updateMode === 'full';
+      const allowStandardTables = updateMode === 'standard' || updateMode === 'full';
       for (const action of actions) {
         const tableId = resolveTableId(action);
         if (!tableId) {
@@ -4084,20 +4114,33 @@ ${listPart || '-（无）'}
           continue;
         }
         const { key: scopeKey, contactId, groupId } = resolveScopeForTable(table);
+        const isSummaryTable = isSummaryTableId(tableId);
+        if ((isSummaryTable && !allowSummaryTables) || (!isSummaryTable && !allowStandardTables)) {
+          skipped += 1;
+          continue;
+        }
         if (action.action === 'insert') {
           const data = normalizeTableRowData(action.data, table.columns || []);
           if (!Object.keys(data).length) {
             skipped += 1;
             continue;
           }
-          queueInsert(tableId, table, scopeKey, contactId, groupId, data);
+          queueInsert(tableId, table, scopeKey, contactId, groupId, data, { allowDuplicate: isSummaryTable });
         } else if (action.action === 'update') {
           const data = normalizeTableRowData(action.data, table.columns || []);
           if (!Object.keys(data).length) {
             skipped += 1;
             continue;
           }
-          const rowId = resolveRowId(action, tableId);
+          if (isSummaryTable) {
+            queueInsert(tableId, table, scopeKey, contactId, groupId, data, { allowDuplicate: true });
+            continue;
+          }
+          let rowId = resolveRowId(action, tableId);
+          if (!rowId) {
+            // Best-effort fallback when row_index is missing or truncated from prompt.
+            rowId = resolveRowIdByData(tableId, scopeKey, data, table);
+          }
           if (!rowId) {
             const countKey = `${tableId}:${scopeKey}`;
             const existingRows = rowsByTableScope.get(countKey) || [];

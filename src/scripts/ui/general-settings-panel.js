@@ -11,6 +11,7 @@ export class GeneralSettingsPanel {
     this.creativeHistoryInput = null;
     this.creativeWideToggle = null;
     this.personaBindToggle = null;
+    this.promptTimeToggle = null;
     this.memoryModeSummary = null;
     this.memoryModeTable = null;
     this.memoryAutoToggle = null;
@@ -57,6 +58,9 @@ export class GeneralSettingsPanel {
     }
     if (this.personaBindToggle) {
       this.personaBindToggle.checked = settings.personaBindContacts !== false;
+    }
+    if (this.promptTimeToggle) {
+      this.promptTimeToggle.checked = settings.promptCurrentTimeEnabled === true;
     }
     const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
     if (this.memoryModeSummary) {
@@ -300,6 +304,14 @@ export class GeneralSettingsPanel {
             <small style="color: #666; margin-left: 26px;">开启后每个 Persona 独立联系人、聊天记录、摘要与动态（互不影响）</small>
           </div>
 
+          <div style="margin-bottom: 14px;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" id="general-prompt-time" style="width: 18px; height: 18px;">
+              <span style="font-weight: 700;">发送当前时间给 AI</span>
+            </label>
+            <small style="color:#666; margin-left: 26px;">开启后每次请求都会附带当前时间（本地时区）</small>
+          </div>
+
           <div style="margin-bottom: 10px;">
             <div style="font-weight: 700; margin-bottom: 8px;">记忆存储方式</div>
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:8px;">
@@ -437,6 +449,7 @@ export class GeneralSettingsPanel {
     this.creativeHistoryInput = this.element.querySelector('#general-creative-history');
     this.creativeWideToggle = this.element.querySelector('#general-creative-wide');
     this.personaBindToggle = this.element.querySelector('#general-persona-bind');
+    this.promptTimeToggle = this.element.querySelector('#general-prompt-time');
     this.memoryModeSummary = this.element.querySelector('#general-memory-mode-summary');
     this.memoryModeTable = this.element.querySelector('#general-memory-mode-table');
     this.memoryAutoToggle = this.element.querySelector('#general-memory-auto');
@@ -510,6 +523,12 @@ export class GeneralSettingsPanel {
       }
       appSettings.update({ personaBindContacts: enabled });
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'personaBindContacts', value: enabled } }));
+    });
+
+    this.promptTimeToggle?.addEventListener('change', (e) => {
+      const enabled = Boolean(e?.target?.checked);
+      appSettings.update({ promptCurrentTimeEnabled: enabled });
+      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'promptCurrentTimeEnabled', value: enabled } }));
     });
 
     const applyMemoryMode = (mode) => {

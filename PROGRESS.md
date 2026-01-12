@@ -1920,3 +1920,13 @@
   - `src/scripts/ui/general-settings-panel.js`
   - `src/scripts/ui/memory-template-panel.js`
   - `src/scripts/memory/template-schema.js`
+
+## 2026-01-08
+- 记忆模板写入队列修复：补充超时重置与调试状态（pending/last command/reset），避免写入被挂起阻塞。
+- 记忆模板管理刷新诊断：输出 ensure/get/force 超时与空列表原因，空模板时自动写入默认模板。
+- 私聊角色档案“性格”必填改由系统判定；若为空在写表提示词里强制提示补齐（默认模板仍为 v1.0.0）。
+- 修改：
+  - `src/scripts/storage/memory-template-store.js`
+  - `src/scripts/ui/memory-template-panel.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/memory/default-template.js`

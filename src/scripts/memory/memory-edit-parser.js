@@ -241,6 +241,24 @@ export const parseTableEditActions = (content) => {
   for (const line of lineItems) {
     const normalized = line.replace(/,$/, '');
     if (!normalized) continue;
+    const labeledMatch = normalized.match(/^(insert|update|delete)\s*:\s*(.+)$/i);
+    if (labeledMatch) {
+      const label = String(labeledMatch[1] || '').toLowerCase();
+      const payload = labeledMatch[2].trim();
+      const labeledObj = payload ? tryParse(payload) : null;
+      if (labeledObj) {
+        if (Array.isArray(labeledObj)) {
+          labeledObj.forEach((item) => {
+            if (item && typeof item === 'object' && !('action' in item)) item.action = label;
+            pushAction(item);
+          });
+        } else if (labeledObj && typeof labeledObj === 'object') {
+          if (!('action' in labeledObj)) labeledObj.action = label;
+          pushAction(labeledObj);
+        }
+        continue;
+      }
+    }
     const obj = tryParse(normalized);
     if (obj) {
       if (Array.isArray(obj)) {

@@ -65,11 +65,53 @@ const buildTemplateDefinitionFromRecord = (record) => {
   };
 };
 
+const parseVersionParts = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  return raw.split('.').map(part => {
+    const num = Number.parseInt(part, 10);
+    return Number.isFinite(num) ? num : 0;
+  });
+};
+
+const isNewerVersion = (next, current) => {
+  const a = parseVersionParts(next);
+  const b = parseVersionParts(current);
+  const max = Math.max(a.length, b.length);
+  for (let i = 0; i < max; i += 1) {
+    const av = a[i] ?? 0;
+    const bv = b[i] ?? 0;
+    if (av > bv) return true;
+    if (av < bv) return false;
+  }
+  return false;
+};
+
 export class MemoryTemplateStore {
   constructor({ scopeId = '' } = {}) {
     this.scopeId = String(scopeId || '').trim();
-    this.ready = initDatabase(this.scopeId);
+    this.ready = null;
+    this.readyOk = null;
+    this.lastError = null;
+    this.writePending = 0;
+    this.lastCommand = null;
+    this.lastCommandAt = null;
+    this.lastCommandDoneAt = null;
+    this.lastCommandError = null;
+    this.queueResetAt = null;
+    this.queueResetReason = null;
+    this.queueResetCount = 0;
+    this.initReady(this.scopeId);
     this.writeChain = Promise.resolve();
+  }
+
+  initReady(scopeId) {
+    this.readyOk = null;
+    this.ready = initDatabase(scopeId).then(ok => {
+      this.readyOk = ok;
+      return ok;
+    });
+    return this.ready;
   }
 
   async ensureReady() {
@@ -80,34 +122,82 @@ export class MemoryTemplateStore {
     const next = String(scopeId || '').trim();
     if (next === this.scopeId) return this.ready;
     this.scopeId = next;
-    this.ready = initDatabase(this.scopeId);
+    this.lastError = null;
+    this.initReady(this.scopeId);
     this.writeChain = Promise.resolve();
     return this.ready;
   }
 
   queueWrite(task) {
-    const run = this.writeChain.then(() => task());
+    this.resetWriteChainIfStuck();
+    const run = this.writeChain.then(async () => {
+      this.writePending += 1;
+      try {
+        return await task();
+      } finally {
+        this.writePending = Math.max(0, this.writePending - 1);
+      }
+    });
     this.writeChain = run.catch(() => {});
     return run;
   }
 
+  resetWriteChainIfStuck({ timeoutMs = 5000 } = {}) {
+    if (!this.lastCommandAt || this.lastCommandDoneAt) return false;
+    const now = Date.now();
+    const age = now - this.lastCommandAt;
+    if (age < timeoutMs) return false;
+    this.lastCommandDoneAt = now;
+    this.lastCommandError = `timeout after ${age}ms`;
+    this.lastError = new Error(this.lastCommandError);
+    this.writeChain = Promise.resolve();
+    this.writePending = 0;
+    this.queueResetAt = now;
+    this.queueResetReason = this.lastCommandError;
+    this.queueResetCount += 1;
+    return true;
+  }
+
+  async invokeCommand(cmd, args) {
+    this.lastCommand = cmd;
+    this.lastCommandAt = Date.now();
+    this.lastCommandDoneAt = null;
+    this.lastCommandError = null;
+    try {
+      const result = await safeInvoke(cmd, args);
+      this.lastCommandDoneAt = Date.now();
+      return result;
+    } catch (err) {
+      this.lastCommandDoneAt = Date.now();
+      this.lastCommandError = err ? String(err?.message || err) : 'unknown error';
+      this.lastError = err;
+      throw err;
+    }
+  }
+
   async saveTemplate(input) {
-    return this.queueWrite(async () => {
-      await this.ensureReady();
-      return safeInvoke('save_template', { scopeId: this.scopeId, input });
-    });
+    return this.queueWrite(() => this.saveTemplateRaw(input));
+  }
+
+  async saveTemplateRaw(input) {
+    await this.ensureReady();
+    return this.invokeCommand('save_template', { scopeId: this.scopeId, input });
   }
 
   async saveTemplateDefinition(template, { isDefault = false, isBuiltin = false } = {}) {
+    return this.queueWrite(() => this.saveTemplateDefinitionRaw(template, { isDefault, isBuiltin }));
+  }
+
+  async saveTemplateDefinitionRaw(template, { isDefault = false, isBuiltin = false } = {}) {
     await this.ensureReady();
     const input = buildTemplateInput(template, { isDefault, isBuiltin });
     if (!input.id || !input.name) throw new Error('template id or name missing');
-    return this.saveTemplate(input);
+    return this.saveTemplateRaw(input);
   }
 
   async getTemplates(query = {}) {
     await this.ensureReady();
-    return safeInvoke('get_templates', { scopeId: this.scopeId, query });
+    return this.invokeCommand('get_templates', { scopeId: this.scopeId, query });
   }
 
   async getTemplateById(id) {
@@ -129,7 +219,7 @@ export class MemoryTemplateStore {
   async deleteTemplate(id) {
     return this.queueWrite(async () => {
       await this.ensureReady();
-      return safeInvoke('delete_template', { scopeId: this.scopeId, id });
+      return this.invokeCommand('delete_template', { scopeId: this.scopeId, id });
     });
   }
 
@@ -159,18 +249,71 @@ export class MemoryTemplateStore {
       try {
         const existing = await this.getTemplateById(templateId);
         if (existing) {
-          if (existing.is_builtin) {
-            await this.saveTemplateDefinition(template, { isDefault: existing.is_default, isBuiltin: true });
+          const meta = template?.meta || {};
+          const existingMeta = existing?.schema && typeof existing.schema === 'object' ? existing.schema.meta || {} : {};
+          const existingName = String(existing?.name || existingMeta?.name || '').trim();
+          const existingAuthor = String(existing?.author || existingMeta?.author || '').trim();
+          const templateName = String(meta?.name || '').trim();
+          const templateAuthor = String(meta?.author || '').trim();
+          const nameMatches = !existingName || !templateName || existingName === templateName;
+          const authorMatches = !existingAuthor || existingAuthor === templateAuthor;
+          const existingVersion = String(existing?.version || existingMeta?.version || '').trim();
+          const templateVersion = String(meta?.version || '').trim();
+          const versionUpgrade = templateVersion && (!existingVersion || isNewerVersion(templateVersion, existingVersion));
+          const shouldOverwrite = Boolean(existing.is_builtin) || (nameMatches && authorMatches && versionUpgrade);
+          if (shouldOverwrite) {
+            await this.saveTemplateDefinitionRaw(template, { isDefault: existing.is_default, isBuiltin: true });
             return true;
           }
           return false;
         }
-        await this.saveTemplateDefinition(template, { isDefault: true, isBuiltin: true });
+        await this.saveTemplateDefinitionRaw(template, { isDefault: true, isBuiltin: true });
         return true;
       } catch (err) {
+        this.lastError = err;
         logger.warn('ensure default template failed', err);
         return false;
       }
     });
   }
+
+  async forceDefaultTemplate(template = DEFAULT_MEMORY_TEMPLATE) {
+    return this.queueWrite(async () => {
+      const templateId = String(template?.meta?.id || '').trim();
+      if (!templateId) return false;
+      try {
+        await this.saveTemplateDefinitionRaw(template, { isDefault: true, isBuiltin: true });
+        return true;
+      } catch (err) {
+        this.lastError = err;
+        logger.warn('force default template failed', err);
+        return false;
+      }
+    });
+  }
+
+  getDebugInfo() {
+    const meta = DEFAULT_MEMORY_TEMPLATE?.meta || {};
+    const now = Date.now();
+    const lastCommandAgeMs = this.lastCommandAt ? Math.max(0, now - this.lastCommandAt) : null;
+    const lastCommandPending = Boolean(this.lastCommandAt && !this.lastCommandDoneAt);
+    return {
+      scopeId: this.scopeId,
+      readyOk: this.readyOk,
+      lastError: this.lastError ? String(this.lastError?.message || this.lastError) : null,
+      writePending: this.writePending,
+      lastCommand: this.lastCommand,
+      lastCommandAgeMs,
+      lastCommandPending,
+      lastCommandError: this.lastCommandError,
+      queueResetAt: this.queueResetAt,
+      queueResetReason: this.queueResetReason,
+      queueResetCount: this.queueResetCount,
+      defaultTemplateId: meta.id || null,
+      defaultTemplateName: meta.name || null,
+      defaultTemplateVersion: meta.version || null,
+      defaultTemplateAuthor: meta.author || null,
+    };
+  }
+
 }

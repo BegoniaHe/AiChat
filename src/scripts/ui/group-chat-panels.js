@@ -14,6 +14,81 @@ const getMemoryStorageMode = () => {
     return mode === 'table' ? 'table' : 'summary';
 };
 
+const resolveDefaultMemoryTemplateId = async () => {
+    const store = window.appBridge?.memoryTemplateStore;
+    if (!store?.getTemplates) return '';
+    try {
+        const list = await store.getTemplates({ is_default: true });
+        if (Array.isArray(list) && list.length) {
+            return String(list[0]?.id || '').trim();
+        }
+    } catch {}
+    try {
+        const fallback = await store.getTemplates({ id: 'default-v1' });
+        if (Array.isArray(fallback) && fallback.length) {
+            return String(fallback[0]?.id || '').trim();
+        }
+    } catch {}
+    return '';
+};
+
+const askMemoryTableNewChatMode = () => {
+    const tip = [
+        '记忆表格模式：选择新聊天处理方式',
+        '1) 保留其他表格（仅清空摘要）',
+        '2) 清空全部记忆表格',
+        '0) 取消开启新聊天',
+        '',
+        '请输入 1 / 2 / 0：',
+    ].join('\n');
+    const raw = prompt(tip, '1');
+    if (raw === null) return 'cancel';
+    const value = String(raw || '').trim();
+    if (!value || value === '1' || value.includes('保留')) return 'keep';
+    if (value === '2' || value.includes('清空')) return 'clear';
+    if (value === '0' || value.includes('取消')) return 'cancel';
+    alert('未识别的选项，已取消开启新聊天。');
+    return 'cancel';
+};
+
+const clearSessionMemoriesForNewChat = async ({ sessionId, isGroup, keepNonSummary } = {}) => {
+    const memoryTableStore = window.appBridge?.memoryTableStore;
+    if (!memoryTableStore?.getMemories) return false;
+    const templateId = await resolveDefaultMemoryTemplateId();
+    if (!templateId) return false;
+    const sid = String(sessionId || '').trim();
+    if (!sid) return false;
+    let rows = [];
+    try {
+        rows = await memoryTableStore.getMemories({
+            scope: isGroup ? 'group' : 'contact',
+            group_id: isGroup ? sid : undefined,
+            contact_id: isGroup ? undefined : sid,
+            template_id: templateId,
+        });
+    } catch {
+        return false;
+    }
+    if (!Array.isArray(rows) || rows.length === 0) return true;
+    const summaryTableId = isGroup ? 'group_summary' : 'chat_summary';
+    const ids = rows
+        .filter(row => row && (!keepNonSummary || String(row?.table_id || '').trim() === summaryTableId))
+        .map(row => String(row?.id || '').trim())
+        .filter(Boolean);
+    if (!ids.length) return true;
+    try {
+        await memoryTableStore.batchDeleteMemories?.(ids);
+    } catch {
+        for (const id of ids) {
+            try {
+                await memoryTableStore.deleteMemory?.(id);
+            } catch {}
+        }
+    }
+    window.dispatchEvent(new CustomEvent('memory-rows-updated', { detail: { sessionId: sid, templateId } }));
+    return true;
+};
+
 const genGroupId = () => `group:${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
 const normalize = (s) => String(s || '').trim();
@@ -494,7 +569,7 @@ export class GroupSettingsPanel {
                 getContext: () => ({ type: 'group', groupId: this.groupId }),
                 memoryStore: window.appBridge.memoryTableStore,
                 templateStore: window.appBridge.memoryTemplateStore,
-                includeGlobal: false,
+                includeGlobal: true,
             });
         }
 
@@ -1147,12 +1222,25 @@ export class GroupSettingsPanel {
         });
     }
 
-    startNewChat() {
+    async startNewChat() {
         if (!this.chatStore) return;
         const sid = this.groupId;
+        let keepNonSummary = false;
+        if (getMemoryStorageMode() === 'table') {
+            const choice = askMemoryTableNewChatMode();
+            if (choice === 'cancel') return;
+            keepNonSummary = choice === 'keep';
+        }
         const raw = prompt('请输入当前聊天的存档名称（留空将自动命名）：');
         if (raw === null) return;
 
+        if (getMemoryStorageMode() === 'table') {
+            try {
+                await clearSessionMemoriesForNewChat({ sessionId: sid, isGroup: true, keepNonSummary });
+            } catch (err) {
+                logger.warn('clear memory tables for new chat failed', err);
+            }
+        }
         this.chatStore.startNewChat(sid, raw.trim());
         window.toastr?.success('已开启新聊天');
         this.onSaved?.({ id: sid, forceRefresh: true });

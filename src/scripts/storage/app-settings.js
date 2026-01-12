@@ -12,6 +12,7 @@ const defaults = {
   reasoningAddToPrompts: false,
   reasoningMaxAdditions: 1,
   personaBindContacts: true,
+  promptCurrentTimeEnabled: false,
   memoryStorageMode: 'summary',
   memoryAutoExtract: false,
   memoryAutoExtractMode: 'inline',

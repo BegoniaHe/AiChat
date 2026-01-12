@@ -63,6 +63,54 @@ export class MemoryTemplatePanel {
     this.templateEditorAddTableBtn = null;
     this.templateEditorRecord = null;
     this.templateEditorData = null;
+    this.refreshSeq = 0;
+  }
+
+  async logDebug(message, type = 'info') {
+    try {
+      const { getDebugPanel } = await import('./debug-panel.js');
+      const panel = getDebugPanel();
+      panel.log(message, type);
+    } catch {}
+  }
+
+  async awaitWithTimeout(promise, { label, runId, timeoutMs = 1500 } = {}) {
+    if (!promise || typeof promise.then !== 'function') {
+      return { value: promise };
+    }
+    let timeoutId;
+    let timedOut = false;
+    const timeoutPromise = new Promise(resolve => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        resolve({ timeout: true });
+      }, timeoutMs);
+    });
+    const wrapped = Promise.resolve(promise).then(
+      value => ({ value }),
+      error => ({ error })
+    );
+    const result = await Promise.race([wrapped, timeoutPromise]);
+    if (timeoutId) clearTimeout(timeoutId);
+    if (result && result.timeout) {
+      this.logDebug(`[模板#${runId}] ${label} 超时(${timeoutMs}ms)`, 'warn');
+      wrapped.then(outcome => {
+        if (!outcome) return;
+        if (outcome.error) {
+          const msg = outcome.error?.message ? String(outcome.error.message) : String(outcome.error || '');
+          this.logDebug(`[模板#${runId}] ${label} 之后失败: ${msg || 'unknown error'}`, 'warn');
+        } else {
+          this.logDebug(`[模板#${runId}] ${label} 之后完成`, 'info');
+        }
+      });
+      return { timeout: true };
+    }
+    if (result?.error) {
+      const msg = result.error?.message ? String(result.error.message) : String(result.error || '');
+      this.logDebug(`[模板#${runId}] ${label} 失败: ${msg || 'unknown error'}`, 'warn');
+      return { error: result.error };
+    }
+    return { value: result?.value };
   }
 
   show() {
@@ -203,16 +251,104 @@ export class MemoryTemplatePanel {
   async refresh() {
     if (!this.templateStore) {
       if (this.currentEl) this.currentEl.textContent = '模板存储未初始化。';
+      this.logDebug('[模板#?] 刷新失败：templateStore 未初始化', 'warn');
       return;
     }
-    try {
-      this.templates = await this.templateStore.getTemplates({});
-    } catch (err) {
-      logger.warn('load templates failed', err);
+    const runId = ++this.refreshSeq;
+    const debugInfo = this.templateStore.getDebugInfo?.() || {};
+    const scopeLabel = debugInfo.scopeId ? `scope=${debugInfo.scopeId}` : 'scope=default';
+    const readyLabel = debugInfo.readyOk === null ? 'ready=unknown' : `ready=${debugInfo.readyOk ? 'ok' : 'fail'}`;
+    const defaultMeta = debugInfo.defaultTemplateId
+      ? `${debugInfo.defaultTemplateId}@v${debugInfo.defaultTemplateVersion || 'unknown'}`
+      : 'default=missing';
+    const queueLabel = `pending=${debugInfo.writePending ?? 0}`;
+    const lastCmd = debugInfo.lastCommand
+      ? `last=${debugInfo.lastCommand}${debugInfo.lastCommandPending ? `(${Math.round((debugInfo.lastCommandAgeMs || 0) / 1000)}s)` : ''}`
+      : 'last=none';
+    const resetLabel = debugInfo.queueResetCount ? `reset=${debugInfo.queueResetCount}` : 'reset=0';
+    this.logDebug(`[模板#${runId}] 刷新开始: ${scopeLabel}, ${readyLabel}, ${defaultMeta}, ${queueLabel}, ${lastCmd}, ${resetLabel}`);
+    if (debugInfo.queueResetReason) {
+      this.logDebug(`[模板#${runId}] writeChain 已重置: ${debugInfo.queueResetReason}`, 'warn');
+    }
+    let ensureOk = null;
+    const ensureResult = await this.awaitWithTimeout(
+      this.templateStore.ensureDefaultTemplate?.(),
+      { label: 'ensureDefaultTemplate', runId, timeoutMs: 2000 }
+    );
+    if (ensureResult.timeout) {
+      ensureOk = null;
+    } else if (ensureResult.error) {
+      ensureOk = false;
+    } else {
+      ensureOk = ensureResult.value;
+    }
+    const ensureLabel = ensureOk === null ? 'unknown' : ensureOk ? 'ok' : 'fail';
+    this.logDebug(`[模板#${runId}] ensureDefaultTemplate=${ensureLabel}`);
+    let templates = [];
+    const listResult = await this.awaitWithTimeout(
+      this.templateStore.getTemplates({}),
+      { label: 'getTemplates', runId, timeoutMs: 3000 }
+    );
+    if (listResult.timeout) {
+      if (this.currentEl) this.currentEl.textContent = '读取模板超时。';
+      return;
+    }
+    if (listResult.error) {
+      logger.warn('load templates failed', listResult.error);
       if (this.currentEl) this.currentEl.textContent = '读取模板失败。';
       return;
     }
+    templates = listResult.value;
+    this.logDebug(`[模板#${runId}] getTemplates 返回 ${Array.isArray(templates) ? templates.length : 'invalid'} 条`);
+    let forceOk = null;
+    if (!Array.isArray(templates) || templates.length === 0) {
+      const forceResult = await this.awaitWithTimeout(
+        this.templateStore.forceDefaultTemplate?.(),
+        { label: 'forceDefaultTemplate', runId, timeoutMs: 2000 }
+      );
+      if (forceResult.timeout) {
+        forceOk = null;
+      } else if (forceResult.error) {
+        forceOk = false;
+      } else {
+        forceOk = forceResult.value;
+      }
+      const forceLabel = forceOk === null ? 'unknown' : forceOk ? 'ok' : 'fail';
+      this.logDebug(`[模板#${runId}] forceDefaultTemplate=${forceLabel}`);
+      const reloadResult = await this.awaitWithTimeout(
+        this.templateStore.getTemplates({}),
+        { label: 'getTemplates(reload)', runId, timeoutMs: 3000 }
+      );
+      if (reloadResult.timeout) {
+        if (this.currentEl) this.currentEl.textContent = '读取模板超时。';
+        return;
+      }
+      if (reloadResult.error) {
+        logger.warn('reload templates failed', reloadResult.error);
+        if (this.currentEl) this.currentEl.textContent = '读取模板失败。';
+        return;
+      }
+      templates = reloadResult.value;
+      this.logDebug(`[模板#${runId}] 重载 getTemplates 返回 ${Array.isArray(templates) ? templates.length : 'invalid'} 条`);
+    }
+    this.templates = Array.isArray(templates) ? templates : [];
+    if (this.templates.length === 0) {
+      const scopeId = String(this.templateStore?.scopeId || '');
+      if (this.currentEl) {
+        this.currentEl.textContent = scopeId
+          ? `当前 scope 无模板（scope=${scopeId}）`
+          : '当前 scope 无模板';
+      }
+      const info = this.templateStore.getDebugInfo?.() || {};
+      const lastError = info.lastError || 'none';
+      const ensureLabel = ensureOk === null ? 'unknown' : ensureOk ? 'ok' : 'fail';
+      const forceLabel = forceOk === null ? 'unknown' : forceOk ? 'ok' : 'fail';
+      this.logDebug(`[模板#${runId}] 列表仍为空: ensure=${ensureLabel}, force=${forceLabel}, lastError=${lastError}`, 'warn');
+    }
     this.currentTemplate = (this.templates || []).find(t => t.is_default) || null;
+    const currentId = this.currentTemplate?.id || 'none';
+    const total = this.templates.length;
+    this.logDebug(`[模板#${runId}] 刷新结束: total=${total}, current=${currentId}`);
     this.renderCurrent();
     this.renderList();
     this.globalEditor?.render?.();
@@ -1450,11 +1586,13 @@ export class MemoryTemplatePanel {
   openTemplateEditor(record) {
     if (!record || !this.templateStore) {
       window.toastr?.info?.('未找到可编辑的模板');
+      this.logDebug('[模板#?] 结构编辑失败：无可用模板或 store 未就绪', 'warn');
       return;
     }
     const template = this.templateStore.toTemplateDefinition(record);
     if (!template) {
       window.toastr?.error?.('模板数据为空，无法编辑');
+      this.logDebug(`[模板#?] 结构编辑失败：模板为空 (${record?.id || 'unknown'})`, 'warn');
       return;
     }
     const draft = deepClone(template);

@@ -10,9 +10,13 @@ import { PresetStore } from '../storage/preset-store.js';
 import { RegexStore, regex_placement } from '../storage/regex-store.js';
 import { WorldInfoStore, convertSTWorld } from '../storage/worldinfo.js';
 import { makeScopedKey, normalizeScopeId } from '../storage/store-scope.js';
+import { appSettings } from '../storage/app-settings.js';
 import {
   buildMemoryTablePlan,
   estimateTokens,
+  isSummaryTableId,
+  normalizeMemoryCell,
+  normalizeMemoryUpdateMode,
   normalizeTokenMode,
   parseMemoryPromptPositions,
 } from '../memory/memory-prompt-utils.js';
@@ -117,6 +121,18 @@ const formatExactTime = (ts) => {
   } catch {
     return '';
   }
+};
+
+const buildTimeContextText = () => {
+  const now = new Date();
+  const date = now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const weekday = now.toLocaleDateString('zh-CN', { weekday: 'long' });
+  const time = now.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  const hour = now.getHours();
+  const period = hour < 5 ? '凌晨' : hour < 12 ? '上午' : hour < 14 ? '中午' : hour < 18 ? '下午' : hour < 22 ? '晚上' : '深夜';
+  const month = now.getMonth() + 1;
+  const season = (month === 12 || month <= 2) ? '冬季' : month <= 5 ? '春季' : month <= 8 ? '夏季' : '秋季';
+  return `<TimeContext:当前真实时间是${date} ${weekday} ${time}（24小时制），现在是${period}时段，${season}。注意：仅在开启新话题、或对话长时间中断后、或对方主动问候时，才适合使用时间问候语。否则请将此信息作为背景自然融入对话。>`;
 };
 
 const formatSince = (ts) => {
@@ -231,6 +247,7 @@ class AppBridge {
   async buildMemoryPromptPlan(context = {}) {
     const memoryMode = String(context?.meta?.memoryStorageMode || '').trim().toLowerCase();
     const autoExtract = Boolean(context?.meta?.memoryAutoExtract);
+    const updateMode = normalizeMemoryUpdateMode(context?.meta?.memoryUpdateMode, 'full');
     const disabledPlan = (reason) => ({
       enabled: false,
       reason,
@@ -246,6 +263,7 @@ class AppBridge {
       injectDepth: 4,
       promptText: '',
       tableData: '',
+      updateMode,
       templateId: '',
       templateName: '',
       targetId: '',
@@ -312,9 +330,18 @@ class AppBridge {
     const tables = Array.isArray(template?.tables) ? template.tables : [];
     const tableById = new Map();
     const tableOrder = [];
+    const allowSummaryTables = updateMode === 'summary' || updateMode === 'full';
+    const allowStandardTables = updateMode === 'standard' || updateMode === 'full';
+    const shouldIncludeTable = (tableId) => {
+      const isSummary = isSummaryTableId(tableId);
+      if (isSummary && !allowSummaryTables) return false;
+      if (!isSummary && !allowStandardTables) return false;
+      return true;
+    };
     tables.forEach(t => {
       const id = String(t?.id || '').trim();
       if (!id) return;
+      if (!shouldIncludeTable(id)) return;
       tableById.set(id, t);
       tableOrder.push(id);
     });
@@ -330,10 +357,24 @@ class AppBridge {
     const injectDepthRaw = Math.trunc(Number(context?.meta?.memoryInjectDepth));
     const injectDepth = Number.isFinite(injectDepthRaw) ? Math.max(0, injectDepthRaw) : 4;
 
-    const buildMemoryEditGuide = () => {
+    const buildMemoryEditGuide = (requiredHints = []) => {
       const lines = [];
       lines.push('<memory_edit_rules>');
-      lines.push('需要更新记忆表格时，在回复末尾输出 <tableEdit>...</tableEdit>，每行一个 JSON。');
+      if (requiredHints.length) {
+        lines.push('【系统必填】');
+        requiredHints.forEach((hint) => {
+          lines.push(`- ${hint}`);
+        });
+      }
+      if (updateMode === 'summary') {
+        lines.push('本轮仅允许更新“摘要/大总结”类表格，其他表格禁止写入。');
+      } else if (updateMode === 'standard') {
+        lines.push('本轮仅允许更新非摘要类表格，摘要/大总结类表格禁止写入。');
+      }
+      if (tableOrder.some(tableId => isSummaryTableId(tableId))) {
+        lines.push('摘要/大总结表格只允许 insert；禁止 update/delete。');
+      }
+      lines.push('需要更新记忆表格时，在回复末尾输出 <tableEdit>...</tableEdit>，每行一个 JSON（允许 insert/update/delete: 前缀）。');
       lines.push('insert: {"action":"insert","table_id":"relationship","data":{"relation":"朋友"}}');
       lines.push('update: {"action":"update","table_id":"relationship","row_index":0,"data":{"relation":"亲密朋友"}}');
       lines.push('delete: {"action":"delete","table_id":"relationship","row_index":0}');
@@ -376,7 +417,65 @@ class AppBridge {
       lines.push('</memory_edit_rules>');
       return lines.join('\n').trim();
     };
-    const editGuide = autoExtract ? buildMemoryEditGuide() : '';
+    let scopedRows = [];
+    let globalRows = [];
+    try {
+      if (isGroup) {
+        scopedRows = await this.memoryTableStore.getMemories({ scope: 'group', group_id: sessionId, template_id: templateId });
+      } else {
+        scopedRows = await this.memoryTableStore.getMemories({ scope: 'contact', contact_id: sessionId, template_id: templateId });
+      }
+    } catch {
+      scopedRows = [];
+    }
+    try {
+      globalRows = await this.memoryTableStore.getMemories({ scope: 'global', template_id: templateId });
+    } catch {
+      globalRows = [];
+    }
+
+    const resolveRequiredHints = () => {
+      const hints = [];
+      const rows = Array.isArray(scopedRows) ? scopedRows : [];
+      if (!isGroup) {
+        const targetTableId = 'character_profile';
+        const table = tableById.get(targetTableId);
+        if (table) {
+          const targetRows = rows.filter(row => String(row?.table_id || '').trim() === targetTableId && row?.is_active !== false);
+          const requiredFields = ['personality'];
+          const missing = [];
+          if (!targetRows.length) {
+            missing.push(...requiredFields);
+          } else {
+            const rowData = targetRows[0]?.row_data || {};
+            requiredFields.forEach((fieldId) => {
+              const value = normalizeMemoryCell(rowData?.[fieldId]).trim();
+              if (!value) missing.push(fieldId);
+            });
+          }
+          if (missing.length) {
+            const columns = Array.isArray(table?.columns) ? table.columns : [];
+            const fieldNames = missing.map((fieldId) => {
+              const col = columns.find(c => String(c?.id || '').trim() === fieldId);
+              return String(col?.name || fieldId || '').trim() || fieldId;
+            });
+            const tableLabel = String(table?.name || targetTableId).trim() || targetTableId;
+            const action = targetRows.length ? 'update' : 'insert';
+            hints.push(`系统检测：${tableLabel} 必填字段为空（${fieldNames.join('、')}）。请在 <tableEdit> 中使用 ${action} 补全。`);
+          }
+        }
+      }
+
+      const summaryTableId = isGroup ? 'group_summary' : 'chat_summary';
+      const summaryTable = tableById.get(summaryTableId);
+      if (summaryTable) {
+        const summaryLabel = String(summaryTable?.name || summaryTableId).trim() || summaryTableId;
+        hints.push(`本轮必须新增${summaryLabel}（摘要栏位需使用“【摘要】...【大总结】...”分隔；仅使用 insert）。`);
+      }
+      return hints;
+    };
+    const requiredHints = autoExtract ? resolveRequiredHints() : [];
+    const editGuide = autoExtract ? buildMemoryEditGuide(requiredHints) : '';
 
     const emptyTemplate = renderStTemplate(templateRaw, { ...macroVars, tableData: '' });
     const emptyWrapped = wrapperRaw
@@ -397,25 +496,9 @@ class AppBridge {
       return promptText;
     };
 
-    let scopedRows = [];
-    let globalRows = [];
-    try {
-      if (isGroup) {
-        scopedRows = await this.memoryTableStore.getMemories({ scope: 'group', group_id: sessionId, template_id: templateId });
-      } else {
-        scopedRows = await this.memoryTableStore.getMemories({ scope: 'contact', contact_id: sessionId, template_id: templateId });
-      }
-    } catch {
-      scopedRows = [];
-    }
-    try {
-      globalRows = await this.memoryTableStore.getMemories({ scope: 'global', template_id: templateId });
-    } catch {
-      globalRows = [];
-    }
-
     const rows = [...(Array.isArray(globalRows) ? globalRows : []), ...(Array.isArray(scopedRows) ? scopedRows : [])]
-      .filter(row => row && row.is_active !== false);
+      .filter(row => row && row.is_active !== false)
+      .filter(row => shouldIncludeTable(String(row?.table_id || '').trim()));
 
     const planResult = buildMemoryTablePlan({
       rows,
@@ -450,6 +533,7 @@ class AppBridge {
         injectDepth,
         promptText,
         tableData: '',
+        updateMode,
         templateId,
         templateName,
         targetId: sessionId,
@@ -479,6 +563,7 @@ class AppBridge {
         injectDepth,
         promptText,
         tableData: '',
+        updateMode,
         templateId,
         templateName,
         targetId: sessionId,
@@ -508,6 +593,7 @@ class AppBridge {
       injectDepth,
       promptText,
       tableData,
+      updateMode,
       templateId,
       templateName,
       targetId: sessionId,
@@ -1086,6 +1172,16 @@ class AppBridge {
     const isGroupChat = Boolean(context?.session?.isGroup) || String(context?.session?.id || '').startsWith('group:');
     const memoryMode = String(context?.meta?.memoryStorageMode || '').trim().toLowerCase();
     const useSummaryMemory = memoryMode !== 'table' && !Boolean(context?.meta?.disableSummary);
+    const includeTimeContext = (() => {
+      const raw = context?.meta?.includeTimeContext;
+      if (typeof raw === 'boolean') return raw;
+      try {
+        return appSettings.get().promptCurrentTimeEnabled === true;
+      } catch {
+        return false;
+      }
+    })();
+    const timeContextBlock = includeTimeContext ? { role: 'system', content: buildTimeContextText() } : null;
     const memoryPromptRaw = context?.meta?.memoryPrompt;
     const memoryPromptContent = typeof memoryPromptRaw?.content === 'string' ? String(memoryPromptRaw.content).trim() : '';
     const memoryPromptPositionRaw = memoryPromptRaw?.position ?? '';
@@ -1935,7 +2031,9 @@ class AppBridge {
         }
       })();
       const historyRecallBlocks = (() => {
-	        const blocks = [{ role: 'system', content: HISTORY_RECALL_NOTICE }];
+	        const blocks = [];
+          if (timeContextBlock) blocks.push(timeContextBlock);
+          blocks.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
 	        const momentData = buildMomentCommentDataBlock();
 	        if (momentData) blocks.push(momentData);
 	        if (useSummaryMemory) {
@@ -2339,6 +2437,7 @@ class AppBridge {
     }
 
 		    insertMemoryPromptAt('before_chat');
+        if (timeContextBlock) messages.push(timeContextBlock);
 		    messages.push({ role: 'system', content: HISTORY_RECALL_NOTICE });
 	    try {
 	      const momentData = buildMomentCommentDataBlock();

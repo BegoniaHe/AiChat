@@ -1,4 +1,22 @@
 const MEMORY_PROMPT_POSITIONS = new Set(['after_persona', 'system_end', 'before_chat', 'history_depth']);
+const SUMMARY_TABLE_IDS = new Set(['chat_summary', 'group_summary']);
+
+export const isSummaryTableId = (tableId) => {
+  const id = String(tableId || '').trim();
+  return SUMMARY_TABLE_IDS.has(id);
+};
+
+export const normalizeMemoryUpdateMode = (raw, defaultMode = 'full') => {
+  const mode = String(raw || '').trim().toLowerCase();
+  if (!mode) return defaultMode;
+  if (mode === 'summary' || mode === 'summary-only' || mode === 'summary_only') return 'summary';
+  if (mode === 'standard' || mode === 'standard-only' || mode === 'standard_only') return 'standard';
+  if (mode === 'full' || mode === 'all' || mode === 'unified') return 'full';
+  if (mode.includes('summary')) return 'summary';
+  if (mode.includes('standard')) return 'standard';
+  if (mode.includes('full') || mode.includes('unified') || mode.includes('all')) return 'full';
+  return defaultMode;
+};
 
 export const parseMemoryPromptPositions = (raw) => {
   if (Array.isArray(raw)) {
