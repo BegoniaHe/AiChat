@@ -68,9 +68,12 @@ const clearSessionMemoriesForNewChat = async ({ sessionId, isGroup, keepNonSumma
         return false;
     }
     if (!Array.isArray(rows) || rows.length === 0) return true;
-    const summaryTableId = isGroup ? 'group_summary' : 'chat_summary';
+    const summaryTableIds = new Set([
+        isGroup ? 'group_summary' : 'chat_summary',
+        isGroup ? 'group_outline' : 'chat_outline',
+    ]);
     const ids = rows
-        .filter(row => row && (!keepNonSummary || String(row?.table_id || '').trim() === summaryTableId))
+        .filter(row => row && (!keepNonSummary || summaryTableIds.has(String(row?.table_id || '').trim())))
         .map(row => String(row?.id || '').trim())
         .filter(Boolean);
     if (!ids.length) return true;

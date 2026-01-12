@@ -2,7 +2,7 @@ export const DEFAULT_MEMORY_TEMPLATE = {
   meta: {
     id: 'default-v1',
     name: '通用记忆模板',
-    version: '1.0.0',
+    version: '1.0.1',
     author: '官方',
     description: '适用于常规角色扮演与日常聊天的基础记忆表格模板。',
     tags: ['通用', '角色扮演'],
@@ -234,7 +234,7 @@ export const DEFAULT_MEMORY_TEMPLATE = {
       name: '私聊摘要',
       scope: 'contact',
       sourceData: {
-        note: '记录每次私聊后的摘要（合并“总结表 + 总体大纲”到同一栏位）。每次对话必须新增一行，禁止用 update 覆盖旧行。摘要栏位必须分隔，使用“【摘要】...【大总结】...”格式；按手机对话模式写纯文本，禁止输出 <details>/<summary> 等标签。仅记录该私聊内容，避免泄露群聊或其他角色的私密信息。',
+        note: '记录每次私聊后的摘要。每次对话必须新增一行，禁止用 update 覆盖旧行。摘要栏位必须分隔，使用“【摘要】...【大总结】...”格式；按手机对话模式写纯文本，禁止输出 <details>/<summary> 等标签。仅记录该私聊内容，避免泄露群聊或其他角色的私密信息。',
         initNode: '首次对话后插入一条摘要。',
         insertNode: '每轮对话新增一条摘要（必须）。',
         updateNode: '禁止使用 update 覆盖旧摘要；如需修正请手动编辑。',
@@ -259,11 +259,40 @@ export const DEFAULT_MEMORY_TEMPLATE = {
       ],
     },
     {
+      id: 'chat_outline',
+      name: '私聊总体大纲',
+      scope: 'contact',
+      sourceData: {
+        note: '记录每次私聊后的总体大纲（精简摘要）。每次对话必须新增一行，禁止用 update 覆盖旧行。内容需精炼到关键事件与关系变化；按手机对话模式写纯文本，禁止输出 <details>/<summary> 等标签。仅记录该私聊内容，避免泄露群聊或其他角色的私密信息。',
+        initNode: '首次对话后插入一条总体大纲。',
+        insertNode: '每轮对话新增一条总体大纲（必须）。',
+        updateNode: '禁止使用 update 覆盖旧大纲；如需修正请手动编辑。',
+        deleteNode: '一般不删除，除非大纲明显错误或需要合并重写。',
+      },
+      updateConfig: {
+        contextDepth: 6,
+        updateFrequency: 1,
+        batchSize: 20,
+        skipFloors: 0,
+      },
+      exportConfig: {
+        enabled: false,
+        splitByRow: false,
+        entryName: '',
+        keywords: '',
+        injectionTemplate: '',
+      },
+      columns: [
+        { id: 'time', name: '时间/轮次', type: 'text' },
+        { id: 'outline', name: '总体大纲', type: 'multiline' },
+      ],
+    },
+    {
       id: 'group_summary',
       name: '群聊摘要',
       scope: 'group',
       sourceData: {
-        note: '记录群聊每次互动摘要（合并“总结表 + 总体大纲”到同一栏位）。每次对话必须新增一行，禁止用 update 覆盖旧行。摘要栏位必须分隔，使用“【摘要】...【大总结】...”格式；按手机对话模式写纯文本，禁止输出 <details>/<summary> 等标签。仅记录群聊公开信息，不包含成员私聊或敏感隐私。',
+        note: '记录群聊每次互动摘要。每次对话必须新增一行，禁止用 update 覆盖旧行。摘要栏位必须分隔，使用“【摘要】...【大总结】...”格式；按手机对话模式写纯文本，禁止输出 <details>/<summary> 等标签。仅记录群聊公开信息，不包含成员私聊或敏感隐私。',
         initNode: '群聊首次互动后插入一条摘要。',
         insertNode: '每轮互动新增一条摘要（必须）。',
         updateNode: '禁止使用 update 覆盖旧摘要；如需修正请手动编辑。',
@@ -285,6 +314,35 @@ export const DEFAULT_MEMORY_TEMPLATE = {
       columns: [
         { id: 'time', name: '时间/轮次', type: 'text' },
         { id: 'summary', name: '摘要', type: 'multiline' },
+      ],
+    },
+    {
+      id: 'group_outline',
+      name: '群聊总体大纲',
+      scope: 'group',
+      sourceData: {
+        note: '记录群聊每次互动的总体大纲（精简摘要）。每次对话必须新增一行，禁止用 update 覆盖旧行。内容需精炼到关键事件与关系变化；按手机对话模式写纯文本，禁止输出 <details>/<summary> 等标签。仅记录群聊公开信息，不包含成员私聊或敏感隐私。',
+        initNode: '群聊首次互动后插入一条总体大纲。',
+        insertNode: '每轮互动新增一条总体大纲（必须）。',
+        updateNode: '禁止使用 update 覆盖旧大纲；如需修正请手动编辑。',
+        deleteNode: '一般不删除，除非大纲明显错误或需要合并重写。',
+      },
+      updateConfig: {
+        contextDepth: 6,
+        updateFrequency: 1,
+        batchSize: 20,
+        skipFloors: 0,
+      },
+      exportConfig: {
+        enabled: false,
+        splitByRow: false,
+        entryName: '',
+        keywords: '',
+        injectionTemplate: '',
+      },
+      columns: [
+        { id: 'time', name: '时间/轮次', type: 'text' },
+        { id: 'outline', name: '总体大纲', type: 'multiline' },
       ],
     },
   ],

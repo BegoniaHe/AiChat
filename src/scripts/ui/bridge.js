@@ -14,6 +14,7 @@ import { appSettings } from '../storage/app-settings.js';
 import {
   buildMemoryTablePlan,
   estimateTokens,
+  isSummaryLimitTableId,
   isSummaryTableId,
   normalizeMemoryCell,
   normalizeMemoryUpdateMode,
@@ -367,12 +368,12 @@ class AppBridge {
         });
       }
       if (updateMode === 'summary') {
-        lines.push('本轮仅允许更新“摘要/大总结”类表格，其他表格禁止写入。');
+        lines.push('本轮仅允许更新“摘要/大总结/总体大纲”类表格，其他表格禁止写入。');
       } else if (updateMode === 'standard') {
-        lines.push('本轮仅允许更新非摘要类表格，摘要/大总结类表格禁止写入。');
+        lines.push('本轮仅允许更新非摘要类表格，摘要/大总结/总体大纲类表格禁止写入。');
       }
       if (tableOrder.some(tableId => isSummaryTableId(tableId))) {
-        lines.push('摘要/大总结表格只允许 insert；禁止 update/delete。');
+        lines.push('摘要/大总结/总体大纲表格只允许 insert；禁止 update/delete。');
       }
       lines.push('需要更新记忆表格时，在回复末尾输出 <tableEdit>...</tableEdit>，每行一个 JSON（允许 insert/update/delete: 前缀）。');
       lines.push('insert: {"action":"insert","table_id":"relationship","data":{"relation":"朋友"}}');
@@ -472,6 +473,12 @@ class AppBridge {
         const summaryLabel = String(summaryTable?.name || summaryTableId).trim() || summaryTableId;
         hints.push(`本轮必须新增${summaryLabel}（摘要栏位需使用“【摘要】...【大总结】...”分隔；仅使用 insert）。`);
       }
+      const outlineTableId = isGroup ? 'group_outline' : 'chat_outline';
+      const outlineTable = tableById.get(outlineTableId);
+      if (outlineTable) {
+        const outlineLabel = String(outlineTable?.name || outlineTableId).trim() || outlineTableId;
+        hints.push(`本轮必须新增${outlineLabel}（精简摘要；仅使用 insert）。`);
+      }
       return hints;
     };
     const requiredHints = autoExtract ? resolveRequiredHints() : [];
@@ -499,9 +506,48 @@ class AppBridge {
     const rows = [...(Array.isArray(globalRows) ? globalRows : []), ...(Array.isArray(scopedRows) ? scopedRows : [])]
       .filter(row => row && row.is_active !== false)
       .filter(row => shouldIncludeTable(String(row?.table_id || '').trim()));
+    const resolveRowSortKey = (row, fallback = 0) => {
+      const updatedAt = Number(row?.updated_at);
+      if (Number.isFinite(updatedAt) && updatedAt > 0) return updatedAt;
+      const createdAt = Number(row?.created_at);
+      if (Number.isFinite(createdAt) && createdAt > 0) return createdAt;
+      const updatedAlt = Number(row?.updatedAt);
+      if (Number.isFinite(updatedAlt) && updatedAlt > 0) return updatedAlt;
+      const createdAlt = Number(row?.createdAt);
+      if (Number.isFinite(createdAlt) && createdAlt > 0) return createdAlt;
+      return fallback;
+    };
+    const limitedRows = (() => {
+      const grouped = new Map();
+      const kept = [];
+      rows.forEach((row, index) => {
+        const tableId = String(row?.table_id || '').trim();
+        if (!isSummaryLimitTableId(tableId)) {
+          kept.push(row);
+          return;
+        }
+        if (!grouped.has(tableId)) grouped.set(tableId, []);
+        grouped.get(tableId).push({ row, index });
+      });
+      grouped.forEach((list) => {
+        if (!list.length) return;
+        if (list.length <= 10) {
+          list.forEach(item => kept.push(item.row));
+          return;
+        }
+        list.sort((a, b) => {
+          const ak = resolveRowSortKey(a.row, a.index);
+          const bk = resolveRowSortKey(b.row, b.index);
+          if (ak !== bk) return ak - bk;
+          return a.index - b.index;
+        });
+        list.slice(-10).forEach(item => kept.push(item.row));
+      });
+      return kept;
+    })();
 
     const planResult = buildMemoryTablePlan({
-      rows,
+      rows: limitedRows,
       tableById,
       tableOrder,
       autoExtract,

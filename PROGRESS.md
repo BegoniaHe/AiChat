@@ -1,4 +1,4 @@
-# 開發進度追蹤（必更新）
+# 開發進度追蹤（必更新）(必须使用当下时间记录)
 
 ## 2026-01-06 10:11
 - Phase 7：记忆表格 AI 自动提取（<tableEdit> JSON 指令 + 自动写表）。
@@ -1930,3 +1930,19 @@
   - `src/scripts/ui/memory-template-panel.js`
   - `src/scripts/ui/bridge.js`
   - `src/scripts/memory/default-template.js`
+
+## 2026-01-12 17:10
+- 贴图面板优化：点击“+”弹出行动面板，贴图入口独立；贴图面板支持分页/小点指示、左右滑动、最近使用/默认/新增分区，默认贴图图标使用 feather 图。
+- 贴图滚动改为原生横向 scroll-snap，滑动有过渡感并能预览相邻页；修复旧 transform 造成的贴图空白问题。
+- 记忆表格：摘要表注入限制为最新 10 条；新增私聊/群聊总体大纲表并全部注入；默认模板版本更新为 1.0.1。
+- 记忆表格写表提示词补充：摘要/大纲仅允许 insert；新聊天“仅清空摘要”也会清理大纲。
+- 记忆表格提示词预览改为沿用当前设置（max rows/tokens/位置/深度等），避免预算不一致导致预览空白。
+- 修改：
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/contact-settings-panel.js`
+  - `src/scripts/ui/group-chat-panels.js`
+  - `src/scripts/ui/memory-table-editor.js`
+  - `src/scripts/memory/memory-prompt-utils.js`
+  - `src/scripts/memory/default-template.js`
+  - `src/assets/css/qq-legacy.css`

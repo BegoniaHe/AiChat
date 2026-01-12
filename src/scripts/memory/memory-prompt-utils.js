@@ -1,9 +1,15 @@
 const MEMORY_PROMPT_POSITIONS = new Set(['after_persona', 'system_end', 'before_chat', 'history_depth']);
-const SUMMARY_TABLE_IDS = new Set(['chat_summary', 'group_summary']);
+const SUMMARY_TABLE_IDS = new Set(['chat_summary', 'group_summary', 'chat_outline', 'group_outline']);
+const SUMMARY_LIMIT_TABLE_IDS = new Set(['chat_summary', 'group_summary']);
 
 export const isSummaryTableId = (tableId) => {
   const id = String(tableId || '').trim();
   return SUMMARY_TABLE_IDS.has(id);
+};
+
+export const isSummaryLimitTableId = (tableId) => {
+  const id = String(tableId || '').trim();
+  return SUMMARY_LIMIT_TABLE_IDS.has(id);
 };
 
 export const normalizeMemoryUpdateMode = (raw, defaultMode = 'full') => {
