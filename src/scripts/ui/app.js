@@ -1437,6 +1437,30 @@ ${listPart || '-（无）'}
     }
     return [];
   };
+  const getStickerTotalPages = () => {
+    if (stickerPanelTab === 'add') return 1;
+    const items = getStickerItemsForTab(stickerPanelTab);
+    return Math.max(1, Math.ceil(items.length / STICKER_PAGE_SIZE));
+  };
+  const updateStickerDotsActive = (page, totalPages) => {
+    if (!stickerPanel?.dots) return;
+    const dots = Array.from(stickerPanel.dots.querySelectorAll('.sticker-dot'));
+    dots.forEach((dot, idx) => {
+      dot.classList.toggle('is-active', idx === page);
+    });
+  };
+  const scrollToStickerPage = (page, behavior = 'smooth') => {
+    if (!stickerPanel?.grid) return;
+    const grid = stickerPanel.grid;
+    const width = grid.clientWidth || 0;
+    if (!width) return;
+    const left = Math.max(0, Math.trunc(page) * width);
+    try {
+      grid.scrollTo({ left, behavior });
+    } catch {
+      grid.scrollLeft = left;
+    }
+  };
   const renderStickerDots = (totalPages) => {
     if (!stickerPanel?.dots) return;
     stickerPanel.dots.innerHTML = '';
@@ -1450,35 +1474,16 @@ ${listPart || '-（无）'}
       dot.addEventListener('click', (event) => {
         event.stopPropagation();
         stickerPanelPage = i;
-        renderStickerPanel();
+        updateStickerDotsActive(stickerPanelPage, totalPages);
+        scrollToStickerPage(stickerPanelPage);
       });
       stickerPanel.dots.appendChild(dot);
     }
   };
-  const renderStickerPanel = () => {
-    if (!stickerPanel?.grid) return;
-    const tabs = Array.isArray(stickerPanel?.tabs) ? stickerPanel.tabs : [];
-    tabs.forEach(tab => {
-      const target = String(tab?.dataset?.tab || '').trim();
-      tab.classList.toggle('is-active', target === stickerPanelTab);
-    });
-    if (stickerPanelTab === 'add') {
-      stickerPanel.grid.innerHTML = '<div class="sticker-empty">新增贴图包（占位）</div>';
-      if (stickerPanel?.dots) stickerPanel.dots.innerHTML = '';
-      return;
-    }
-    const items = getStickerItemsForTab(stickerPanelTab);
-    const totalPages = Math.max(1, Math.ceil(items.length / STICKER_PAGE_SIZE));
-    if (stickerPanelPage >= totalPages) stickerPanelPage = totalPages - 1;
-    const start = stickerPanelPage * STICKER_PAGE_SIZE;
-    const pageItems = items.slice(start, start + STICKER_PAGE_SIZE);
-    stickerPanel.grid.innerHTML = '';
-    if (!pageItems.length) {
-      const label = stickerPanelTab === 'recent' ? '暂无常用贴图' : '暂无贴图';
-      stickerPanel.grid.innerHTML = `<div class="sticker-empty">${label}</div>`;
-      renderStickerDots(0);
-      return;
-    }
+  const renderStickerItems = (pageItems, container) => {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!pageItems.length) return;
     pageItems.forEach(item => {
       const keyword = String(item?.keyword || '').trim();
       if (!keyword) return;
@@ -1501,9 +1506,56 @@ ${listPart || '-（无）'}
         insertStickerToken(keyword);
         if (stickerPanelTab === 'recent') renderStickerPanel();
       });
-      stickerPanel.grid.appendChild(btn);
+      container.appendChild(btn);
     });
+  };
+  const buildStickerPage = (items, pageIndex) => {
+    const page = document.createElement('div');
+    page.className = 'sticker-page';
+    if (!items.length) return page;
+    const start = pageIndex * STICKER_PAGE_SIZE;
+    const pageItems = items.slice(start, start + STICKER_PAGE_SIZE);
+    renderStickerItems(pageItems, page);
+    return page;
+  };
+  const renderStickerPanel = () => {
+    if (!stickerPanel?.grid) return;
+    const tabs = Array.isArray(stickerPanel?.tabs) ? stickerPanel.tabs : [];
+    tabs.forEach(tab => {
+      const target = String(tab?.dataset?.tab || '').trim();
+      tab.classList.toggle('is-active', target === stickerPanelTab);
+    });
+    const grid = stickerPanel.grid;
+    grid.classList.remove('sticker-pages');
+    grid.style.transition = 'none';
+    grid.style.transform = 'translateX(0px)';
+    if (stickerPanelTab === 'add') {
+      grid.innerHTML = '<div class="sticker-empty">新增贴图包（占位）</div>';
+      if (stickerPanel?.dots) stickerPanel.dots.innerHTML = '';
+      return;
+    }
+    const items = getStickerItemsForTab(stickerPanelTab);
+    const totalPages = Math.max(1, Math.ceil(items.length / STICKER_PAGE_SIZE));
+    if (stickerPanelPage >= totalPages) stickerPanelPage = totalPages - 1;
+    if (!items.length) {
+      const label = stickerPanelTab === 'recent' ? '暂无常用贴图' : '暂无贴图';
+      grid.innerHTML = `<div class="sticker-empty">${label}</div>`;
+      renderStickerDots(0);
+      return;
+    }
+    grid.innerHTML = '';
+    if (totalPages === 1) {
+      grid.appendChild(buildStickerPage(items, stickerPanelPage));
+      renderStickerDots(1);
+      requestAnimationFrame(() => scrollToStickerPage(0, 'auto'));
+      return;
+    }
+    grid.classList.add('sticker-pages');
+    for (let i = 0; i < totalPages; i++) {
+      grid.appendChild(buildStickerPage(items, i));
+    }
     renderStickerDots(totalPages);
+    requestAnimationFrame(() => scrollToStickerPage(stickerPanelPage, 'auto'));
   };
 
   updateStickerPreview = (text = '') => {
@@ -1992,7 +2044,7 @@ ${listPart || '-（无）'}
       <div class="sticker-tabbar">
         <button type="button" class="sticker-tab" data-tab="recent" title="常用">🕛</button>
         <button type="button" class="sticker-tab" data-tab="default" title="默认贴图">
-          <span class="sticker-tab-image">[image.png<br>1024x1024]</span>
+          <img class="sticker-tab-icon" src="./assets/external/feather-default.png" alt="默认贴图">
         </button>
         <button type="button" class="sticker-tab" data-tab="add" title="新增">＋</button>
       </div>
@@ -2026,6 +2078,25 @@ ${listPart || '-（无）'}
       tabs: Array.from(panel.querySelectorAll('.sticker-tab')),
     };
   })();
+  if (stickerPanel?.grid) {
+    const grid = stickerPanel.grid;
+    let raf = null;
+    grid.addEventListener('scroll', () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        const width = grid.clientWidth || 0;
+        if (!width) return;
+        const nextPage = Math.round(grid.scrollLeft / width);
+        const total = getStickerTotalPages();
+        const clamped = Math.max(0, Math.min(total - 1, nextPage));
+        if (clamped !== stickerPanelPage) {
+          stickerPanelPage = clamped;
+          updateStickerDotsActive(stickerPanelPage, total);
+        }
+      });
+    }, { passive: true });
+  }
   const stickerPreview = (() => {
     if (!chatRoom) return null;
     const panel = document.createElement('div');
