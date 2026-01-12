@@ -1396,36 +1396,114 @@ ${listPart || '-（无）'}
     } catch {}
   };
 
+  const resolveStickerItems = (keywords) => {
+    const items = [];
+    (keywords || []).forEach((keyword) => {
+      const key = String(keyword || '').trim();
+      if (!key) return;
+      const resolved = resolveMediaAsset('sticker', key) || resolveMediaAsset('image', key);
+      items.push({
+        keyword: key,
+        label: key,
+        url: resolved?.url || '',
+      });
+    });
+    return items;
+  };
+  const getMostUsedStickerKeys = () => {
+    const entries = Object.entries(stickerUsage || {})
+      .map(([key, count]) => ({ key, count: Number(count || 0) }))
+      .filter(item => item.key && Number.isFinite(item.count) && item.count > 0)
+      .sort((a, b) => b.count - a.count);
+    const keys = entries.map(item => item.key);
+    if (keys.length) return keys.slice(0, 48);
+    try {
+      const raw = localStorage.getItem(STICKER_RECENT_KEY);
+      const list = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(list) && list.length) return list.slice(0, 48);
+    } catch {}
+    return [];
+  };
+  const getStickerItemsForTab = (tab) => {
+    if (tab === 'recent') {
+      return resolveStickerItems(getMostUsedStickerKeys());
+    }
+    if (tab === 'default') {
+      return listMediaAssets('sticker').map(item => ({
+        keyword: String(item?.id || item?.label || '').trim(),
+        label: String(item?.label || item?.id || '').trim(),
+        url: String(item?.url || ''),
+      })).filter(item => item.keyword);
+    }
+    return [];
+  };
+  const renderStickerDots = (totalPages) => {
+    if (!stickerPanel?.dots) return;
+    stickerPanel.dots.innerHTML = '';
+    if (totalPages <= 1) return;
+    for (let i = 0; i < totalPages; i++) {
+      const dot = document.createElement('button');
+      dot.type = 'button';
+      dot.className = `sticker-dot${i === stickerPanelPage ? ' is-active' : ''}`;
+      dot.dataset.page = String(i);
+      dot.setAttribute('aria-label', `第${i + 1}页`);
+      dot.addEventListener('click', (event) => {
+        event.stopPropagation();
+        stickerPanelPage = i;
+        renderStickerPanel();
+      });
+      stickerPanel.dots.appendChild(dot);
+    }
+  };
   const renderStickerPanel = () => {
     if (!stickerPanel?.grid) return;
-    const items = listMediaAssets('sticker');
-    stickerPanel.grid.innerHTML = '';
-    if (!items.length) {
-      stickerPanel.grid.innerHTML = '<div class="sticker-empty">暂无贴图</div>';
+    const tabs = Array.isArray(stickerPanel?.tabs) ? stickerPanel.tabs : [];
+    tabs.forEach(tab => {
+      const target = String(tab?.dataset?.tab || '').trim();
+      tab.classList.toggle('is-active', target === stickerPanelTab);
+    });
+    if (stickerPanelTab === 'add') {
+      stickerPanel.grid.innerHTML = '<div class="sticker-empty">新增贴图包（占位）</div>';
+      if (stickerPanel?.dots) stickerPanel.dots.innerHTML = '';
       return;
     }
-    items.forEach(item => {
-      const keyword = String(item?.id || item?.label || '').trim();
+    const items = getStickerItemsForTab(stickerPanelTab);
+    const totalPages = Math.max(1, Math.ceil(items.length / STICKER_PAGE_SIZE));
+    if (stickerPanelPage >= totalPages) stickerPanelPage = totalPages - 1;
+    const start = stickerPanelPage * STICKER_PAGE_SIZE;
+    const pageItems = items.slice(start, start + STICKER_PAGE_SIZE);
+    stickerPanel.grid.innerHTML = '';
+    if (!pageItems.length) {
+      const label = stickerPanelTab === 'recent' ? '暂无常用贴图' : '暂无贴图';
+      stickerPanel.grid.innerHTML = `<div class="sticker-empty">${label}</div>`;
+      renderStickerDots(0);
+      return;
+    }
+    pageItems.forEach(item => {
+      const keyword = String(item?.keyword || '').trim();
       if (!keyword) return;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'sticker-item';
       btn.dataset.keyword = keyword;
-      btn.setAttribute('aria-label', keyword);
+      btn.setAttribute('aria-label', item?.label || keyword);
       if (item?.url) {
         const img = document.createElement('img');
         img.src = item.url;
-        img.alt = keyword;
+        img.alt = item?.label || keyword;
         btn.appendChild(img);
       } else {
-        btn.textContent = keyword;
+        btn.textContent = item?.label || keyword;
       }
       btn.addEventListener('click', e => {
         e.stopPropagation();
+        bumpStickerUsage(keyword);
         insertStickerToken(keyword);
+        if (stickerPanelTab === 'recent') renderStickerPanel();
       });
       stickerPanel.grid.appendChild(btn);
     });
+    renderStickerDots(totalPages);
   };
 
   updateStickerPreview = (text = '') => {
@@ -1456,11 +1534,27 @@ ${listPart || '-（无）'}
     chatRoom?.classList.add('sticker-preview-active');
   };
 
+  const setActionPanelOpen = open => {
+    if (!actionPanel?.el || !chatRoom) return;
+    const next = Boolean(open);
+    actionPanelOpen = next;
+    if (next) {
+      actionPanel.el.classList.add('is-active');
+      chatRoom.classList.add('action-panel-open');
+      setStickerPanelOpen(false);
+      composerInput?.blur();
+    } else {
+      actionPanel.el.classList.remove('is-active');
+      chatRoom.classList.remove('action-panel-open');
+    }
+  };
+
   const setStickerPanelOpen = open => {
     if (!stickerPanel?.el || !chatRoom) return;
     const next = Boolean(open);
     stickerPanelOpen = next;
     if (next) {
+      setActionPanelOpen(false);
       renderStickerPanel();
       stickerPanel.el.classList.add('is-active');
       chatRoom.classList.add('sticker-panel-open');
@@ -1815,15 +1909,122 @@ ${listPart || '-（无）'}
     chatRoom.appendChild(wrap);
     return { el: wrap, titleEl, listEl };
   })();
+  let actionPanelOpen = false;
   let stickerPanelOpen = false;
+  let stickerPanelTab = 'default';
+  let stickerPanelPage = 0;
+  const STICKER_PAGE_SIZE = 8;
+  const STICKER_USAGE_KEY = 'sticker_usage_v1';
+  const STICKER_RECENT_KEY = 'sticker_recents';
+  let stickerUsage = {};
+  const loadStickerUsage = () => {
+    try {
+      const raw = localStorage.getItem(STICKER_USAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+  const saveStickerUsage = () => {
+    try {
+      localStorage.setItem(STICKER_USAGE_KEY, JSON.stringify(stickerUsage));
+    } catch {}
+  };
+  const updateStickerRecents = (keyword) => {
+    const key = String(keyword || '').trim();
+    if (!key) return;
+    try {
+      const raw = localStorage.getItem(STICKER_RECENT_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const list = Array.isArray(parsed) ? parsed : [];
+      const next = [key, ...list.filter(item => item !== key)].slice(0, 24);
+      localStorage.setItem(STICKER_RECENT_KEY, JSON.stringify(next));
+    } catch {}
+  };
+  const bumpStickerUsage = (keyword) => {
+    const key = String(keyword || '').trim();
+    if (!key) return;
+    const next = Number(stickerUsage[key] || 0) + 1;
+    stickerUsage[key] = Number.isFinite(next) ? next : 1;
+    saveStickerUsage();
+    updateStickerRecents(key);
+  };
+  stickerUsage = loadStickerUsage();
+  const actionPanel = (() => {
+    if (!chatRoom) return null;
+    const panel = document.createElement('div');
+    panel.id = 'action-panel';
+    panel.className = 'action-panel';
+    panel.innerHTML = `
+      <div class="action-panel-grid">
+        <button type="button" class="action-item" data-action="sticker" aria-label="贴图">
+          <div class="action-icon">😊</div>
+          <div class="action-label">贴图</div>
+        </button>
+        <button type="button" class="action-item" data-action="image" aria-label="传送图片">
+          <div class="action-icon">🖼️</div>
+          <div class="action-label">图片</div>
+        </button>
+        <button type="button" class="action-item" data-action="document" aria-label="传送文档">
+          <div class="action-icon">📄</div>
+          <div class="action-label">文档</div>
+        </button>
+      </div>
+    `;
+    panel.addEventListener('click', event => {
+      const btn = event?.target?.closest ? event.target.closest('button[data-action]') : null;
+      const action = btn?.dataset?.action || '';
+      if (!action) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof runQuickAction === 'function') runQuickAction(action);
+    });
+    chatRoom.appendChild(panel);
+    return { el: panel };
+  })();
   const stickerPanel = (() => {
     if (!chatRoom) return null;
     const panel = document.createElement('div');
     panel.id = 'sticker-panel';
     panel.className = 'sticker-panel';
-    panel.innerHTML = '<div class="sticker-grid"></div>';
+    panel.innerHTML = `
+      <div class="sticker-tabbar">
+        <button type="button" class="sticker-tab" data-tab="recent" title="常用">🕛</button>
+        <button type="button" class="sticker-tab" data-tab="default" title="默认贴图">
+          <span class="sticker-tab-image">[image.png<br>1024x1024]</span>
+        </button>
+        <button type="button" class="sticker-tab" data-tab="add" title="新增">＋</button>
+      </div>
+      <div class="sticker-grid"></div>
+      <div class="sticker-dots"></div>
+    `;
+    panel.addEventListener('click', event => {
+      const tabBtn = event?.target?.closest ? event.target.closest('button.sticker-tab') : null;
+      const tab = tabBtn?.dataset?.tab || '';
+      if (!tab) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (tab === 'add') {
+        stickerPanelTab = 'add';
+        stickerPanelPage = 0;
+        renderStickerPanel();
+        window.toastr?.info?.('新增贴图包功能待完成');
+        return;
+      }
+      if (tab !== stickerPanelTab) {
+        stickerPanelTab = tab;
+        stickerPanelPage = 0;
+        renderStickerPanel();
+      }
+    });
     chatRoom.appendChild(panel);
-    return { el: panel, grid: panel.querySelector('.sticker-grid') };
+    return {
+      el: panel,
+      grid: panel.querySelector('.sticker-grid'),
+      dots: panel.querySelector('.sticker-dots'),
+      tabs: Array.from(panel.querySelectorAll('.sticker-tab')),
+    };
   })();
   const stickerPreview = (() => {
     if (!chatRoom) return null;
@@ -2000,14 +2201,17 @@ ${listPart || '-（无）'}
 
   if (stickerToggleBtn) {
     stickerToggleBtn.textContent = '+';
-    stickerToggleBtn.setAttribute('aria-label', '表情包');
+    stickerToggleBtn.setAttribute('aria-label', '更多功能');
     stickerToggleBtn.addEventListener('click', e => {
       e.preventDefault();
       e.stopPropagation();
-      setStickerPanelOpen(!stickerPanelOpen);
+      setActionPanelOpen(!actionPanelOpen);
     });
   }
-  composerInput?.addEventListener('focus', () => setStickerPanelOpen(false));
+  composerInput?.addEventListener('focus', () => {
+    setStickerPanelOpen(false);
+    setActionPanelOpen(false);
+  });
 
   // Mirror composer draft to sessionStorage to avoid losing the last few keystrokes on reload/update.
   try {
@@ -2755,6 +2959,7 @@ ${listPart || '-（无）'}
     chatRoom?.classList.add('hidden');
     chatList?.classList.remove('hidden');
     setStickerPanelOpen(false);
+    setActionPanelOpen(false);
 
     // 恢复显示消息界面顶部和底部导航栏
     const messageTopbar = document.getElementById('message-topbar');
@@ -2862,19 +3067,26 @@ ${listPart || '-（无）'}
       chatStore.appendMessage(msg);
     },
     sticker: async () => {
-      stickerPicker.show();
+      setStickerPanelOpen(true);
     },
+    document: async () => {
+      window.toastr?.info?.('文档发送功能待完成');
+    },
+  };
+  const runQuickAction = (action) => {
+    const handler = actionHandlers[action];
+    if (handler) {
+      setActionPanelOpen(false);
+      handler();
+      return;
+    }
+    window.toastr?.info?.(`快捷操作占位：${action}`);
   };
 
   document.querySelectorAll('.action-chip').forEach(btn => {
     btn.addEventListener('click', () => {
       const action = btn.dataset.action;
-      const handler = actionHandlers[action];
-      if (handler) {
-        handler();
-      } else {
-        window.toastr?.info(`快捷操作占位：${action}`);
-      }
+      runQuickAction(action);
     });
   });
   // Support badge for grouping/role
@@ -6172,6 +6384,7 @@ ${listPart || '-（无）'}
 
   function handleSticker(tag) {
     const sessionId = chatStore.getCurrent();
+    bumpStickerUsage(tag);
     const msg = {
       role: 'user',
       type: 'sticker',
