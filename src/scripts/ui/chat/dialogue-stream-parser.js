@@ -132,29 +132,35 @@ const parsePrivateChatMessages = (innerText) => {
     const text = normalizeNewlines(innerText);
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const messages = [];
+    const pushMessage = ({ speaker = '', content = '', time = '' } = {}) => {
+        const cleaned = String(content || '').trim().replace(/<br\s*\/?>/gi, '\n');
+        if (!cleaned) return;
+        messages.push({
+            speaker: String(speaker || '').trim(),
+            content: cleaned,
+            time: String(time || '').trim(),
+        });
+    };
     for (const line of lines) {
         if (/^[-•*]\s+/.test(line)) {
-            messages.push(line.replace(/^[-•*]\s+/, '').trim().replace(/<br\s*\/?>/gi, '\n'));
+            pushMessage({ content: line.replace(/^[-•*]\s+/, '').trim() });
             continue;
         }
         const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
         if (m) {
-            messages.push(String(m[2] || '').trim().replace(/<br\s*\/?>/gi, '\n'));
+            pushMessage({ speaker: m[1], content: m[2], time: m[3] });
             continue;
         }
         const normalized = line.replace(/<br\s*\/?>/gi, '\n');
         const segments = splitSpeakerSegments(normalized);
         if (segments.length) {
-            segments.forEach(seg => {
-                if (!seg?.content) return;
-                messages.push(String(seg.content || '').trim().replace(/<br\s*\/?>/gi, '\n'));
-            });
+            segments.forEach(seg => pushMessage({ speaker: seg?.speaker, content: seg?.content }));
             continue;
         }
         // Fallback: treat as a single message line
-        messages.push(normalized);
+        pushMessage({ content: normalized });
     }
-    return messages.filter(Boolean);
+    return messages.filter(m => m && m.content);
 };
 
 const isGroupChatTag = (tagName) => {

@@ -664,16 +664,44 @@ ${listPart || '-（无）'}
             const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName);
             if (!targetSessionId) return;
             (ev.messages || []).forEach(msgText => {
-              const parsed = {
-                role: 'assistant',
-                type: 'text',
-                ...parseSpecialMessage(String(msgText || '')),
-                name: '助手',
-                avatar: contactsStore.getContact(targetSessionId)?.avatar || avatars.assistant,
-                time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-              };
-              const saved = chatStore.appendMessage(parsed, targetSessionId);
-              autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+              const payload = msgText && typeof msgText === 'object' ? msgText : { content: msgText };
+              const speakerRaw = String(payload?.speaker || '').trim();
+              const content = String(payload?.content || '').trim();
+              if (!content) return;
+              const userDisplayName = getEffectivePersona(targetSessionId)?.name || '我';
+              const speakerKey = normalizeName(speakerRaw).replace(/[：:]/g, '').trim();
+              const userKey = normalizeName(userDisplayName).replace(/[：:]/g, '').trim();
+              const isMe = Boolean(
+                speakerKey &&
+                  userKey &&
+                  (speakerKey === userKey || normalizeLooseName(speakerKey) === normalizeLooseName(userKey)),
+              );
+              const time = String(payload?.time || '').trim() || new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+              if (isMe) {
+                const parsed = parseSpecialMessage(content);
+                const meta = { ...(parsed.meta || {}), generatedByAssistant: true };
+                const built = {
+                  role: 'user',
+                  type: 'text',
+                  ...parsed,
+                  name: userDisplayName,
+                  avatar: avatars.user,
+                  time,
+                  meta,
+                };
+                chatStore.appendMessage(built, targetSessionId);
+              } else {
+                const parsed = {
+                  role: 'assistant',
+                  type: 'text',
+                  ...parseSpecialMessage(content),
+                  name: '助手',
+                  avatar: contactsStore.getContact(targetSessionId)?.avatar || avatars.assistant,
+                  time,
+                };
+                const saved = chatStore.appendMessage(parsed, targetSessionId);
+                autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+              }
               touchedChats = true;
             });
           }
@@ -909,8 +937,9 @@ ${listPart || '-（无）'}
       const raw = String(src ?? '');
       const lines = raw.split(/\r?\n/);
       const n = String(name || '').trim();
+      if (!n) return raw;
       const escaped = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const userRe = new RegExp(`^\\s*(?:${n ? escaped(n) : '我'}|用户|user)\\s*[:：]\\s*`, 'i');
+      const userRe = new RegExp(`^\\s*${escaped(n)}\\s*[:：]\\s*`, 'i');
 
       let i = 0;
       while (i < lines.length && !String(lines[i] || '').trim()) i++;
@@ -1078,21 +1107,21 @@ ${listPart || '-（无）'}
       .trim();
   };
 
-  const createUserEchoGuard = (sentText, userName) => {
-    const sentNorm = normalizeEchoText(sentText);
-    const sentLoose = sentNorm.replace(/\s+/g, '');
-    const parts = sentNorm.split('\n').map(s => s.trim()).filter(Boolean);
-    const partLoose = new Set(parts.map(s => s.replace(/\s+/g, '')));
-    let seenNonEcho = false;
+    const createUserEchoGuard = (sentText, userName) => {
+      const sentNorm = normalizeEchoText(sentText);
+      const sentLoose = sentNorm.replace(/\s+/g, '');
+      const parts = sentNorm.split('\n').map(s => s.trim()).filter(Boolean);
+      const partLoose = new Set(parts.map(s => s.replace(/\s+/g, '')));
+      let seenNonEcho = false;
 
-    const isUserSpeaker = (speaker) => {
-      const raw = String(speaker || '').trim().replace(/[：:]/g, '');
-      if (!raw) return false;
-      const lower = raw.toLowerCase();
-      const user = String(userName || '').trim();
-      if (user && raw === user) return true;
-      return raw === '我' || raw === '用户' || lower === 'user';
-    };
+      const isUserSpeaker = (speaker) => {
+        const raw = String(speaker || '').trim().replace(/[：:]/g, '');
+        if (!raw) return false;
+        const user = String(userName || '').trim();
+        if (!user) return false;
+        if (raw === user) return true;
+        return normalizeLooseName(raw) === normalizeLooseName(user);
+      };
 
     return {
       shouldDrop: (content, speaker = '') => {
@@ -3744,6 +3773,46 @@ ${listPart || '-（无）'}
       const lower = key.toLowerCase();
       return key === '系统' || key === '系统消息' || key === '系统提示' || lower === 'system' || lower === 'systemmessage' || lower === 'systemmsg';
     };
+    const isUserSpeakerName = speakerName => {
+      const raw = normalizeName(speakerName).replace(/[：:]/g, '').trim();
+      if (!raw) return false;
+      const key = normalizeLoose(raw);
+      const lower = key.toLowerCase();
+      const userKey = normalizeLoose(userName);
+      if (userName && (raw === userName || (userKey && key === userKey))) return true;
+      return false;
+    };
+    const normalizeDialogueMessage = (msg) => {
+      const payload = msg && typeof msg === 'object'
+        ? {
+            speaker: String(msg?.speaker || '').trim(),
+            content: String(msg?.content || '').trim(),
+            time: String(msg?.time || '').trim(),
+          }
+        : { speaker: '', content: String(msg || '').trim(), time: '' };
+      if (!payload.speaker && payload.content) {
+        const m = payload.content.match(/^([^\s:：]{1,12})[:：]\s*(.+)$/);
+        if (m && isUserSpeakerName(m[1])) {
+          payload.speaker = m[1];
+          payload.content = m[2].trim();
+        }
+      }
+      return payload;
+    };
+    const buildUserMessageFromAI = (content, time) => {
+      const parsed = parseSpecialMessage(content);
+      const meta = { ...(parsed.meta || {}), generatedByAssistant: true };
+      return {
+        role: 'user',
+        type: 'text',
+        ...parsed,
+        name: userName,
+        avatar: avatars.user,
+        time: time || formatNowTime(),
+        meta,
+      };
+    };
+    const isSyntheticUserMessage = (msg) => msg?.role === 'user' && msg?.meta?.generatedByAssistant === true;
     const stripSystemMessagePrefix = content => {
       return String(content || '').replace(/^系统消息[:：]?\s*/i, '').trim();
     };
@@ -3958,8 +4027,7 @@ ${listPart || '-（无）'}
     const resolveLoosePrivateTagName = tagName => {
       const raw = normalizeName(tagName);
       if (!raw) return '';
-      const lower = raw.toLowerCase();
-      if (raw === userName || raw === '我' || raw === '用户' || lower === 'user') return '';
+      if (raw === userName) return '';
       const contact = resolveContactByDisplayName(raw);
       if (!contact || contact.isGroup) return '';
       return contact?.name || contact?.id || raw;
@@ -3973,7 +4041,7 @@ ${listPart || '-（无）'}
     const resolveMomentAuthorId = authorName => {
       const raw = normalizeName(authorName);
       if (!raw) return '';
-      if (raw === userName || raw.toLowerCase() === 'user' || raw === '用户') return 'user';
+      if (raw === userName) return 'user';
       // Common placeholders: treat as current chat character
       if (raw === '发言人' || raw === '角色' || raw === '角色名' || raw === '作者') return sessionId;
 
@@ -4021,7 +4089,7 @@ ${listPart || '-（无）'}
     const normalizeMomentAuthorDisplay = authorName => {
       const raw = normalizeName(authorName);
       if (!raw) return normalizeName(characterName) || '角色';
-      if (raw === userName || raw.toLowerCase() === 'user' || raw === '用户') return userName;
+      if (raw === userName) return userName;
       if (raw === '发言人' || raw === '角色' || raw === '角色名' || raw === '作者')
         return normalizeName(characterName) || raw;
       return raw;
@@ -4379,6 +4447,46 @@ ${listPart || '-（无）'}
       const updateMode = normalizeMemoryUpdateMode(plan?.updateMode, 'full');
       const allowSummaryTables = updateMode === 'summary' || updateMode === 'full';
       const allowStandardTables = updateMode === 'standard' || updateMode === 'full';
+      const buildRollbackSnapshot = () => {
+        const tables = [];
+        const seen = new Set();
+        const collectRows = (tableId, scopeKey) => {
+          const key = `${tableId}:${scopeKey}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          const rows = rowsByTableScope.get(key) || [];
+          tables.push({
+            table_id: tableId,
+            scope: scopeKey,
+            rows: rows.map(row => ({
+              id: String(row?.id || '').trim(),
+              table_id: String(row?.table_id || '').trim(),
+              template_id: row?.template_id || templateId,
+              contact_id: row?.contact_id ?? null,
+              group_id: row?.group_id ?? null,
+              row_data: row?.row_data || {},
+              is_active: Boolean(row?.is_active),
+              is_pinned: Boolean(row?.is_pinned),
+              priority: Number.isFinite(Number(row?.priority)) ? Number(row.priority) : 0,
+            })).filter(row => row.id),
+          });
+        };
+        actions.forEach((action) => {
+          const tableId = resolveTableId(action);
+          if (!tableId) return;
+          const table = tableById.get(tableId);
+          if (!table) return;
+          const tableScope = String(table?.scope || '').trim().toLowerCase();
+          const effectiveScope = tableScope || (isGroup ? 'group' : 'contact');
+          if ((effectiveScope === 'group' && !isGroup) || (effectiveScope === 'contact' && isGroup)) return;
+          const isSummaryTable = isSummaryTableId(tableId);
+          if ((isSummaryTable && !allowSummaryTables) || (!isSummaryTable && !allowStandardTables)) return;
+          const { key: scopeKey } = resolveScopeForTable(table);
+          collectRows(tableId, scopeKey);
+        });
+        return tables.length ? { tables } : null;
+      };
+      const rollbackSnapshot = buildRollbackSnapshot();
       for (const action of actions) {
         const tableId = resolveTableId(action);
         if (!tableId) {
@@ -4501,6 +4609,16 @@ ${listPart || '-（无）'}
       }
 
       const changed = inserted + updated + deleted;
+      if (rollbackSnapshot) {
+        try {
+          const prev = window.appBridge?.getLastMemoryUpdate?.(sessionId) || {};
+          window.appBridge?.setLastMemoryUpdate?.(sessionId, {
+            ...prev,
+            rollback: rollbackSnapshot,
+            rollbackAt: Date.now(),
+          });
+        } catch {}
+      }
       if (changed > 0) {
         window.dispatchEvent(new CustomEvent('memory-rows-updated', { detail: { sessionId, templateId } }));
         const parts = [];
@@ -4513,6 +4631,190 @@ ${listPart || '-（无）'}
       }
       return { inserted, updated, deleted, skipped };
     };
+    const rollbackLastMemoryUpdateFromActions = async (sessionId, actions = []) => {
+      if (!memoryTableStore || !memoryTemplateStore) return false;
+      if (!Array.isArray(actions) || actions.length === 0) return false;
+      let templateInfo = null;
+      try {
+        templateInfo = await loadTemplateDefinition();
+      } catch {
+        templateInfo = null;
+      }
+      if (!templateInfo?.record) return false;
+      const templateId = String(templateInfo.record?.id || '').trim();
+      if (!templateId) return false;
+      const template = templateInfo.template || {};
+      const { tableById, tableNameMap, tableOrder } = buildTableMaps(template);
+      const resolveTableId = (action) => {
+        const rawId = String(action?.tableId || '').trim();
+        if (rawId && tableById.has(rawId)) return rawId;
+        const rawName = String(action?.tableName || '').trim().toLowerCase();
+        if (rawName && tableNameMap.has(rawName)) return tableNameMap.get(rawName);
+        const idxRaw = action?.tableIndex;
+        const idx = Number.isFinite(Number(idxRaw)) ? Math.trunc(Number(idxRaw)) : null;
+        if (idx !== null && idx >= 0 && idx < tableOrder.length) {
+          const id = String(tableOrder[idx] || '').trim();
+          if (id && tableById.has(id)) return id;
+        }
+        return '';
+      };
+      const resolveScopeKey = (table) => {
+        const scope = String(table?.scope || '').trim().toLowerCase();
+        if (scope === 'global') return 'global';
+        if (scope === 'group') return 'group';
+        if (scope === 'contact') return 'contact';
+        return '';
+      };
+      const scopeRowsCache = new Map();
+      const getScopedRows = async (scopeKey) => {
+        if (scopeRowsCache.has(scopeKey)) return scopeRowsCache.get(scopeKey);
+        let rows = [];
+        try {
+          if (scopeKey === 'global') {
+            rows = await memoryTableStore.getMemories({ scope: 'global', template_id: templateId });
+          } else if (scopeKey === 'group') {
+            rows = await memoryTableStore.getMemories({ scope: 'group', group_id: sessionId, template_id: templateId });
+          } else {
+            rows = await memoryTableStore.getMemories({ scope: 'contact', contact_id: sessionId, template_id: templateId });
+          }
+        } catch {
+          rows = [];
+        }
+        scopeRowsCache.set(scopeKey, rows);
+        return rows;
+      };
+      const pickNewestRow = (rows = []) => {
+        if (!rows.length) return null;
+        const scored = rows.map((row, idx) => {
+          const ts = Number(row?.updated_at || row?.created_at || 0);
+          return { row, ts: Number.isFinite(ts) ? ts : 0, idx };
+        });
+        scored.sort((a, b) => (b.ts - a.ts) || (b.idx - a.idx));
+        return scored[0]?.row || null;
+      };
+      let changed = 0;
+      for (const action of actions) {
+        const tableId = resolveTableId(action);
+        if (!tableId) continue;
+        const table = tableById.get(tableId);
+        if (!table) continue;
+        const scopeKey = resolveScopeKey(table) || (String(sessionId || '').startsWith('group:') ? 'group' : 'contact');
+        const currentRows = await getScopedRows(scopeKey);
+        const scopedRows = (Array.isArray(currentRows) ? currentRows : [])
+          .filter(row => String(row?.table_id || '').trim() === tableId);
+        const data = normalizeTableRowData(action?.data || {}, table.columns || []);
+        if (!Object.keys(data).length) continue;
+        const isSummaryTable = isSummaryTableId(tableId);
+        const actionType = String(action?.action || '').toLowerCase();
+        const shouldRollbackInsert = actionType === 'insert' || (isSummaryTable && actionType === 'update');
+        if (!shouldRollbackInsert) continue;
+        const matches = scopedRows.filter(row => rowDataEquals(row?.row_data || {}, data));
+        const target = pickNewestRow(matches);
+        if (!target) continue;
+        try {
+          await memoryTableStore.deleteMemory(String(target.id || ''));
+          changed += 1;
+        } catch {}
+      }
+      if (changed > 0) {
+        window.dispatchEvent(new CustomEvent('memory-rows-updated', { detail: { sessionId, templateId } }));
+        window.toastr?.info?.('已回滚上一轮记忆表格写入');
+      }
+      return changed > 0;
+    };
+    const rollbackLastMemoryUpdate = async (sessionId) => {
+      if (!memoryTableStore || !memoryTemplateStore) return false;
+      const entry = window.appBridge?.getLastMemoryUpdate?.(sessionId);
+      const rollback = entry?.rollback;
+      if (!rollback || !Array.isArray(rollback.tables) || !rollback.tables.length) {
+        return rollbackLastMemoryUpdateFromActions(sessionId, entry?.actions || []);
+      }
+      let templateInfo = null;
+      try {
+        templateInfo = await loadTemplateDefinition();
+      } catch {
+        templateInfo = null;
+      }
+      const templateId = String(templateInfo?.record?.id || '').trim();
+      if (!templateId) return false;
+      let changed = 0;
+      for (const tableSnap of rollback.tables) {
+        const tableId = String(tableSnap?.table_id || '').trim();
+        const scopeKey = String(tableSnap?.scope || '').trim();
+        if (!tableId || !scopeKey) continue;
+        let currentRows = [];
+        try {
+          if (scopeKey === 'global') {
+            currentRows = await memoryTableStore.getMemories({ scope: 'global', template_id: templateId });
+          } else if (scopeKey === 'group') {
+            currentRows = await memoryTableStore.getMemories({ scope: 'group', group_id: sessionId, template_id: templateId });
+          } else {
+            currentRows = await memoryTableStore.getMemories({ scope: 'contact', contact_id: sessionId, template_id: templateId });
+          }
+        } catch {
+          currentRows = [];
+        }
+        const scopedCurrent = (Array.isArray(currentRows) ? currentRows : [])
+          .filter(row => String(row?.table_id || '').trim() === tableId);
+        const snapshotRows = Array.isArray(tableSnap?.rows) ? tableSnap.rows : [];
+        const snapshotById = new Map(snapshotRows.map(row => [String(row?.id || '').trim(), row]));
+        const currentById = new Map(scopedCurrent.map(row => [String(row?.id || '').trim(), row]));
+
+        for (const row of scopedCurrent) {
+          const id = String(row?.id || '').trim();
+          if (!id) continue;
+          if (!snapshotById.has(id)) {
+            try {
+              await memoryTableStore.deleteMemory(id);
+              changed += 1;
+            } catch {}
+          }
+        }
+
+        for (const snap of snapshotRows) {
+          const id = String(snap?.id || '').trim();
+          if (!id) continue;
+          const current = currentById.get(id);
+          const payload = {
+            row_data: snap?.row_data || {},
+            is_active: Boolean(snap?.is_active),
+            is_pinned: Boolean(snap?.is_pinned),
+            priority: Number.isFinite(Number(snap?.priority)) ? Number(snap.priority) : 0,
+          };
+          if (current) {
+            try {
+              const sameData = rowDataEquals(current?.row_data || {}, payload.row_data || {});
+              const sameActive = Boolean(current?.is_active) === payload.is_active;
+              const samePinned = Boolean(current?.is_pinned) === payload.is_pinned;
+              const samePriority = Number.isFinite(Number(current?.priority)) ? Number(current.priority) : 0;
+              if (!sameData || !sameActive || !samePinned || samePriority !== payload.priority) {
+                await memoryTableStore.updateMemory({ id, ...payload });
+                changed += 1;
+              }
+            } catch {}
+          } else {
+            try {
+              await memoryTableStore.createMemory({
+                template_id: templateId,
+                table_id: tableId,
+                contact_id: snap?.contact_id ?? (scopeKey === 'contact' ? sessionId : null),
+                group_id: snap?.group_id ?? (scopeKey === 'group' ? sessionId : null),
+                ...payload,
+              });
+              changed += 1;
+            } catch {}
+          }
+        }
+      }
+      if (changed > 0) {
+        window.dispatchEvent(new CustomEvent('memory-rows-updated', { detail: { sessionId, templateId } }));
+        window.toastr?.info?.('已回滚上一轮记忆表格写入');
+      }
+      return changed > 0;
+    };
+    if (window.appBridge) {
+      window.appBridge.rollbackLastMemoryUpdate = rollbackLastMemoryUpdate;
+    }
     const buildRequestPromptText = (messages) => {
       if (!Array.isArray(messages)) return '';
       const parts = messages
@@ -4905,14 +5207,9 @@ ${listPart || '-（无）'}
     let disableSummaryForThis = false;
     const llmContext = (pendingUserText) => {
       const settings = appSettings.get();
-      const maxRowsRaw = Math.trunc(Number(settings.memoryMaxRows));
-      const maxTokensRaw = Math.trunc(Number(settings.memoryMaxTokens));
-      const memoryMaxRows = Number.isFinite(maxRowsRaw) ? Math.min(100, Math.max(10, maxRowsRaw)) : 30;
-      const memoryMaxTokens = Number.isFinite(maxTokensRaw) ? Math.min(5000, Math.max(500, maxTokensRaw)) : 2000;
       const memoryInjectPosition = String(settings.memoryInjectPosition || 'template').toLowerCase();
       const memoryInjectDepthRaw = Math.trunc(Number(settings.memoryInjectDepth));
       const memoryInjectDepth = Number.isFinite(memoryInjectDepthRaw) ? Math.max(0, memoryInjectDepthRaw) : 4;
-      const memoryTokenMode = String(settings.memoryTokenMode || 'rough').toLowerCase();
       return {
         user: {
           name: userName,
@@ -4934,11 +5231,8 @@ ${listPart || '-（无）'}
           disablePhoneFormat: Boolean(creativeMode),
           memoryStorageMode: getMemoryStorageMode(),
           memoryAutoExtract: isMemoryAutoExtractInline(),
-          memoryMaxRows,
-          memoryMaxTokens,
           memoryInjectPosition,
           memoryInjectDepth,
-          memoryTokenMode,
         },
         group: isGroupChat
           ? {
@@ -5186,8 +5480,7 @@ ${listPart || '-（无）'}
                     maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                     return;
                   }
-                  const isMe =
-                    speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+                  const isMe = isUserSpeakerName(speaker);
                   if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                   const role = isMe ? 'user' : 'assistant';
                   const c = isMe ? null : resolveContactByDisplayName(speaker);
@@ -5200,14 +5493,7 @@ ${listPart || '-（无）'}
                         showName: true,
                         depth: 0,
                       })
-                    : {
-                        role: 'user',
-                        type: 'text',
-                        ...parseSpecialMessage(content),
-                        name: userName,
-                        avatar: avatars.user,
-                        time: m?.time || formatNowTime(),
-                      };
+                    : buildUserMessageFromAI(content, m?.time || formatNowTime());
                   if (targetGroupId === sessionId) ui.addMessage(parsed);
                   const saved = chatStore.appendMessage(parsed, targetGroupId);
                   if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -5229,18 +5515,22 @@ ${listPart || '-（无）'}
               summarySessionIds.add(targetSessionId);
 
               ev.messages.forEach(msgText => {
-                const rawMsg = String(msgText || '');
-                if (userEchoGuard.shouldDrop(rawMsg)) return;
-                const parsed = buildAssistantMessageFromText(rawMsg, {
-                  sessionId: targetSessionId,
-                  time: formatNowTime(),
-                  depth: 0,
-                });
+                const { speaker, content, time } = normalizeDialogueMessage(msgText);
+                if (!content) return;
+                if (userEchoGuard.shouldDrop(content, speaker)) return;
+                const isMe = isUserSpeakerName(speaker);
+                const parsed = isMe
+                  ? buildUserMessageFromAI(content, time || formatNowTime())
+                  : buildAssistantMessageFromText(content, {
+                      sessionId: targetSessionId,
+                      time: time || formatNowTime(),
+                      depth: 0,
+                    });
                 if (targetSessionId === sessionId) {
                   ui.addMessage(parsed);
                 }
                 const saved = chatStore.appendMessage(parsed, targetSessionId);
-                autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
               });
               didAnything = true;
               refreshChatAndContacts();
@@ -5319,10 +5609,7 @@ ${listPart || '-（无）'}
                         maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                         return;
                       }
-                      const isMe =
-                        speaker === userName ||
-                        normalizeLoose(speaker) === normalizeLoose(userName) ||
-                        speaker === '用户';
+                      const isMe = isUserSpeakerName(speaker);
                       if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                       const role = isMe ? 'user' : 'assistant';
                       const c = isMe ? null : resolveContactByDisplayName(speaker);
@@ -5335,14 +5622,7 @@ ${listPart || '-（无）'}
                             showName: true,
                             depth: 0,
                           })
-                        : {
-                            role: 'user',
-                            type: 'text',
-                            ...parseSpecialMessage(content),
-                            name: userName,
-                            avatar: avatars.user,
-                            time: m?.time || formatNowTime(),
-                          };
+                        : buildUserMessageFromAI(content, m?.time || formatNowTime());
                       if (targetGroupId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetGroupId);
                       if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -5356,16 +5636,20 @@ ${listPart || '-（无）'}
                     if (!targetSessionId) return;
                     summarySessionIds.add(targetSessionId);
                     (ev.messages || []).forEach(msgText => {
-                      const rawMsg = String(msgText || '');
-                      if (userEchoGuard.shouldDrop(rawMsg)) return;
-                      const parsed = buildAssistantMessageFromText(rawMsg, {
-                        sessionId: targetSessionId,
-                        time: formatNowTime(),
-                        depth: 0,
-                      });
+                      const { speaker, content, time } = normalizeDialogueMessage(msgText);
+                      if (!content) return;
+                      if (userEchoGuard.shouldDrop(content, speaker)) return;
+                      const isMe = isUserSpeakerName(speaker);
+                      const parsed = isMe
+                        ? buildUserMessageFromAI(content, time || formatNowTime())
+                        : buildAssistantMessageFromText(content, {
+                            sessionId: targetSessionId,
+                            time: time || formatNowTime(),
+                            depth: 0,
+                          });
                       if (targetSessionId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetSessionId);
-                      autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                      if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                     });
                     didAnything = true;
                     refreshChatAndContacts();
@@ -5428,10 +5712,7 @@ ${listPart || '-（无）'}
                           maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                           return;
                         }
-                        const isMe =
-                          speaker === userName ||
-                          normalizeLoose(speaker) === normalizeLoose(userName) ||
-                          speaker === '用户';
+                        const isMe = isUserSpeakerName(speaker);
                         if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                         const role = isMe ? 'user' : 'assistant';
                         const c = isMe ? null : resolveContactByDisplayName(speaker);
@@ -5444,14 +5725,7 @@ ${listPart || '-（无）'}
                               showName: true,
                               depth: 0,
                             })
-                          : {
-                              role: 'user',
-                              type: 'text',
-                              ...parseSpecialMessage(content),
-                              name: userName,
-                              avatar: avatars.user,
-                              time: m?.time || formatNowTime(),
-                            };
+                          : buildUserMessageFromAI(content, m?.time || formatNowTime());
                         if (targetGroupId === sessionId) ui.addMessage(parsed);
                         const saved = chatStore.appendMessage(parsed, targetGroupId);
                         if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -5465,16 +5739,20 @@ ${listPart || '-（无）'}
                       if (!targetSessionId) return;
                       summarySessionIds.add(targetSessionId);
                       (ev.messages || []).forEach(msgText => {
-                        const rawMsg = String(msgText || '');
-                        if (userEchoGuard.shouldDrop(rawMsg)) return;
-                        const parsed = buildAssistantMessageFromText(rawMsg, {
-                          sessionId: targetSessionId,
-                          time: formatNowTime(),
-                          depth: 0,
-                        });
+                        const { speaker, content, time } = normalizeDialogueMessage(msgText);
+                        if (!content) return;
+                        if (userEchoGuard.shouldDrop(content, speaker)) return;
+                        const isMe = isUserSpeakerName(speaker);
+                        const parsed = isMe
+                          ? buildUserMessageFromAI(content, time || formatNowTime())
+                          : buildAssistantMessageFromText(content, {
+                              sessionId: targetSessionId,
+                              time: time || formatNowTime(),
+                              depth: 0,
+                            });
                         if (targetSessionId === sessionId) ui.addMessage(parsed);
                         const saved = chatStore.appendMessage(parsed, targetSessionId);
-                        autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                        if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                       });
                       didAnything = true;
                       refreshChatAndContacts();
@@ -5675,8 +5953,7 @@ ${listPart || '-（无）'}
                   didAnything = true;
                   return;
                 }
-                const isMe =
-                  speaker === userName || normalizeLoose(speaker) === normalizeLoose(userName) || speaker === '用户';
+                const isMe = isUserSpeakerName(speaker);
                 if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                 const role = isMe ? 'user' : 'assistant';
                 const c = isMe ? null : resolveContactByDisplayName(speaker);
@@ -5689,14 +5966,7 @@ ${listPart || '-（无）'}
                       showName: true,
                       depth: 0,
                     })
-                  : {
-                      role: 'user',
-                      type: 'text',
-                      ...parseSpecialMessage(content),
-                      name: userName,
-                      avatar: avatars.user,
-                      time: m?.time || formatNowTime(),
-                    };
+                  : buildUserMessageFromAI(content, m?.time || formatNowTime());
                 if (targetGroupId === sessionId) ui.addMessage(parsed);
                 const saved = chatStore.appendMessage(parsed, targetGroupId);
                 if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -5712,16 +5982,20 @@ ${listPart || '-（无）'}
               }
               summarySessionIds.add(targetSessionId);
               (ev.messages || []).forEach(msgText => {
-                const rawMsg = String(msgText || '');
-                if (userEchoGuard.shouldDrop(rawMsg)) return;
-                const parsed = buildAssistantMessageFromText(rawMsg, {
-                  sessionId: targetSessionId,
-                  time: formatNowTime(),
-                  depth: 0,
-                });
+                const { speaker, content, time } = normalizeDialogueMessage(msgText);
+                if (!content) return;
+                if (userEchoGuard.shouldDrop(content, speaker)) return;
+                const isMe = isUserSpeakerName(speaker);
+                const parsed = isMe
+                  ? buildUserMessageFromAI(content, time || formatNowTime())
+                  : buildAssistantMessageFromText(content, {
+                      sessionId: targetSessionId,
+                      time: time || formatNowTime(),
+                      depth: 0,
+                    });
                 if (targetSessionId === sessionId) ui.addMessage(parsed);
                 const saved = chatStore.appendMessage(parsed, targetSessionId);
-                autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                 didAnything = true;
               });
             }
@@ -5786,10 +6060,7 @@ ${listPart || '-（无）'}
                       didAnything = true;
                       return;
                     }
-                    const isMe =
-                      speaker === userName ||
-                      normalizeLoose(speaker) === normalizeLoose(userName) ||
-                      speaker === '用户';
+                    const isMe = isUserSpeakerName(speaker);
                     if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                     const role = isMe ? 'user' : 'assistant';
                     const c = isMe ? null : resolveContactByDisplayName(speaker);
@@ -5802,14 +6073,7 @@ ${listPart || '-（无）'}
                           showName: true,
                           depth: 0,
                         })
-                      : {
-                          role: 'user',
-                          type: 'text',
-                          ...parseSpecialMessage(content),
-                          name: userName,
-                          avatar: avatars.user,
-                          time: m?.time || formatNowTime(),
-                        };
+                        : buildUserMessageFromAI(content, m?.time || formatNowTime());
                     if (targetGroupId === sessionId) ui.addMessage(parsed);
                     const saved = chatStore.appendMessage(parsed, targetGroupId);
                     if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -5822,16 +6086,20 @@ ${listPart || '-（无）'}
                   if (!targetSessionId) return;
                   summarySessionIds.add(targetSessionId);
                   (ev.messages || []).forEach(msgText => {
-                    const rawMsg = String(msgText || '');
-                    if (userEchoGuard.shouldDrop(rawMsg)) return;
-                    const parsed = buildAssistantMessageFromText(rawMsg, {
-                      sessionId: targetSessionId,
-                      time: formatNowTime(),
-                      depth: 0,
-                    });
+                    const { speaker, content, time } = normalizeDialogueMessage(msgText);
+                    if (!content) return;
+                    if (userEchoGuard.shouldDrop(content, speaker)) return;
+                    const isMe = isUserSpeakerName(speaker);
+                    const parsed = isMe
+                      ? buildUserMessageFromAI(content, time || formatNowTime())
+                      : buildAssistantMessageFromText(content, {
+                          sessionId: targetSessionId,
+                          time: time || formatNowTime(),
+                          depth: 0,
+                        });
                     if (targetSessionId === sessionId) ui.addMessage(parsed);
                     const saved = chatStore.appendMessage(parsed, targetSessionId);
-                    autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                    if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                     didAnything = true;
                   });
                 }
@@ -5882,10 +6150,7 @@ ${listPart || '-（无）'}
                         didAnything = true;
                         return;
                       }
-                      const isMe =
-                        speaker === userName ||
-                        normalizeLoose(speaker) === normalizeLoose(userName) ||
-                        speaker === '用户';
+                      const isMe = isUserSpeakerName(speaker);
                       if (isMe && userEchoGuard.shouldDrop(content, speaker)) return;
                       const role = isMe ? 'user' : 'assistant';
                       const c = isMe ? null : resolveContactByDisplayName(speaker);
@@ -5898,14 +6163,7 @@ ${listPart || '-（无）'}
                             showName: true,
                             depth: 0,
                           })
-                        : {
-                            role: 'user',
-                            type: 'text',
-                            ...parseSpecialMessage(content),
-                            name: userName,
-                            avatar: avatars.user,
-                            time: m?.time || formatNowTime(),
-                          };
+                        : buildUserMessageFromAI(content, m?.time || formatNowTime());
                       if (targetGroupId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetGroupId);
                       if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
@@ -5918,16 +6176,20 @@ ${listPart || '-（无）'}
                     if (!targetSessionId) return;
                     summarySessionIds.add(targetSessionId);
                     (ev.messages || []).forEach(msgText => {
-                      const rawMsg = String(msgText || '');
-                      if (userEchoGuard.shouldDrop(rawMsg)) return;
-                      const parsed = buildAssistantMessageFromText(rawMsg, {
-                        sessionId: targetSessionId,
-                        time: formatNowTime(),
-                        depth: 0,
-                      });
+                      const { speaker, content, time } = normalizeDialogueMessage(msgText);
+                      if (!content) return;
+                      if (userEchoGuard.shouldDrop(content, speaker)) return;
+                      const isMe = isUserSpeakerName(speaker);
+                      const parsed = isMe
+                        ? buildUserMessageFromAI(content, time || formatNowTime())
+                        : buildAssistantMessageFromText(content, {
+                            sessionId: targetSessionId,
+                            time: time || formatNowTime(),
+                            depth: 0,
+                          });
                       if (targetSessionId === sessionId) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetSessionId);
-                      autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
+                      if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                       didAnything = true;
                     });
                   }
@@ -6261,9 +6523,10 @@ ${listPart || '-（无）'}
       const msgs = chatStore.getMessages(sessionId);
       const idx = msgs.findIndex(m => m.id === message.id);
       if (idx === -1) return;
+      const isSyntheticUser = (m) => m?.role === 'user' && m?.meta?.generatedByAssistant === true;
       let prevUserIdx = -1;
       for (let i = idx - 1; i >= 0; i--) {
-        if (msgs[i]?.role === 'user' && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
+        if (msgs[i]?.role === 'user' && !isSyntheticUser(msgs[i]) && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
           prevUserIdx = i;
           break;
         }
@@ -6274,7 +6537,7 @@ ${listPart || '-（无）'}
       }
       let nextUserIdx = -1;
       for (let i = prevUserIdx + 1; i < msgs.length; i++) {
-        if (msgs[i]?.role === 'user' && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
+        if (msgs[i]?.role === 'user' && !isSyntheticUser(msgs[i]) && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
           nextUserIdx = i;
           break;
         }
@@ -6284,17 +6547,34 @@ ${listPart || '-（无）'}
         return;
       }
       const roundMessages = msgs.slice(prevUserIdx + 1, nextUserIdx === -1 ? msgs.length : nextUserIdx);
-      const assistantMessages = roundMessages.filter(m => m?.role === 'assistant');
-      if (!assistantMessages.length) {
+      const regenMessages = roundMessages.filter(m => m?.role === 'assistant' || isSyntheticUser(m));
+      if (!regenMessages.length) {
         window.toastr?.warning('未找到可重生成的 AI 回覆');
         return;
       }
-      assistantMessages.forEach(m => {
+      regenMessages.forEach(m => {
         chatStore.deleteMessage(m.id, sessionId);
         ui.removeMessage(m.id);
       });
       chatStore.removeLastSummary?.(sessionId);
       refreshChatAndContacts();
+
+      const settings = appSettings.get();
+      const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
+      if (memoryMode === 'table') {
+        try {
+          logger.debug('memory rollback: start', { sessionId, messageId: message.id });
+          const rollbackFn = window.appBridge?.rollbackLastMemoryUpdate;
+          if (typeof rollbackFn === 'function') {
+            const rolled = await rollbackFn(sessionId);
+            logger.debug('memory rollback: done', { sessionId, messageId: message.id, rolled });
+          } else {
+            logger.warn('memory rollback: missing handler', { sessionId, messageId: message.id });
+          }
+        } catch (err) {
+          logger.warn('rollback memory update failed', err);
+        }
+      }
 
       const prevUser = msgs[prevUserIdx];
       const resendText = getMessageSendText(prevUser);

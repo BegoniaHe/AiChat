@@ -1066,6 +1066,9 @@ export class GroupSettingsPanel {
         const listEl = this.panel?.querySelector('#group-settings-members');
         if (!listEl) return;
         listEl.innerHTML = '';
+        listEl.style.maxHeight = '260px';
+        listEl.style.overflowY = 'auto';
+        listEl.style.paddingRight = '4px';
         if (!this.members.length) {
             const empty = document.createElement('div');
             empty.textContent = '暂无成员';

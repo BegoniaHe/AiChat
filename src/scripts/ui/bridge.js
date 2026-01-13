@@ -16,6 +16,7 @@ import {
   estimateTokens,
   isSummaryLimitTableId,
   isSummaryTableId,
+  formatMemoryRowText,
   normalizeMemoryCell,
   normalizeMemoryUpdateMode,
   normalizeTokenMode,
@@ -157,8 +158,8 @@ const formatSinceInParens = (ts) => {
 };
 
 const DEFAULT_MEMORY_BUDGET = {
-  maxRows: 30,
-  maxTokens: 2000,
+  maxRows: Number.POSITIVE_INFINITY,
+  maxTokens: Number.POSITIVE_INFINITY,
   safetyRatio: 0.9,
 };
 
@@ -347,13 +348,11 @@ class AppBridge {
       tableOrder.push(id);
     });
 
-    const maxRows = Number.isFinite(Number(context?.meta?.memoryMaxRows))
-      ? Math.max(1, Math.trunc(Number(context.meta.memoryMaxRows)))
-      : DEFAULT_MEMORY_BUDGET.maxRows;
-    const maxTokens = Number.isFinite(Number(context?.meta?.memoryMaxTokens))
-      ? Math.max(1, Math.trunc(Number(context.meta.memoryMaxTokens)))
-      : DEFAULT_MEMORY_BUDGET.maxTokens;
-    const tokenBudgetSafety = Math.max(0, Math.floor(maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio));
+    const maxRows = DEFAULT_MEMORY_BUDGET.maxRows;
+    const maxTokens = DEFAULT_MEMORY_BUDGET.maxTokens;
+    const tokenBudgetSafety = Number.isFinite(maxTokens)
+      ? Math.max(0, Math.floor(maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio))
+      : maxTokens;
     const tokenMode = normalizeTokenMode(context?.meta?.memoryTokenMode);
     const injectDepthRaw = Math.trunc(Number(context?.meta?.memoryInjectDepth));
     const injectDepth = Number.isFinite(injectDepthRaw) ? Math.max(0, injectDepthRaw) : 4;
@@ -561,7 +560,120 @@ class AppBridge {
     const rowIndexMap = planResult.rowIndexMap || {};
     const tableOrderNext = planResult.tableOrder || tableOrder;
 
-    if (!selected.length && !truncated.length) {
+    const buildCrossScopeExtraText = async (budgetTokens) => {
+      if (!this.memoryTableStore || budgetTokens <= 0) return { text: '', tokens: 0 };
+      const parts = [];
+      let used = 0;
+      const pushLine = (line) => {
+        if (line === null || line === undefined) return true;
+        const text = String(line);
+        if (!text) {
+          parts.push('');
+          return true;
+        }
+        const cost = estimateTokens(text, tokenMode);
+        if (used + cost > budgetTokens) return false;
+        parts.push(text);
+        used += cost;
+        return true;
+      };
+      const pushSpacer = () => {
+        if (parts.length && parts[parts.length - 1] !== '') parts.push('');
+      };
+      const getRowText = (row, table) => {
+        if (!table) return '';
+        return formatMemoryRowText(row?.row_data || {}, table?.columns || []);
+      };
+      const resolveContactName = (cid) => {
+        const c = this.contactsStore?.getContact?.(cid);
+        return String(c?.name || cid || '').trim();
+      };
+
+      if (!isGroup) {
+        const contactId = sessionId;
+        const groups = this.contactsStore?.listGroups?.() || [];
+        const memberGroups = groups.filter(g => Array.isArray(g?.members) && g.members.includes(contactId));
+        const outlineTable = tableById.get('group_outline');
+        if (outlineTable && memberGroups.length) {
+          if (!pushLine('【跨会话参考｜群聊大纲】')) return { text: '', tokens: used };
+          pushLine('（仅供当前私聊参考，不在本会话记忆表格中更新）');
+          for (const group of memberGroups) {
+            const groupId = String(group?.id || '').trim();
+            if (!groupId) continue;
+            const groupName = String(group?.name || groupId).trim();
+            const groupRows = await this.memoryTableStore.getMemories({
+              scope: 'group',
+              group_id: groupId,
+              template_id: templateId,
+            }).catch(() => []);
+            const outlineRows = (Array.isArray(groupRows) ? groupRows : [])
+              .filter(row => row && row.is_active !== false)
+              .filter(row => String(row?.table_id || '').trim() === 'group_outline')
+              .sort((a, b) => resolveRowSortKey(a, 0) - resolveRowSortKey(b, 0));
+            if (!outlineRows.length) continue;
+            pushSpacer();
+            if (!pushLine(`【${groupName}】`)) break;
+            for (const row of outlineRows) {
+              const rowText = getRowText(row, outlineTable);
+              if (!rowText) continue;
+              if (!pushLine(`- ${rowText}`)) break;
+            }
+          }
+        }
+      } else {
+        const groupContact = this.contactsStore?.getContact?.(sessionId);
+        const members = Array.isArray(groupContact?.members)
+          ? groupContact.members.map(item => String(item || '').trim()).filter(Boolean)
+          : [];
+        if (members.length) {
+          if (!pushLine('【跨会话参考｜成员私聊记忆】')) return { text: '', tokens: used };
+          pushLine('（以下为用户与各成员的私聊关系记忆，群内其他人不应知道；仅供模型掌握，勿在群聊中泄露）');
+          for (const memberId of members) {
+            const memberRows = await this.memoryTableStore.getMemories({
+              scope: 'contact',
+              contact_id: memberId,
+              template_id: templateId,
+            }).catch(() => []);
+            const filteredRows = (Array.isArray(memberRows) ? memberRows : [])
+              .filter(row => row && row.is_active !== false)
+              .filter(row => !isSummaryTableId(String(row?.table_id || '').trim()));
+            if (!filteredRows.length) continue;
+            const memberName = resolveContactName(memberId);
+            pushSpacer();
+            if (!pushLine(`【成员：${memberName || memberId}】`)) break;
+            const rowsByTable = new Map();
+            filteredRows.forEach((row) => {
+              const tableId = String(row?.table_id || '').trim();
+              if (!tableId) return;
+              if (!rowsByTable.has(tableId)) rowsByTable.set(tableId, []);
+              rowsByTable.get(tableId).push(row);
+            });
+            for (const [tableId, tableRows] of rowsByTable.entries()) {
+              const table = tableById.get(tableId);
+              if (!table) continue;
+              const label = String(table?.name || tableId).trim() || tableId;
+              const header = autoExtract ? `【${label}｜${tableId}】` : `【${label}】`;
+              if (!pushLine(header)) return { text: parts.join('\n').trim(), tokens: used };
+              tableRows.sort((a, b) => resolveRowSortKey(a, 0) - resolveRowSortKey(b, 0));
+              for (const row of tableRows) {
+                const rowText = getRowText(row, table);
+                if (!rowText) continue;
+                if (!pushLine(`- ${rowText}`)) return { text: parts.join('\n').trim(), tokens: used };
+              }
+            }
+          }
+        }
+      }
+      return { text: parts.join('\n').trim(), tokens: used };
+    };
+
+    const baseTokens = tableData ? estimateTokens(tableData, tokenMode) : 0;
+    const remainingBudget = Math.max(0, tokenBudgetData - baseTokens);
+    const extraResult = await buildCrossScopeExtraText(remainingBudget);
+    const extraText = String(extraResult?.text || '').trim();
+    const combinedTableData = [tableData, extraText].filter(Boolean).join('\n\n').trim();
+
+    if (!selected.length && !truncated.length && !combinedTableData) {
       const promptText = autoExtract ? buildPromptText('') : '';
       const tokenTotal = promptText ? estimateTokens(promptText, tokenMode) : 0;
       return {
@@ -591,7 +703,7 @@ class AppBridge {
       };
     }
 
-    if (!selected.length) {
+    if (!selected.length && !combinedTableData) {
       const promptText = autoExtract ? buildPromptText('') : '';
       const tokenTotal = promptText ? estimateTokens(promptText, tokenMode) : 0;
       return {
@@ -621,7 +733,7 @@ class AppBridge {
       };
     }
 
-    const promptText = buildPromptText(tableData);
+    const promptText = buildPromptText(combinedTableData);
     const tokenTotal = estimateTokens(promptText, tokenMode);
 
     return {

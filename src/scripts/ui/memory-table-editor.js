@@ -548,14 +548,9 @@ export class MemoryTableEditor {
     const contact = sessionId ? window.appBridge?.contactsStore?.getContact?.(sessionId) : null;
     const characterName = String(contact?.name || (isGroup ? sessionId.replace(/^group:/, '') : sessionId) || '助手');
     const settings = appSettings.get();
-    const maxRowsRaw = Math.trunc(Number(settings.memoryMaxRows));
-    const maxTokensRaw = Math.trunc(Number(settings.memoryMaxTokens));
-    const memoryMaxRows = Number.isFinite(maxRowsRaw) ? Math.min(100, Math.max(10, maxRowsRaw)) : 30;
-    const memoryMaxTokens = Number.isFinite(maxTokensRaw) ? Math.min(5000, Math.max(500, maxTokensRaw)) : 2000;
     const memoryInjectPosition = String(settings.memoryInjectPosition || 'template').toLowerCase();
     const memoryInjectDepthRaw = Math.trunc(Number(settings.memoryInjectDepth));
     const memoryInjectDepth = Number.isFinite(memoryInjectDepthRaw) ? Math.max(0, memoryInjectDepthRaw) : 4;
-    const memoryTokenMode = String(settings.memoryTokenMode || 'rough').toLowerCase();
     const memoryAutoMode = String(settings.memoryAutoExtractMode || 'inline').toLowerCase();
     const memoryAutoExtract = settings.memoryAutoExtract === true && memoryAutoMode !== 'separate';
     return {
@@ -565,11 +560,8 @@ export class MemoryTableEditor {
       meta: {
         memoryStorageMode: 'table',
         memoryAutoExtract,
-        memoryMaxRows,
-        memoryMaxTokens,
         memoryInjectPosition,
         memoryInjectDepth,
-        memoryTokenMode,
       },
       group: isGroup ? { id: sessionId, name: characterName, members: [], memberNames: [] } : null,
       history: [],
@@ -866,7 +858,7 @@ export class MemoryTableEditor {
     block.appendChild(header);
 
     const list = document.createElement('div');
-    list.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+    list.style.cssText = 'display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; padding-right:4px;';
     const rows = this.filterRows(scopedRows);
     if (!rows.length) {
       const empty = document.createElement('div');

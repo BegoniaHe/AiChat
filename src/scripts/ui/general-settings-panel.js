@@ -379,18 +379,7 @@ export class GeneralSettingsPanel {
           </div>
 
           <div id="general-memory-budget-block" style="margin-left: 26px; margin-top: 10px; padding: 8px; border: 1px dashed #e2e8f0; border-radius: 10px; display: none;">
-            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">记忆注入预算</div>
-            <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; color:#0f172a; margin-bottom:6px;">
-              <span>最大条目数</span>
-              <input type="number" id="general-memory-max-rows" min="10" max="100" step="1"
-                     style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
-            </label>
-            <label style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; font-weight:700; color:#0f172a;">
-              <span>最大 tokens</span>
-              <input type="number" id="general-memory-max-tokens" min="500" max="5000" step="100"
-                     style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
-            </label>
-            <small style="color:#94a3b8; display:block; margin-top:4px;">建议范围：10-100 条 / 500-5000 tokens</small>
+            <div style="font-size:12px; color:#64748b; margin-bottom:8px;">记忆注入设置</div>
 
             <div style="margin-top: 10px;">
               <div style="font-size:12px; color:#64748b; margin-bottom:6px;">记忆注入位置</div>
@@ -412,15 +401,6 @@ export class GeneralSettingsPanel {
                        style="width: 90px; padding: 4px 6px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px; text-align:right;">
               </label>
               <small style="color:#94a3b8; display:block; margin-top:4px;">距聊天末尾 N 条插入，0 表示追加到末尾</small>
-            </div>
-
-            <div style="margin-top: 10px;">
-              <div style="font-size:12px; color:#64748b; margin-bottom:6px;">Token 估算模式</div>
-              <select id="general-memory-token-mode" style="width:100%; padding:6px 8px; border:1px solid #e2e8f0; border-radius:8px; font-size:12px;">
-                <option value="rough">粗略估算</option>
-                <option value="strict">严格（保守估算）</option>
-              </select>
-              <small style="color:#94a3b8; display:block; margin-top:4px;">严格模式更保守，避免超预算但可能更少注入</small>
             </div>
           </div>
         </div>
