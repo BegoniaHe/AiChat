@@ -11,6 +11,29 @@ const resolveMediaUrl = (kind, value) => {
   return resolved?.url || value || '';
 };
 
+const getFallbackUrls = (resolved) => {
+  if (Array.isArray(resolved?.fallbacks) && resolved.fallbacks.length) return resolved.fallbacks;
+  if (resolved?.url) return [resolved.url];
+  return [];
+};
+
+const applyImageFallback = (img, resolved, { onFail } = {}) => {
+  const urls = getFallbackUrls(resolved);
+  if (!urls.length) return false;
+  let index = 0;
+  img.onerror = () => {
+    index += 1;
+    if (index < urls.length) {
+      img.src = urls[index];
+      return;
+    }
+    img.onerror = null;
+    if (typeof onFail === 'function') onFail();
+  };
+  img.src = urls[0];
+  return true;
+};
+
 const toastOnce = (message, level = 'warning', ttl = 8000) => {
   const text = String(message || '').trim();
   if (!text) return;
@@ -166,18 +189,26 @@ export class ChatUI {
       const keyword = String(match[1] || '').trim();
       if (frag.childNodes.length) ensureBreak();
       const resolved = resolveMediaAsset('sticker', keyword) || resolveMediaAsset('image', keyword);
-      if (resolved?.url) {
+      if (resolved) {
         const img = document.createElement('img');
-        img.src = resolved.url;
         img.alt = keyword || 'sticker';
         img.className = 'previewable sticker-image sticker-inline';
-        img.addEventListener('click', () => this.openLightbox(resolved.url));
-        img.onerror = () => {
-          img.classList.add('broken');
-          img.alt = '表情包加載失敗';
-          toastOnce('表情包加載失敗');
-        };
-        frag.appendChild(img);
+        const loaded = applyImageFallback(img, resolved, {
+          onFail: () => {
+            img.classList.add('broken');
+            img.alt = '表情包加載失敗';
+            toastOnce('表情包加載失敗');
+          },
+        });
+        if (loaded) {
+          img.addEventListener('click', () => this.openLightbox(img.currentSrc || img.src));
+          frag.appendChild(img);
+        } else {
+          const chip = document.createElement('span');
+          chip.className = 'chip';
+          chip.textContent = keyword ? `表情包：${keyword}` : '表情包';
+          frag.appendChild(chip);
+        }
       } else {
         const chip = document.createElement('span');
         chip.className = 'chip';
@@ -687,15 +718,24 @@ export class ChatUI {
       case 'sticker': {
         const stickerResolved =
           resolveMediaAsset('sticker', message.content) || resolveMediaAsset('image', message.content);
-        if (stickerResolved?.url) {
-          bubble.innerHTML = `<img src="${stickerResolved.url}" alt="sticker" class="previewable sticker-image">`;
-          const stickerImg = bubble.querySelector('img');
-          stickerImg.addEventListener('click', () => this.openLightbox(stickerResolved.url));
-          stickerImg.onerror = () => {
-            stickerImg.classList.add('broken');
-            stickerImg.alt = '表情包加載失敗';
-            toastOnce('表情包加載失敗');
-          };
+        if (stickerResolved) {
+          const stickerImg = document.createElement('img');
+          stickerImg.alt = 'sticker';
+          stickerImg.className = 'previewable sticker-image';
+          const loaded = applyImageFallback(stickerImg, stickerResolved, {
+            onFail: () => {
+              stickerImg.classList.add('broken');
+              stickerImg.alt = '表情包加載失敗';
+              toastOnce('表情包加載失敗');
+            },
+          });
+          if (loaded) {
+            stickerImg.addEventListener('click', () => this.openLightbox(stickerImg.currentSrc || stickerImg.src));
+            bubble.innerHTML = '';
+            bubble.appendChild(stickerImg);
+          } else {
+            bubble.innerHTML = `<div class="chip">表情包：${message.content}</div>`;
+          }
         } else {
           bubble.innerHTML = `<div class="chip">表情包：${message.content}</div>`;
         }

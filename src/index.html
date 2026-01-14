@@ -186,17 +186,61 @@
         <div class="chat-setting-content">
           <div class="setting-item">
             <span>气泡颜色</span>
-            <input type="text" id="bubble-color-input" value="#44639d" />
-            <input type="color" id="bubble-color" class="color-picker" value="#44639d" />
+            <input type="text" id="bubble-color-input" value="#c9c9c9" />
+            <input type="color" id="bubble-color" class="color-picker" value="#c9c9c9" />
           </div>
           <div class="setting-item">
             <span>字体颜色</span>
-            <input type="text" id="text-color-input" value="#FFFFFF" />
-            <input type="color" id="text-color" class="color-picker" value="#FFFFFF" />
+            <input type="text" id="text-color-input" value="#1F2937" />
+            <input type="color" id="text-color" class="color-picker" value="#1F2937" />
           </div>
-          <div class="setting-item">
+          <div class="setting-item setting-scope">
+            <span>应用范围</span>
+            <div class="setting-scope-options">
+              <label>
+                <input type="radio" name="chat-setting-scope" value="current" checked />
+                当前聊天
+              </label>
+              <label>
+                <input type="radio" name="chat-setting-scope" value="all" />
+                全部聊天
+              </label>
+            </div>
+          </div>
+          <div class="setting-item setting-wallpaper">
             <span>聊天壁纸</span>
-            <input type="text" id="chat-bg" placeholder="输入图片URL" />
+            <div class="wallpaper-uploader">
+              <input type="file" id="chat-wallpaper-file" accept="image/*,image/gif" />
+              <div id="chat-wallpaper-drop" class="wallpaper-drop">
+                <div class="wallpaper-drop-title">拖拽图片/GIF到这里</div>
+                <div class="wallpaper-drop-desc">或点击选择文件</div>
+                <div class="wallpaper-drop-meta">支持 JPG / PNG / WebP / GIF</div>
+              </div>
+              <div id="wallpaper-status" class="wallpaper-status">未设置壁纸</div>
+              <div class="wallpaper-editor">
+                <div id="wallpaper-preview" class="wallpaper-preview">
+                  <img id="wallpaper-preview-image" alt="" />
+                  <div class="wallpaper-preview-overlay">
+                    <div class="wallpaper-preview-bubble">预览气泡</div>
+                  </div>
+                </div>
+                <div class="wallpaper-controls">
+                  <label>
+                    缩放
+                    <input type="range" id="wallpaper-zoom" min="0.6" max="2.5" step="0.01" value="1" />
+                  </label>
+                  <label>
+                    旋转
+                    <input type="range" id="wallpaper-rotate" min="-180" max="180" step="1" value="0" />
+                  </label>
+                  <div class="wallpaper-actions">
+                    <button type="button" id="wallpaper-fit-btn">适配</button>
+                    <button type="button" id="wallpaper-reset-btn">重置</button>
+                    <button type="button" id="wallpaper-clear-btn">清除</button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="setting-preview">
             <div id="chat-setting-preview" class="QQ_chat_msgdiv">
@@ -206,6 +250,7 @@
         </div>
         <div class="chat-setting-footer">
           <button id="random-setting-btn">随机</button>
+          <button id="restore-setting-btn">恢复默认</button>
           <button id="save-setting-btn">保存</button>
           <button id="cancel-setting-btn">取消</button>
         </div>

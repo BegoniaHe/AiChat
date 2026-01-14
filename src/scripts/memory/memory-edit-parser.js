@@ -41,7 +41,7 @@ export const parseTableEditActions = (content) => {
   const pushAction = (raw) => {
     if (!raw || typeof raw !== 'object') return;
     const action = String(raw.action || raw.type || '').trim().toLowerCase();
-    if (!['insert', 'update', 'delete'].includes(action)) return;
+    if (!['insert', 'update', 'delete', 'init'].includes(action)) return;
     actions.push({
       action,
       tableId: raw.table_id ?? raw.tableId ?? raw.table,
@@ -241,7 +241,7 @@ export const parseTableEditActions = (content) => {
   for (const line of lineItems) {
     const normalized = line.replace(/,$/, '');
     if (!normalized) continue;
-    const labeledMatch = normalized.match(/^(insert|update|delete)\s*:\s*(.+)$/i);
+    const labeledMatch = normalized.match(/^(insert|update|delete|init)\s*:\s*(.+)$/i);
     if (labeledMatch) {
       const label = String(labeledMatch[1] || '').toLowerCase();
       const payload = labeledMatch[2].trim();

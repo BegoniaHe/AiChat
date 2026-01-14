@@ -49,6 +49,24 @@ const normalizeUrl = (value) => {
     return noHash.trim().toLowerCase();
 };
 
+const isWindowsPath = (value) => /^[a-zA-Z]:[\\/]/.test(String(value || '').trim());
+const isUncPath = (value) => /^\\\\/.test(String(value || '').trim());
+const isAbsolutePath = (value) => {
+    const raw = String(value || '').trim();
+    return isWindowsPath(raw) || isUncPath(raw) || raw.startsWith('/');
+};
+
+const toFileUrl = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^(file|asset|tauri|https?|data|blob):/i.test(raw)) return raw;
+    const normalized = raw.replace(/\\/g, '/');
+    if (/^[a-zA-Z]:\//.test(normalized)) return encodeURI(`file:///${normalized}`);
+    if (normalized.startsWith('//')) return encodeURI(`file:${normalized}`);
+    if (normalized.startsWith('/')) return encodeURI(`file://${normalized}`);
+    return '';
+};
+
 const stripQuery = (value) => {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -81,7 +99,9 @@ const joinPath = (base, file) => {
 
 const getConvertFileSrc = () => {
     const g = typeof globalThis !== 'undefined' ? globalThis : window;
-    return g?.__TAURI__?.core?.convertFileSrc || g?.__TAURI__?.convertFileSrc;
+    return g?.__TAURI__?.core?.convertFileSrc
+        || g?.__TAURI__?.convertFileSrc
+        || g?.__TAURI_INTERNALS__?.convertFileSrc;
 };
 
 const parseAssetRef = (value, fallbackKind) => {
@@ -145,6 +165,55 @@ const normalizeManifestItems = (manifest) => {
     return items.filter(Boolean);
 };
 
+const dedupeUrls = (urls = []) => {
+    const out = [];
+    const seen = new Set();
+    urls.forEach((value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return;
+        const key = normalizeUrl(raw) || raw;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(raw);
+    });
+    return out;
+};
+
+const buildFallbackUrls = (resolvedUrl, item) => {
+    const urls = [];
+    if (resolvedUrl) urls.push(resolvedUrl);
+    if (item && typeof item === 'object') {
+        const rawFile = String(item.file || item.path || '').trim();
+        if (rawFile) {
+            const isAbs = isAbsolutePath(rawFile);
+            if (STATE.baseType === 'tauri') {
+                const full = isAbs ? rawFile : joinPath(STATE.baseDir, rawFile);
+                const convert = getConvertFileSrc();
+                if (typeof convert === 'function') {
+                    try {
+                        const converted = convert(full);
+                        if (converted) urls.push(converted);
+                    } catch {}
+                }
+                const fileUrl = toFileUrl(full);
+                if (fileUrl) urls.push(fileUrl);
+                urls.push(full);
+            } else if (STATE.baseDir) {
+                const full = isAbs ? rawFile : joinPath(STATE.baseDir, rawFile);
+                urls.push(full);
+            } else {
+                urls.push(rawFile);
+            }
+        }
+        if (Array.isArray(item.sources)) {
+            item.sources.forEach((src) => {
+                if (src) urls.push(src);
+            });
+        }
+    }
+    return dedupeUrls(urls);
+};
+
 const indexManifest = (manifest) => {
     resetIndexes();
     const items = normalizeManifestItems(manifest);
@@ -179,13 +248,19 @@ const resolveItemUrl = (item) => {
     if (!item || typeof item !== 'object') return '';
     const rawFile = String(item.file || item.path || '').trim();
     if (!rawFile) return '';
-    if (isLikelyUrl(rawFile)) return rawFile;
+    if (isLikelyUrl(rawFile) && !isWindowsPath(rawFile) && !isUncPath(rawFile)) return rawFile;
     if (STATE.baseType === 'tauri' && STATE.baseDir) {
-        const full = joinPath(STATE.baseDir, rawFile);
+        const full = isAbsolutePath(rawFile) ? rawFile : joinPath(STATE.baseDir, rawFile);
         const convert = getConvertFileSrc();
-        return typeof convert === 'function' ? convert(full) : full;
+        if (typeof convert === 'function') {
+            try {
+                return convert(full);
+            } catch {}
+        }
+        return toFileUrl(full) || full;
     }
-    return joinPath(STATE.baseDir || './assets/media', rawFile);
+    const baseDir = STATE.baseDir || './assets/media';
+    return isAbsolutePath(rawFile) ? rawFile : joinPath(baseDir, rawFile);
 };
 
 export const initMediaAssets = async () => {
@@ -242,31 +317,46 @@ export const resolveMediaAsset = (kind, value) => {
     const k = normalizeKind(kind);
     if (!input || !k) return null;
     if (!STATE.ready && !STATE.loading) {
-        if (isLikelyUrl(input)) return { url: input, direct: true };
+        if (isLikelyUrl(input)) return { url: input, direct: true, fallbacks: [input] };
         return null;
     }
     const ref = parseAssetRef(input, k);
     if (ref) {
         const hit = STATE.maps[ref.kind || k]?.get(ref.key);
-        if (hit) return { url: resolveItemUrl(hit), item: hit };
+        if (hit) {
+            const url = resolveItemUrl(hit);
+            return { url, item: hit, fallbacks: buildFallbackUrls(url, hit) };
+        }
         return null;
     }
     if (isLikelyUrl(input)) {
         const norm = normalizeUrl(input);
         const hit = STATE.urlMap.get(norm) || STATE.urlMap.get(normalizeUrl(stripQuery(norm)));
-        if (hit) return { url: resolveItemUrl(hit), item: hit };
+        if (hit) {
+            const url = resolveItemUrl(hit);
+            return { url, item: hit, fallbacks: buildFallbackUrls(url, hit) };
+        }
         const filename = normalizeKey(getFileNameFromUrl(norm));
         const byFile = filename ? STATE.fileMap.get(filename) : null;
-        if (byFile) return { url: resolveItemUrl(byFile), item: byFile };
-        return { url: input, direct: true };
+        if (byFile) {
+            const url = resolveItemUrl(byFile);
+            return { url, item: byFile, fallbacks: buildFallbackUrls(url, byFile) };
+        }
+        return { url: input, direct: true, fallbacks: [input] };
     }
     const key = normalizeKey(input);
     const map = STATE.maps[k];
     const hit = map.get(key);
-    if (hit) return { url: resolveItemUrl(hit), item: hit };
+    if (hit) {
+        const url = resolveItemUrl(hit);
+        return { url, item: hit, fallbacks: buildFallbackUrls(url, hit) };
+    }
     if (k === 'sticker') {
         const fallback = STATE.maps.image.get(key);
-        if (fallback) return { url: resolveItemUrl(fallback), item: fallback };
+        if (fallback) {
+            const url = resolveItemUrl(fallback);
+            return { url, item: fallback, fallbacks: buildFallbackUrls(url, fallback) };
+        }
     }
     return null;
 };

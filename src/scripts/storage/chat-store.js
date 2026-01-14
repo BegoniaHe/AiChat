@@ -4,6 +4,7 @@
 
 import { logger } from '../utils/logger.js';
 import { makeScopedKey, normalizeScopeId } from './store-scope.js';
+import { appSettings } from './app-settings.js';
 const MAX_PERSIST_MESSAGES_PER_SESSION = 400;
 const MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION = 600_000;
 const MAX_PERSIST_ARCHIVES_PER_SESSION = 6;
@@ -16,6 +17,15 @@ const MAX_RAW_ORIGINAL_AUTOLOAD = 5;
 
 const isDataUrl = s => typeof s === 'string' && s.startsWith('data:') && s.length > MAX_PERSIST_DATA_URL_CHARS;
 const isCreativeAssistant = msg => msg?.role === 'assistant' && msg?.meta?.renderRich;
+const DEFAULT_CHAT_BUBBLE_COLOR = '#c9c9c9';
+const DEFAULT_CHAT_TEXT_COLOR = '#1F2937';
+
+const getGlobalChatColorDefaults = () => {
+  const settings = appSettings.get();
+  const bubble = String(settings.chatDefaultBubbleColor || '').trim() || DEFAULT_CHAT_BUBBLE_COLOR;
+  const text = String(settings.chatDefaultTextColor || '').trim() || DEFAULT_CHAT_TEXT_COLOR;
+  return { bubbleColor: bubble, textColor: text };
+};
 
 const clampString = (value, max = MAX_PERSIST_STRING_CHARS) => {
   const s = String(value ?? '');
@@ -289,12 +299,16 @@ export class ChatStore {
 
   _ensureSession(id) {
     if (!this.state.sessions[id]) {
+      const defaults = getGlobalChatColorDefaults();
       this.state.sessions[id] = {
         messages: [],
         draft: '',
         pending: [],
         variables: {},
-        settings: {},
+        settings: {
+          bubbleColor: defaults.bubbleColor,
+          textColor: defaults.textColor,
+        },
         detachedSummaries: [],
         compactedSummary: null,
         compactedSummaryLastRaw: null,

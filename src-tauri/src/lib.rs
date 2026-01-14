@@ -22,6 +22,7 @@ pub fn run() {
             commands::save_kv,
             commands::load_kv,
             commands::ensure_media_bundle,
+            commands::save_wallpaper,
             commands::http_request,
             commands::log_js,
             commands::save_raw_reply,

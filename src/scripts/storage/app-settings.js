@@ -19,13 +19,12 @@ const defaults = {
   memoryUpdateApiMode: 'chat',
   memoryUpdateProfileId: '',
   memoryUpdateContextRounds: 6,
-  memoryMaxRows: 30,
-  memoryMaxTokens: 2000,
   memoryInjectPosition: 'template',
   memoryInjectDepth: 4,
-  memoryTokenMode: 'rough',
   memoryAutoConfirm: false,
   memoryAutoStepByStep: false,
+  chatDefaultBubbleColor: '#c9c9c9',
+  chatDefaultTextColor: '#1F2937',
 };
 
 const readSettings = () => {

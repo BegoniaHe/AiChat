@@ -24,12 +24,9 @@ export class GeneralSettingsPanel {
     this.memoryUpdateApiBlock = null;
     this.memoryUpdateContextInput = null;
     this.memoryBudgetBlock = null;
-    this.memoryMaxRowsInput = null;
-    this.memoryMaxTokensInput = null;
     this.memoryInjectPositionSelect = null;
     this.memoryInjectDepthWrap = null;
     this.memoryInjectDepthInput = null;
-    this.memoryTokenModeSelect = null;
     this.memoryAutoConfirmToggle = null;
     this.memoryAutoStepToggle = null;
     this.configManager = new ConfigManager();
@@ -100,16 +97,6 @@ export class GeneralSettingsPanel {
     if (this.memoryAutoStepToggle) {
       this.memoryAutoStepToggle.checked = settings.memoryAutoStepByStep === true;
     }
-    if (this.memoryMaxRowsInput) {
-      const raw = Math.trunc(Number(settings.memoryMaxRows));
-      const safe = Number.isFinite(raw) ? Math.min(100, Math.max(10, raw)) : 30;
-      this.memoryMaxRowsInput.value = String(safe);
-    }
-    if (this.memoryMaxTokensInput) {
-      const raw = Math.trunc(Number(settings.memoryMaxTokens));
-      const safe = Number.isFinite(raw) ? Math.min(5000, Math.max(500, raw)) : 2000;
-      this.memoryMaxTokensInput.value = String(safe);
-    }
     if (this.memoryInjectPositionSelect) {
       const raw = String(settings.memoryInjectPosition || 'template').toLowerCase();
       const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat', 'history_depth', 'system_end+before_chat']);
@@ -119,11 +106,6 @@ export class GeneralSettingsPanel {
       const raw = Math.trunc(Number(settings.memoryInjectDepth));
       const safe = Number.isFinite(raw) ? Math.max(0, raw) : 4;
       this.memoryInjectDepthInput.value = String(safe);
-    }
-    if (this.memoryTokenModeSelect) {
-      const raw = String(settings.memoryTokenMode || 'rough').toLowerCase();
-      const allowed = new Set(['rough', 'strict']);
-      this.memoryTokenModeSelect.value = allowed.has(raw) ? raw : 'rough';
     }
     this.refreshMemoryUpdateProfiles().catch(() => {});
     this.updateMemoryAutoVisibility();
@@ -180,17 +162,8 @@ export class GeneralSettingsPanel {
     if (this.memoryBudgetBlock) {
       this.memoryBudgetBlock.style.display = showMemoryTable ? 'block' : 'none';
     }
-    if (this.memoryMaxRowsInput) {
-      this.memoryMaxRowsInput.disabled = !showMemoryTable;
-    }
-    if (this.memoryMaxTokensInput) {
-      this.memoryMaxTokensInput.disabled = !showMemoryTable;
-    }
     if (this.memoryInjectPositionSelect) {
       this.memoryInjectPositionSelect.disabled = !showMemoryTable;
-    }
-    if (this.memoryTokenModeSelect) {
-      this.memoryTokenModeSelect.disabled = !showMemoryTable;
     }
     const position = String(settings.memoryInjectPosition || 'template').toLowerCase();
     const showDepth = showMemoryTable && position === 'history_depth';
@@ -442,12 +415,9 @@ export class GeneralSettingsPanel {
     this.memoryUpdateApiBlock = this.element.querySelector('#general-memory-update-api');
     this.memoryUpdateContextInput = this.element.querySelector('#general-memory-update-context-rounds');
     this.memoryBudgetBlock = this.element.querySelector('#general-memory-budget-block');
-    this.memoryMaxRowsInput = this.element.querySelector('#general-memory-max-rows');
-    this.memoryMaxTokensInput = this.element.querySelector('#general-memory-max-tokens');
     this.memoryInjectPositionSelect = this.element.querySelector('#general-memory-inject-position');
     this.memoryInjectDepthWrap = this.element.querySelector('#general-memory-inject-depth-wrap');
     this.memoryInjectDepthInput = this.element.querySelector('#general-memory-inject-depth');
-    this.memoryTokenModeSelect = this.element.querySelector('#general-memory-token-mode');
     this.memoryAutoConfirmToggle = this.element.querySelector('#general-memory-auto-confirm');
     this.memoryAutoStepToggle = this.element.querySelector('#general-memory-auto-step');
     this.debugToggle?.addEventListener('change', async (e) => {
@@ -579,20 +549,6 @@ export class GeneralSettingsPanel {
       appSettings.update({ memoryAutoStepByStep: enabled });
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoStepByStep', value: enabled } }));
     });
-    this.memoryMaxRowsInput?.addEventListener('input', (e) => {
-      const raw = Math.trunc(Number(e?.target?.value));
-      const safe = Number.isFinite(raw) ? Math.min(100, Math.max(10, raw)) : 30;
-      if (e?.target) e.target.value = String(safe);
-      appSettings.update({ memoryMaxRows: safe });
-      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryMaxRows', value: safe } }));
-    });
-    this.memoryMaxTokensInput?.addEventListener('input', (e) => {
-      const raw = Math.trunc(Number(e?.target?.value));
-      const safe = Number.isFinite(raw) ? Math.min(5000, Math.max(500, raw)) : 2000;
-      if (e?.target) e.target.value = String(safe);
-      appSettings.update({ memoryMaxTokens: safe });
-      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryMaxTokens', value: safe } }));
-    });
     this.memoryInjectPositionSelect?.addEventListener('change', (e) => {
       const raw = String(e?.target?.value || 'template').toLowerCase();
       const allowed = new Set(['template', 'after_persona', 'system_end', 'before_chat', 'history_depth', 'system_end+before_chat']);
@@ -607,13 +563,6 @@ export class GeneralSettingsPanel {
       if (e?.target) e.target.value = String(safe);
       appSettings.update({ memoryInjectDepth: safe });
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryInjectDepth', value: safe } }));
-    });
-    this.memoryTokenModeSelect?.addEventListener('change', (e) => {
-      const raw = String(e?.target?.value || 'rough').toLowerCase();
-      const allowed = new Set(['rough', 'strict']);
-      const next = allowed.has(raw) ? raw : 'rough';
-      appSettings.update({ memoryTokenMode: next });
-      window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryTokenMode', value: next } }));
     });
     this.memoryModeTable?.addEventListener('change', (e) => {
       const target = e?.target;

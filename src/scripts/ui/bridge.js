@@ -330,6 +330,7 @@ class AppBridge {
     const position = positions.join('+');
 
     const tables = Array.isArray(template?.tables) ? template.tables : [];
+    const tableByIdAll = new Map();
     const tableById = new Map();
     const tableOrder = [];
     const allowSummaryTables = updateMode === 'summary' || updateMode === 'full';
@@ -340,10 +341,20 @@ class AppBridge {
       if (!isSummary && !allowStandardTables) return false;
       return true;
     };
+    const matchesScope = (table) => {
+      const scopeRaw = String(table?.scope || '').trim().toLowerCase();
+      if (!scopeRaw) return true;
+      if (scopeRaw === 'global') return true;
+      if (scopeRaw === 'group') return isGroup;
+      if (scopeRaw === 'contact') return !isGroup;
+      return true;
+    };
     tables.forEach(t => {
       const id = String(t?.id || '').trim();
       if (!id) return;
+      tableByIdAll.set(id, t);
       if (!shouldIncludeTable(id)) return;
+      if (!matchesScope(t)) return;
       tableById.set(id, t);
       tableOrder.push(id);
     });
@@ -353,7 +364,7 @@ class AppBridge {
     const tokenBudgetSafety = Number.isFinite(maxTokens)
       ? Math.max(0, Math.floor(maxTokens * DEFAULT_MEMORY_BUDGET.safetyRatio))
       : maxTokens;
-    const tokenMode = normalizeTokenMode(context?.meta?.memoryTokenMode);
+    const tokenMode = 'rough';
     const injectDepthRaw = Math.trunc(Number(context?.meta?.memoryInjectDepth));
     const injectDepth = Number.isFinite(injectDepthRaw) ? Math.max(0, injectDepthRaw) : 4;
 
@@ -367,12 +378,12 @@ class AppBridge {
         });
       }
       if (updateMode === 'summary') {
-        lines.push('本轮仅允许更新“摘要/大总结/总体大纲”类表格，其他表格禁止写入。');
+        lines.push('本轮仅允许更新“摘要/总体大纲”类表格，其他表格禁止写入。');
       } else if (updateMode === 'standard') {
-        lines.push('本轮仅允许更新非摘要类表格，摘要/大总结/总体大纲类表格禁止写入。');
+        lines.push('本轮仅允许更新非摘要类表格，摘要/总体大纲类表格禁止写入。');
       }
       if (tableOrder.some(tableId => isSummaryTableId(tableId))) {
-        lines.push('摘要/大总结/总体大纲表格只允许 insert；禁止 update/delete。');
+        lines.push('摘要/总体大纲表格只允许 insert；禁止 update/delete。');
       }
       lines.push('需要更新记忆表格时，在回复末尾输出 <tableEdit>...</tableEdit>，每行一个 JSON（允许 insert/update/delete: 前缀）。');
       lines.push('insert: {"action":"insert","table_id":"relationship","data":{"relation":"朋友"}}');
@@ -470,7 +481,7 @@ class AppBridge {
       const summaryTable = tableById.get(summaryTableId);
       if (summaryTable) {
         const summaryLabel = String(summaryTable?.name || summaryTableId).trim() || summaryTableId;
-        hints.push(`本轮必须新增${summaryLabel}（摘要栏位需使用“【摘要】...【大总结】...”分隔；仅使用 insert）。`);
+        hints.push(`本轮必须新增${summaryLabel}（摘要栏位使用“【摘要】...”格式；仅使用 insert）。`);
       }
       const outlineTableId = isGroup ? 'group_outline' : 'chat_outline';
       const outlineTable = tableById.get(outlineTableId);
@@ -502,9 +513,10 @@ class AppBridge {
       return promptText;
     };
 
+    const activeTableIds = new Set(tableOrder);
     const rows = [...(Array.isArray(globalRows) ? globalRows : []), ...(Array.isArray(scopedRows) ? scopedRows : [])]
       .filter(row => row && row.is_active !== false)
-      .filter(row => shouldIncludeTable(String(row?.table_id || '').trim()));
+      .filter(row => activeTableIds.has(String(row?.table_id || '').trim()));
     const resolveRowSortKey = (row, fallback = 0) => {
       const updatedAt = Number(row?.updated_at);
       if (Number.isFinite(updatedAt) && updatedAt > 0) return updatedAt;
@@ -593,7 +605,7 @@ class AppBridge {
         const contactId = sessionId;
         const groups = this.contactsStore?.listGroups?.() || [];
         const memberGroups = groups.filter(g => Array.isArray(g?.members) && g.members.includes(contactId));
-        const outlineTable = tableById.get('group_outline');
+        const outlineTable = tableByIdAll.get('group_outline');
         if (outlineTable && memberGroups.length) {
           if (!pushLine('【跨会话参考｜群聊大纲】')) return { text: '', tokens: used };
           pushLine('（仅供当前私聊参考，不在本会话记忆表格中更新）');
@@ -649,7 +661,7 @@ class AppBridge {
               rowsByTable.get(tableId).push(row);
             });
             for (const [tableId, tableRows] of rowsByTable.entries()) {
-              const table = tableById.get(tableId);
+              const table = tableByIdAll.get(tableId);
               if (!table) continue;
               const label = String(table?.name || tableId).trim() || tableId;
               const header = autoExtract ? `【${label}｜${tableId}】` : `【${label}】`;

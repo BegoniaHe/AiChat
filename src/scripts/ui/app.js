@@ -118,6 +118,7 @@ const initApp = async () => {
   const memoryTemplatePanel = new MemoryTemplatePanel({ templateStore: memoryTemplateStore, memoryStore: memoryTableStore });
   const personaStore = new PersonaStore();
   let activePersonaScopeKey = '';
+  let chatRoom = null;
   const getPersonaScopeKey = (personaId) => {
     const settings = appSettings.get();
     if (settings.personaBindContacts === false) return '';
@@ -298,6 +299,26 @@ const initApp = async () => {
     return personaStore.getActive();
   };
 
+  const DEFAULT_USER_BUBBLE_COLOR = '#E8F0FE';
+
+  const normalizeHexColor = (value, fallback) => {
+    const raw = String(value || '').trim();
+    return /^#[0-9A-F]{6}$/i.test(raw) ? raw : fallback;
+  };
+
+  const getUserBubbleColor = (sessionId = chatStore.getCurrent()) => {
+    const p = getEffectivePersona(sessionId);
+    return normalizeHexColor(p?.userBubbleColor, DEFAULT_USER_BUBBLE_COLOR);
+  };
+
+  const applyUserBubbleColor = (sessionId = chatStore.getCurrent()) => {
+    if (!chatRoom) return;
+    const currentId = String(chatStore.getCurrent() || '');
+    const sid = String(sessionId || '');
+    if (!sid || sid !== currentId) return;
+    chatRoom.style.setProperty('--chat-user-bubble-color', getUserBubbleColor(sessionId));
+  };
+
   const syncUserPersonaUI = (sessionId = chatStore.getCurrent()) => {
     const p = getEffectivePersona(sessionId);
     const url = p.avatar || './assets/external/feather-default.png';
@@ -308,6 +329,7 @@ const initApp = async () => {
     try {
       momentsPanel?.setUserAvatar?.(url);
     } catch {}
+    applyUserBubbleColor(sessionId);
   };
 
   const applyPersonaScope = async ({ personaId = null, force = false } = {}) => {
@@ -1961,9 +1983,11 @@ ${listPart || '-（无）'}
     moments: document.getElementById('moments-page'),
   };
   const chatList = document.getElementById('chat-list');
-  const chatRoom = document.getElementById('chat-room');
+  chatRoom = document.getElementById('chat-room');
   const composerInput = document.getElementById('composer-input');
   const stickerToggleBtn = document.querySelector('.voice-btn');
+  let chatSettingsReady = false;
+  let pendingChatSettingsSessionId = '';
   let pendingFloatActive = null;
   const pendingFloat = (() => {
     if (!chatRoom) return null;
@@ -2583,9 +2607,20 @@ ${listPart || '-（无）'}
   const bubbleColorPicker = document.getElementById('bubble-color');
   const textColorInput = document.getElementById('text-color-input');
   const textColorPicker = document.getElementById('text-color');
-  const chatBgInput = document.getElementById('chat-bg');
+  const chatWallpaperFile = document.getElementById('chat-wallpaper-file');
+  const chatWallpaperDrop = document.getElementById('chat-wallpaper-drop');
+  const chatWallpaperStatus = document.getElementById('wallpaper-status');
+  const wallpaperPreview = document.getElementById('wallpaper-preview');
+  const wallpaperPreviewImage = document.getElementById('wallpaper-preview-image');
+  const wallpaperZoomInput = document.getElementById('wallpaper-zoom');
+  const wallpaperRotateInput = document.getElementById('wallpaper-rotate');
+  const wallpaperFitBtn = document.getElementById('wallpaper-fit-btn');
+  const wallpaperResetBtn = document.getElementById('wallpaper-reset-btn');
+  const wallpaperClearBtn = document.getElementById('wallpaper-clear-btn');
+  const chatSettingScopeRadios = Array.from(document.querySelectorAll('input[name="chat-setting-scope"]'));
   const chatSettingPreview = document.getElementById('chat-setting-preview');
   const randomSettingBtn = document.getElementById('random-setting-btn');
+  const restoreSettingBtn = document.getElementById('restore-setting-btn');
   const saveSettingBtn = document.getElementById('save-setting-btn');
   const cancelSettingBtn = document.getElementById('cancel-setting-btn');
 
@@ -2988,6 +3023,16 @@ ${listPart || '-（无）'}
     chatStore.switchSession(sessionId);
     window.appBridge.setActiveSession(sessionId);
     syncUserPersonaUI(sessionId);
+    if (chatSettingsReady) {
+      try {
+        const sessionSettings = normalizeChatSettings(chatStore.getSessionSettings(sessionId) || {});
+        applyChatSettings(sessionId, sessionSettings);
+      } catch (err) {
+        logger.warn('应用会话聊天设置失败', err);
+      }
+    } else {
+      pendingChatSettingsSessionId = sessionId;
+    }
     // 加载历史
     const history = chatStore.getMessages(sessionId);
     const PAGE = 90;
@@ -3060,6 +3105,7 @@ ${listPart || '-（无）'}
     chatList?.classList.remove('hidden');
     setStickerPanelOpen(false);
     setActionPanelOpen(false);
+    scheduleWallpaperIdle();
 
     // 恢复显示消息界面顶部和底部导航栏
     const messageTopbar = document.getElementById('message-topbar');
@@ -4510,13 +4556,22 @@ ${listPart || '-（无）'}
           skipped += 1;
           continue;
         }
-        if (action.action === 'insert') {
+        if (action.action === 'insert' || action.action === 'init') {
           const data = normalizeTableRowData(action.data, table.columns || []);
           if (!Object.keys(data).length) {
             skipped += 1;
             continue;
           }
-          queueInsert(tableId, table, scopeKey, contactId, groupId, data, { allowDuplicate: isSummaryTable });
+          if (action.action === 'init') {
+            const countKey = `${tableId}:${scopeKey}`;
+            const existingRows = rowsByTableScope.get(countKey) || [];
+            if (existingRows.length) {
+              skipped += 1;
+              continue;
+            }
+          }
+          const allowDuplicate = isSummaryTable && action.action === 'insert';
+          queueInsert(tableId, table, scopeKey, contactId, groupId, data, { allowDuplicate });
         } else if (action.action === 'update') {
           const data = normalizeTableRowData(action.data, table.columns || []);
           if (!Object.keys(data).length) {
@@ -6785,11 +6840,477 @@ ${listPart || '-（无）'}
   }
 
   /* ---------------- 聊天设置功能 ---------------- */
+  const ORIGINAL_CHAT_DEFAULTS = {
+    bubbleColor: '#c9c9c9',
+    textColor: '#1F2937',
+  };
+  const getGlobalChatDefaults = () => {
+    const settings = appSettings.get();
+    const bubble = String(settings.chatDefaultBubbleColor || '').trim() || ORIGINAL_CHAT_DEFAULTS.bubbleColor;
+    const text = String(settings.chatDefaultTextColor || '').trim() || ORIGINAL_CHAT_DEFAULTS.textColor;
+    return { bubbleColor: bubble, textColor: text };
+  };
+
+  const getChatSettingDefaults = () => {
+    const globalDefaults = getGlobalChatDefaults();
+    return { ...globalDefaults, wallpaper: null };
+  };
+
+  const wallpaperState = {
+    mode: 'keep',
+    sessionId: '',
+    fileName: '',
+    fileDataUrl: '',
+    previewUrl: '',
+    zoom: 1,
+    rotate: 0,
+    offsetX: 0,
+    offsetY: 0,
+    width: 0,
+    height: 0,
+    dirtyTransform: false,
+    initial: null,
+    current: null,
+    dragging: false,
+    dragStart: null,
+  };
+
+  const getConvertFileSrc = () => {
+    const g = typeof globalThis !== 'undefined' ? globalThis : window;
+    return g?.__TAURI__?.core?.convertFileSrc
+      || g?.__TAURI__?.convertFileSrc
+      || g?.__TAURI_INTERNALS__?.convertFileSrc;
+  };
+
+  const resolveWallpaperUrl = (wallpaper) => {
+    if (!wallpaper) return '';
+    if (wallpaper.url) return String(wallpaper.url || '').trim();
+    if (wallpaper.dataUrl) return String(wallpaper.dataUrl || '').trim();
+    if (wallpaper.path) {
+      const convert = getConvertFileSrc();
+      const raw = String(wallpaper.path || '').trim();
+      if (!raw) return '';
+      return typeof convert === 'function' ? convert(raw) : raw;
+    }
+    return '';
+  };
+
+  const ensureChatWallpaperLayer = () => {
+    if (!chatRoom) return null;
+    let layer = chatRoom.querySelector('.chat-wallpaper-layer');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'chat-wallpaper-layer is-hidden';
+      const img = document.createElement('img');
+      img.className = 'chat-wallpaper-image';
+      img.alt = '';
+      layer.appendChild(img);
+      chatRoom.insertBefore(layer, chatRoom.firstChild);
+    }
+    return { layer, img: layer.querySelector('img') };
+  };
+
+  let activeWallpaperMeta = null;
+  let activeWallpaperUrl = '';
+  const WALLPAPER_IDLE_TIMEOUT_MS = 120000;
+  let wallpaperIdleTimer = null;
+  let lastWallpaperActivityAt = 0;
+
+  const hasActiveWallpaper = () => Boolean(activeWallpaperUrl);
+
+  const clearWallpaperIdle = () => {
+    if (!chatRoom) return;
+    chatRoom.classList.remove('wallpaper-idle');
+  };
+
+  const scheduleWallpaperIdle = () => {
+    if (wallpaperIdleTimer) clearTimeout(wallpaperIdleTimer);
+    wallpaperIdleTimer = null;
+    if (!isChatRoomVisible() || !hasActiveWallpaper()) {
+      clearWallpaperIdle();
+      return;
+    }
+    wallpaperIdleTimer = setTimeout(() => {
+      if (!isChatRoomVisible() || !hasActiveWallpaper()) return;
+      chatRoom?.classList.add('wallpaper-idle');
+    }, WALLPAPER_IDLE_TIMEOUT_MS);
+  };
+
+  const registerWallpaperActivity = ({ force = false } = {}) => {
+    const now = Date.now();
+    if (!force && now - lastWallpaperActivityAt < 200) return;
+    lastWallpaperActivityAt = now;
+    if (!isChatRoomVisible()) return;
+    if (chatRoom?.classList.contains('wallpaper-idle')) {
+      chatRoom.classList.remove('wallpaper-idle');
+    }
+    scheduleWallpaperIdle();
+  };
+
+  const applyWallpaperTransform = (imgEl, containerEl, meta) => {
+    if (!imgEl || !containerEl || !meta) return;
+    const rect = containerEl.getBoundingClientRect();
+    const cw = rect.width || containerEl.clientWidth || 0;
+    const ch = rect.height || containerEl.clientHeight || 0;
+    const iw = Number(meta.width || imgEl.naturalWidth || 0);
+    const ih = Number(meta.height || imgEl.naturalHeight || 0);
+    if (!cw || !ch || !iw || !ih) return;
+    const baseScale = Math.max(cw / iw, ch / ih);
+    const zoom = Number(meta.zoom || 1);
+    const rotate = Number(meta.rotate || 0);
+    const offsetX = Number(meta.offsetX || 0) * cw;
+    const offsetY = Number(meta.offsetY || 0) * ch;
+    imgEl.style.transform = `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px) rotate(${rotate}deg) scale(${baseScale * zoom})`;
+  };
+
+  const applyWallpaperToChatRoom = (settings) => {
+    if (!chatRoom) return;
+    const layerInfo = ensureChatWallpaperLayer();
+    if (!layerInfo) return;
+    const { layer, img } = layerInfo;
+    const meta = settings?.wallpaper || null;
+    const url = resolveWallpaperUrl(meta);
+    activeWallpaperMeta = meta;
+    activeWallpaperUrl = url;
+    if (!url || !img) {
+      layer?.classList.add('is-hidden');
+      if (img) img.removeAttribute('src');
+      scheduleWallpaperIdle();
+      return;
+    }
+    layer?.classList.remove('is-hidden');
+    if (img.src !== url) img.src = url;
+    img.onload = () => applyWallpaperTransform(img, chatRoom, meta);
+    if (img.complete) applyWallpaperTransform(img, chatRoom, meta);
+    scheduleWallpaperIdle();
+  };
+
+  window.addEventListener('resize', () => {
+    if (!activeWallpaperMeta) return;
+    const layerInfo = ensureChatWallpaperLayer();
+    if (!layerInfo?.img) return;
+    if (activeWallpaperUrl && layerInfo.img.src !== activeWallpaperUrl) {
+      layerInfo.img.src = activeWallpaperUrl;
+    }
+    applyWallpaperTransform(layerInfo.img, chatRoom, activeWallpaperMeta);
+  });
+
+  const normalizeChatSettings = (raw) => {
+    const base = { ...getChatSettingDefaults(), ...(raw || {}) };
+    if (raw?.wallpaper && typeof raw.wallpaper === 'object') {
+      base.wallpaper = { ...raw.wallpaper };
+      return base;
+    }
+    const legacy = String(raw?.chatBg || '').trim();
+    if (legacy) {
+      base.wallpaper = {
+        url: legacy,
+        zoom: 1,
+        rotate: 0,
+        offsetX: 0,
+        offsetY: 0,
+      };
+      return base;
+    }
+    base.wallpaper = null;
+    return base;
+  };
+
+  const syncWallpaperPreviewAspect = () => {
+    if (!wallpaperPreview) return;
+    const rect = chatRoom?.getBoundingClientRect?.() || { width: 360, height: 640 };
+    const w = Math.max(1, Math.round(rect.width || 360));
+    const h = Math.max(1, Math.round(rect.height || 640));
+    wallpaperPreview.style.setProperty('--wallpaper-aspect', `${w} / ${h}`);
+  };
+
+  const updateWallpaperStatus = (text) => {
+    if (!chatWallpaperStatus) return;
+    chatWallpaperStatus.textContent = text || '未设置壁纸';
+  };
+
+  const applyWallpaperPreviewTransform = () => {
+    if (!wallpaperPreview || !wallpaperPreviewImage) return;
+    if (!wallpaperState.previewUrl) return;
+    const rect = wallpaperPreview.getBoundingClientRect();
+    const cw = rect.width || 0;
+    const ch = rect.height || 0;
+    const iw = wallpaperState.width || wallpaperPreviewImage.naturalWidth || 0;
+    const ih = wallpaperState.height || wallpaperPreviewImage.naturalHeight || 0;
+    if (!cw || !ch || !iw || !ih) return;
+    const baseScale = Math.max(cw / iw, ch / ih);
+    const offsetX = wallpaperState.offsetX * cw;
+    const offsetY = wallpaperState.offsetY * ch;
+    const scale = baseScale * wallpaperState.zoom;
+    wallpaperPreviewImage.style.transform = `translate(-50%, -50%) translate(${offsetX}px, ${offsetY}px) rotate(${wallpaperState.rotate}deg) scale(${scale})`;
+  };
+
+  const setWallpaperPreviewSource = (url, name = '') => {
+    if (!wallpaperPreviewImage) return;
+    wallpaperState.previewUrl = url || '';
+    wallpaperPreviewImage.src = url || '';
+    wallpaperPreviewImage.style.opacity = url ? '1' : '0';
+    updateWallpaperStatus(url ? (name || '已设置壁纸') : '未设置壁纸');
+    if (!url) {
+      wallpaperPreviewImage.style.transform = 'translate(-50%, -50%)';
+      wallpaperState.width = 0;
+      wallpaperState.height = 0;
+      return;
+    }
+    wallpaperPreviewImage.onload = () => {
+      wallpaperState.width = wallpaperPreviewImage.naturalWidth || 0;
+      wallpaperState.height = wallpaperPreviewImage.naturalHeight || 0;
+      applyWallpaperPreviewTransform();
+    };
+    if (wallpaperPreviewImage.complete) {
+      wallpaperState.width = wallpaperPreviewImage.naturalWidth || 0;
+      wallpaperState.height = wallpaperPreviewImage.naturalHeight || 0;
+      applyWallpaperPreviewTransform();
+    }
+  };
+
+  const resetWallpaperState = (next = {}) => {
+    wallpaperState.mode = next.mode || 'keep';
+    wallpaperState.fileName = next.fileName || '';
+    wallpaperState.fileDataUrl = next.fileDataUrl || '';
+    wallpaperState.previewUrl = next.previewUrl || '';
+    wallpaperState.zoom = Number(next.zoom || 1);
+    wallpaperState.rotate = Number(next.rotate || 0);
+    wallpaperState.offsetX = Number(next.offsetX || 0);
+    wallpaperState.offsetY = Number(next.offsetY || 0);
+    wallpaperState.width = Number(next.width || 0);
+    wallpaperState.height = Number(next.height || 0);
+    wallpaperState.dirtyTransform = Boolean(next.dirtyTransform);
+    wallpaperState.current = next.current || null;
+    wallpaperState.initial = next.initial || null;
+  };
+
+  const loadWallpaperEditor = (sessionId, settings) => {
+    wallpaperState.sessionId = sessionId;
+    const current = settings?.wallpaper || null;
+    const url = resolveWallpaperUrl(current);
+    const init = {
+      mode: 'keep',
+      fileName: '',
+      fileDataUrl: '',
+      previewUrl: url,
+      zoom: Number(current?.zoom || 1),
+      rotate: Number(current?.rotate || 0),
+      offsetX: Number(current?.offsetX || 0),
+      offsetY: Number(current?.offsetY || 0),
+      width: Number(current?.width || 0),
+      height: Number(current?.height || 0),
+      dirtyTransform: false,
+      current,
+    };
+    init.initial = { ...init };
+    resetWallpaperState(init);
+    if (wallpaperZoomInput) wallpaperZoomInput.value = String(wallpaperState.zoom || 1);
+    if (wallpaperRotateInput) wallpaperRotateInput.value = String(wallpaperState.rotate || 0);
+    setWallpaperPreviewSource(url, current?.name || '');
+  };
+
+  const markWallpaperDirty = () => {
+    wallpaperState.dirtyTransform = true;
+  };
+
+  const handleWallpaperDragStart = (event) => {
+    if (!wallpaperPreview || !wallpaperPreviewImage || !wallpaperState.previewUrl) return;
+    wallpaperState.dragging = true;
+    wallpaperState.dragStart = {
+      x: event.clientX,
+      y: event.clientY,
+      offsetX: wallpaperState.offsetX,
+      offsetY: wallpaperState.offsetY,
+    };
+    wallpaperPreview.classList.add('is-dragging');
+    wallpaperPreview.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleWallpaperDragMove = (event) => {
+    if (!wallpaperState.dragging || !wallpaperPreview) return;
+    const rect = wallpaperPreview.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dx = (event.clientX - wallpaperState.dragStart.x) / rect.width;
+    const dy = (event.clientY - wallpaperState.dragStart.y) / rect.height;
+    wallpaperState.offsetX = wallpaperState.dragStart.offsetX + dx;
+    wallpaperState.offsetY = wallpaperState.dragStart.offsetY + dy;
+    markWallpaperDirty();
+    applyWallpaperPreviewTransform();
+  };
+
+  const handleWallpaperDragEnd = (event) => {
+    if (!wallpaperState.dragging) return;
+    wallpaperState.dragging = false;
+    wallpaperPreview?.classList.remove('is-dragging');
+    wallpaperPreview?.releasePointerCapture?.(event.pointerId);
+  };
+
+  const pickWallpaperFile = async (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const init = {
+        mode: 'new',
+        fileName: file.name || 'wallpaper',
+        fileDataUrl: dataUrl,
+        previewUrl: dataUrl,
+        zoom: 1,
+        rotate: 0,
+        offsetX: 0,
+        offsetY: 0,
+        dirtyTransform: true,
+        current: null,
+      };
+      init.initial = { ...init };
+      resetWallpaperState(init);
+      if (wallpaperZoomInput) wallpaperZoomInput.value = '1';
+      if (wallpaperRotateInput) wallpaperRotateInput.value = '0';
+      setWallpaperPreviewSource(dataUrl, file.name || '');
+    };
+    reader.onerror = () => {
+      window.toastr?.error?.('读取壁纸失败');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const updateWallpaperControls = () => {
+    if (wallpaperZoomInput) wallpaperZoomInput.value = String(wallpaperState.zoom || 1);
+    if (wallpaperRotateInput) wallpaperRotateInput.value = String(wallpaperState.rotate || 0);
+    applyWallpaperPreviewTransform();
+  };
+
+  const clearWallpaperSelection = () => {
+    resetWallpaperState({
+      mode: 'clear',
+      fileName: '',
+      fileDataUrl: '',
+      previewUrl: '',
+      zoom: 1,
+      rotate: 0,
+      offsetX: 0,
+      offsetY: 0,
+      dirtyTransform: true,
+      current: null,
+    });
+    if (wallpaperZoomInput) wallpaperZoomInput.value = '1';
+    if (wallpaperRotateInput) wallpaperRotateInput.value = '0';
+    setWallpaperPreviewSource('', '');
+  };
+
+  const restoreWallpaperInitial = () => {
+    if (!wallpaperState.initial) return;
+    const init = wallpaperState.initial;
+    resetWallpaperState(init);
+    updateWallpaperControls();
+    setWallpaperPreviewSource(init.previewUrl, init.current?.name || '');
+  };
+
+  function applyChatSettings(sessionId, settings) {
+    if (!chatRoom) return;
+    const currentId = String(chatStore.getCurrent() || '');
+    const sid = String(sessionId || '');
+    if (!sid || sid !== currentId) return;
+    chatRoom.dataset.session = sid;
+    if (settings?.bubbleColor) {
+      chatRoom.style.setProperty('--chat-bubble-color', settings.bubbleColor);
+    } else {
+      chatRoom.style.removeProperty('--chat-bubble-color');
+    }
+    if (settings?.textColor) {
+      chatRoom.style.setProperty('--chat-text-color', settings.textColor);
+    } else {
+      chatRoom.style.removeProperty('--chat-text-color');
+    }
+    applyUserBubbleColor(sessionId);
+    applyWallpaperToChatRoom(settings);
+  }
+
+  const persistWallpaperIfNeeded = async (sessionId, baseSettings) => {
+    const existing = baseSettings?.wallpaper || null;
+    if (wallpaperState.mode === 'clear') {
+      return { cleared: true };
+    }
+    if (wallpaperState.mode === 'new') {
+      if (!wallpaperState.fileDataUrl) return {};
+      try {
+        const resp = await safeInvoke('save_wallpaper', {
+          session_id: sessionId,
+          data_url: wallpaperState.fileDataUrl,
+          file_name: wallpaperState.fileName || '',
+          previous_path: existing?.path || '',
+        });
+        if (resp?.path) {
+          return {
+            wallpaper: {
+              path: resp.path,
+              name: wallpaperState.fileName || '',
+              zoom: wallpaperState.zoom,
+              rotate: wallpaperState.rotate,
+              offsetX: wallpaperState.offsetX,
+              offsetY: wallpaperState.offsetY,
+              width: wallpaperState.width,
+              height: wallpaperState.height,
+              updatedAt: Date.now(),
+            },
+          };
+        }
+      } catch (err) {
+        logger.warn('保存壁纸失败', err);
+      }
+      return {
+        wallpaper: {
+          url: wallpaperState.fileDataUrl,
+          name: wallpaperState.fileName || '',
+          zoom: wallpaperState.zoom,
+          rotate: wallpaperState.rotate,
+          offsetX: wallpaperState.offsetX,
+          offsetY: wallpaperState.offsetY,
+          width: wallpaperState.width,
+          height: wallpaperState.height,
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    if (existing) {
+      if (!wallpaperState.dirtyTransform) return { wallpaper: existing };
+      return {
+        wallpaper: {
+          ...existing,
+          zoom: wallpaperState.zoom,
+          rotate: wallpaperState.rotate,
+          offsetX: wallpaperState.offsetX,
+          offsetY: wallpaperState.offsetY,
+          width: wallpaperState.width || existing.width,
+          height: wallpaperState.height || existing.height,
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    return {};
+  };
+
+  const getChatSettingScope = () => {
+    const picked = chatSettingScopeRadios.find(r => r.checked);
+    const value = String(picked?.value || 'current').trim();
+    return value === 'all' ? 'all' : 'current';
+  };
+
+  const setChatSettingScope = (value = 'current') => {
+    const target = value === 'all' ? 'all' : 'current';
+    chatSettingScopeRadios.forEach(radio => {
+      radio.checked = radio.value === target;
+    });
+  };
+
   function openChatSettings() {
     const sessionId = chatStore.getCurrent();
+    syncWallpaperPreviewAspect();
     loadChatSettings(sessionId);
     chatSettingsOverlay.style.display = 'block';
     chatSettingsModal.style.display = 'block';
+    requestAnimationFrame(() => applyWallpaperPreviewTransform());
     hideMenus();
   }
 
@@ -6799,63 +7320,68 @@ ${listPart || '-（无）'}
   }
 
   function loadChatSettings(sessionId) {
-    const settings = chatStore.getSessionSettings(sessionId) || {
-      bubbleColor: '#44639d',
-      textColor: '#FFFFFF',
-      chatBg: '',
-    };
-
+    const raw = chatStore.getSessionSettings(sessionId) || {};
+    const settings = normalizeChatSettings(raw);
+    setChatSettingScope('current');
     bubbleColorInput.value = settings.bubbleColor;
     bubbleColorPicker.value = settings.bubbleColor;
     textColorInput.value = settings.textColor;
     textColorPicker.value = settings.textColor;
-    chatBgInput.value = settings.chatBg || '';
-
     updatePreview(settings.bubbleColor, settings.textColor);
+    loadWallpaperEditor(sessionId, settings);
   }
 
-  function saveChatSettings() {
+  async function saveChatSettings() {
     const sessionId = chatStore.getCurrent();
+    const scope = getChatSettingScope();
+    const base = normalizeChatSettings(chatStore.getSessionSettings(sessionId) || {});
     const settings = {
+      ...base,
       bubbleColor: bubbleColorInput.value,
       textColor: textColorInput.value,
-      chatBg: chatBgInput.value,
     };
 
+    const wallpaperResult = await persistWallpaperIfNeeded(sessionId, base);
+    if (wallpaperResult?.cleared) {
+      settings.wallpaper = null;
+      delete settings.chatBg;
+    } else if (wallpaperResult?.wallpaper) {
+      settings.wallpaper = wallpaperResult.wallpaper;
+      delete settings.chatBg;
+    }
+
     chatStore.setSessionSettings(sessionId, settings);
+    if (scope === 'all') {
+      appSettings.update({
+        chatDefaultBubbleColor: settings.bubbleColor,
+        chatDefaultTextColor: settings.textColor,
+      });
+      const sessionIds = chatStore.listSessions();
+      sessionIds.forEach((sid) => {
+        if (sid === sessionId) return;
+        const existing = normalizeChatSettings(chatStore.getSessionSettings(sid) || {});
+        const next = {
+          ...existing,
+          bubbleColor: settings.bubbleColor,
+          textColor: settings.textColor,
+        };
+        chatStore.setSessionSettings(sid, next);
+      });
+    }
     applyChatSettings(sessionId, settings);
     window.toastr?.success('设置已保存');
     closeChatSettings();
-  }
-
-  function applyChatSettings(sessionId, settings) {
-    // Apply to all messages in current session
-    const styleId = `chat-settings-${sessionId}`;
-    let styleEl = document.getElementById(styleId);
-    if (!styleEl) {
-      styleEl = document.createElement('style');
-      styleEl.id = styleId;
-      document.head.appendChild(styleEl);
-    }
-
-    let css = '';
-    if (settings.bubbleColor) {
-      css += `.QQ_chat_msgdiv { background-color: ${settings.bubbleColor} !important; }\n`;
-    }
-    if (settings.textColor) {
-      css += `.QQ_chat_msgdiv span { color: ${settings.textColor} !important; }\n`;
-    }
-    if (settings.chatBg) {
-      css += `.QQ_chat_page { background-image: url('${settings.chatBg}') !important; background-size: cover; background-position: center; }\n`;
-    }
-
-    styleEl.textContent = css;
   }
 
   function updatePreview(bubbleColor, textColor) {
     chatSettingPreview.style.backgroundColor = bubbleColor;
     const span = chatSettingPreview.querySelector('span');
     if (span) span.style.color = textColor;
+    const previewBubble = wallpaperPreview?.querySelector('.wallpaper-preview-bubble');
+    if (previewBubble) {
+      previewBubble.style.backgroundColor = bubbleColor;
+      previewBubble.style.color = textColor;
+    }
   }
 
   function randomChatSettings() {
@@ -6879,8 +7405,17 @@ ${listPart || '-（无）'}
   closeChatSettingsBtn?.addEventListener('click', closeChatSettings);
   chatSettingsOverlay?.addEventListener('click', closeChatSettings);
   cancelSettingBtn?.addEventListener('click', closeChatSettings);
-  saveSettingBtn?.addEventListener('click', saveChatSettings);
+  saveSettingBtn?.addEventListener('click', () => {
+    void saveChatSettings();
+  });
   randomSettingBtn?.addEventListener('click', randomChatSettings);
+  restoreSettingBtn?.addEventListener('click', () => {
+    bubbleColorInput.value = ORIGINAL_CHAT_DEFAULTS.bubbleColor;
+    bubbleColorPicker.value = ORIGINAL_CHAT_DEFAULTS.bubbleColor;
+    textColorInput.value = ORIGINAL_CHAT_DEFAULTS.textColor;
+    textColorPicker.value = ORIGINAL_CHAT_DEFAULTS.textColor;
+    updatePreview(ORIGINAL_CHAT_DEFAULTS.bubbleColor, ORIGINAL_CHAT_DEFAULTS.textColor);
+  });
 
   bubbleColorPicker?.addEventListener('input', e => {
     const color = e.target.value;
@@ -6910,15 +7445,99 @@ ${listPart || '-（无）'}
     }
   });
 
+  chatWallpaperDrop?.addEventListener('click', () => {
+    chatWallpaperFile?.click();
+  });
+
+  chatWallpaperDrop?.addEventListener('dragover', e => {
+    e.preventDefault();
+    chatWallpaperDrop.classList.add('is-dragover');
+  });
+
+  chatWallpaperDrop?.addEventListener('dragleave', () => {
+    chatWallpaperDrop.classList.remove('is-dragover');
+  });
+
+  chatWallpaperDrop?.addEventListener('drop', e => {
+    e.preventDefault();
+    chatWallpaperDrop.classList.remove('is-dragover');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) pickWallpaperFile(file);
+  });
+
+  chatWallpaperFile?.addEventListener('change', e => {
+    const file = e.target?.files?.[0];
+    if (file) pickWallpaperFile(file);
+    if (chatWallpaperFile) chatWallpaperFile.value = '';
+  });
+
+  wallpaperPreview?.addEventListener('pointerdown', handleWallpaperDragStart);
+  wallpaperPreview?.addEventListener('pointermove', handleWallpaperDragMove);
+  wallpaperPreview?.addEventListener('pointerup', handleWallpaperDragEnd);
+  wallpaperPreview?.addEventListener('pointerleave', handleWallpaperDragEnd);
+
+  wallpaperZoomInput?.addEventListener('input', e => {
+    wallpaperState.zoom = Number(e.target?.value || 1);
+    markWallpaperDirty();
+    applyWallpaperPreviewTransform();
+  });
+
+  wallpaperRotateInput?.addEventListener('input', e => {
+    wallpaperState.rotate = Number(e.target?.value || 0);
+    markWallpaperDirty();
+    applyWallpaperPreviewTransform();
+  });
+
+  wallpaperFitBtn?.addEventListener('click', () => {
+    wallpaperState.zoom = 1;
+    wallpaperState.rotate = 0;
+    wallpaperState.offsetX = 0;
+    wallpaperState.offsetY = 0;
+    markWallpaperDirty();
+    updateWallpaperControls();
+  });
+
+  wallpaperResetBtn?.addEventListener('click', () => {
+    restoreWallpaperInitial();
+  });
+
+  wallpaperClearBtn?.addEventListener('click', () => {
+    clearWallpaperSelection();
+  });
+
+  const wallpaperActivityHandler = () => {
+    registerWallpaperActivity();
+  };
+
+  document.addEventListener('pointerdown', wallpaperActivityHandler, { passive: true });
+  document.addEventListener('mousemove', wallpaperActivityHandler, { passive: true });
+  document.addEventListener('touchstart', wallpaperActivityHandler, { passive: true });
+  document.addEventListener('wheel', wallpaperActivityHandler, { passive: true });
+  document.addEventListener('keydown', () => {
+    registerWallpaperActivity({ force: true });
+  });
+
   // Load settings for current session on startup
   try {
     const sessionId = chatStore.getCurrent();
-    const settings = chatStore.getSessionSettings(sessionId);
+    const settings = normalizeChatSettings(chatStore.getSessionSettings(sessionId) || {});
     if (settings) {
       applyChatSettings(sessionId, settings);
     }
   } catch (error) {
     logger.warn('加载会话设置失败', error);
+  }
+
+  chatSettingsReady = true;
+  if (pendingChatSettingsSessionId) {
+    try {
+      const sid = pendingChatSettingsSessionId;
+      pendingChatSettingsSessionId = '';
+      const settings = normalizeChatSettings(chatStore.getSessionSettings(sid) || {});
+      applyChatSettings(sid, settings);
+    } catch (err) {
+      logger.warn('应用延迟聊天设置失败', err);
+    }
   }
 
   logger.info('✅ Chat UI 初始化完成');

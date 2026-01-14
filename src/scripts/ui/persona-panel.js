@@ -2,6 +2,13 @@
 import { MediaPicker } from './media-picker.js';
 import { avatarDataUrlFromFile } from '../utils/image.js';
 
+const DEFAULT_USER_BUBBLE_COLOR = '#E8F0FE';
+
+const normalizeHexColor = (value, fallback = DEFAULT_USER_BUBBLE_COLOR) => {
+    const raw = String(value || '').trim();
+    return /^#[0-9A-F]{6}$/i.test(raw) ? raw : fallback;
+};
+
 export class PersonaPanel {
     constructor({ personaStore, chatStore = null, contactsStore = null, getSessionId = null, onPersonaChanged }) {
         this.store = personaStore;
@@ -107,6 +114,15 @@ export class PersonaPanel {
                     </div>
 
                     <div style="margin-bottom: 15px;">
+                        <label style="display: block; font-size: 12px; color: #666; margin-bottom: 5px;">用户气泡颜色</label>
+                        <div style="display:flex; align-items:center; gap:10px;">
+                            <input type="text" id="edit-bubble-color-input" value="#E8F0FE" style="flex:1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box;">
+                            <input type="color" id="edit-bubble-color" value="#E8F0FE" style="width:44px; height:44px; border:1px solid #ddd; border-radius:8px; padding:0; cursor:pointer;">
+                        </div>
+                        <div style="margin-top:6px; font-size:11px; color:#94a3b8;">仅影响“我”的气泡背景，字体颜色跟随聊天设置</div>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
                         <label style="display: block; font-size: 12px; color: #666; margin-bottom: 5px;">
                             详细描述 ({{persona}})
                             <span style="color:#999; font-size:11px; margin-left:5px;">注入到 System Prompt 或 Character Card 中</span>
@@ -166,6 +182,19 @@ export class PersonaPanel {
         this.panel.querySelector('#save-persona-btn').addEventListener('click', () => this.saveEdit());
         this.panel.querySelector('#delete-persona-btn').addEventListener('click', () => this.deleteCurrent());
         this.panel.querySelector('#edit-position').addEventListener('change', () => this.updateInjectionUi());
+
+        const bubbleInput = this.panel.querySelector('#edit-bubble-color-input');
+        const bubblePicker = this.panel.querySelector('#edit-bubble-color');
+        bubblePicker?.addEventListener('input', (e) => {
+            const color = e.target?.value || DEFAULT_USER_BUBBLE_COLOR;
+            if (bubbleInput) bubbleInput.value = color;
+        });
+        bubbleInput?.addEventListener('input', (e) => {
+            const color = String(e.target?.value || '').trim();
+            if (/^#[0-9A-F]{6}$/i.test(color) && bubblePicker) {
+                bubblePicker.value = color;
+            }
+        });
     }
 
     ensureBulkModal() {
@@ -598,6 +627,8 @@ export class PersonaPanel {
         const posEl = this.panel.querySelector('#edit-position');
         const depthEl = this.panel.querySelector('#edit-depth');
         const roleEl = this.panel.querySelector('#edit-role');
+        const bubbleInput = this.panel.querySelector('#edit-bubble-color-input');
+        const bubblePicker = this.panel.querySelector('#edit-bubble-color');
         const deleteBtn = this.panel.querySelector('#delete-persona-btn');
         const title = view.querySelector('span');
 
@@ -609,6 +640,9 @@ export class PersonaPanel {
             if (posEl) posEl.value = String(Number.isFinite(Number(p.position)) ? Number(p.position) : 0);
             if (depthEl) depthEl.value = String(Number.isFinite(Number(p.depth)) ? Math.max(0, Math.trunc(Number(p.depth))) : 2);
             if (roleEl) roleEl.value = String(Number.isFinite(Number(p.role)) ? Math.max(0, Math.min(2, Math.trunc(Number(p.role)))) : 0);
+            const bubble = normalizeHexColor(p.userBubbleColor);
+            if (bubbleInput) bubbleInput.value = bubble;
+            if (bubblePicker) bubblePicker.value = bubble;
             this.updateAvatarPreview(p.avatar);
             deleteBtn.style.display = 'block';
             title.textContent = '编辑角色';
@@ -623,6 +657,8 @@ export class PersonaPanel {
             if (posEl) posEl.value = '0';
             if (depthEl) depthEl.value = '2';
             if (roleEl) roleEl.value = '0';
+            if (bubbleInput) bubbleInput.value = DEFAULT_USER_BUBBLE_COLOR;
+            if (bubblePicker) bubblePicker.value = DEFAULT_USER_BUBBLE_COLOR;
             this.updateAvatarPreview('');
             deleteBtn.style.display = 'none';
             title.textContent = '新建角色';
@@ -672,6 +708,7 @@ export class PersonaPanel {
         const position = Number(this.panel.querySelector('#edit-position')?.value ?? 0);
         const depth = Math.max(0, Math.trunc(Number(this.panel.querySelector('#edit-depth')?.value ?? 2) || 0));
         const role = Math.max(0, Math.min(2, Math.trunc(Number(this.panel.querySelector('#edit-role')?.value ?? 0) || 0)));
+        const bubbleColor = normalizeHexColor(this.panel.querySelector('#edit-bubble-color-input')?.value);
 
         if (!name) {
             alert('请输入角色名称');
@@ -679,9 +716,9 @@ export class PersonaPanel {
         }
 
         if (this.editingId) {
-            await this.store.update(this.editingId, { name, description, avatar, position, depth, role });
+            await this.store.update(this.editingId, { name, description, avatar, position, depth, role, userBubbleColor: bubbleColor });
         } else {
-            const newP = await this.store.create({ name, description, avatar, position, depth, role });
+            const newP = await this.store.create({ name, description, avatar, position, depth, role, userBubbleColor: bubbleColor });
             this.store.setActive(newP.id); // Auto switch to new
         }
 

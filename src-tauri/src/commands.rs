@@ -14,6 +14,8 @@ use tauri::{AppHandle, Manager, State};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 
 #[cfg(target_os = "android")]
 use std::os::unix::io::AsRawFd;
@@ -42,6 +44,45 @@ fn sanitize_segment(input: &str) -> String {
         cleaned.truncate(MAX_LEN);
     }
     cleaned
+}
+
+fn decode_data_url(data_url: &str) -> Result<(Vec<u8>, Option<String>), String> {
+    let raw = data_url.trim();
+    if !raw.starts_with("data:") {
+        return Err("invalid data url".to_string());
+    }
+    let mut parts = raw.splitn(2, ',');
+    let meta = parts.next().unwrap_or("");
+    let payload = parts.next().unwrap_or("");
+    if payload.is_empty() {
+        return Err("empty data payload".to_string());
+    }
+    let mime = meta.strip_prefix("data:").unwrap_or("");
+    let mut mime_parts = mime.split(';');
+    let mime_type = mime_parts.next().unwrap_or("");
+    let ext = match mime_type {
+        "image/png" => Some("png".to_string()),
+        "image/jpeg" => Some("jpg".to_string()),
+        "image/jpg" => Some("jpg".to_string()),
+        "image/webp" => Some("webp".to_string()),
+        "image/gif" => Some("gif".to_string()),
+        _ => None,
+    };
+    let bytes = BASE64_ENGINE.decode(payload).map_err(|e| e.to_string())?;
+    Ok((bytes, ext))
+}
+
+fn extension_from_name(name: &str) -> Option<String> {
+    let raw = name.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let ext = Path::new(raw).extension()?.to_string_lossy().to_string();
+    if ext.is_empty() {
+        None
+    } else {
+        Some(ext)
+    }
 }
 
 fn raw_reply_path(app: &AppHandle, session_id: &str, message_id: &str) -> Result<PathBuf, String> {
@@ -79,6 +120,12 @@ pub struct MediaBundleInfo {
     pub base_dir: String,
     pub manifest: Option<Value>,
     pub warning: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct WallpaperSaveResult {
+    pub path: String,
+    pub bytes: usize,
 }
 
 /// Ensure bundled media assets exist in app data dir.
@@ -143,6 +190,42 @@ pub async fn ensure_media_bundle(app: AppHandle) -> Result<MediaBundleInfo, Stri
         base_dir: target_dir.to_string_lossy().to_string(),
         manifest,
         warning,
+    })
+}
+
+/// 保存聊天壁纸到本地（AppData）
+#[tauri::command]
+pub async fn save_wallpaper(
+    app: AppHandle,
+    session_id: String,
+    data_url: String,
+    file_name: Option<String>,
+    previous_path: Option<String>,
+) -> Result<WallpaperSaveResult, String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let safe_sid = sanitize_segment(&session_id);
+    let wallpaper_root = data_dir.join("wallpapers").join(&safe_sid);
+    fs::create_dir_all(&wallpaper_root).map_err(|e| e.to_string())?;
+
+    let (bytes, ext_from_mime) = decode_data_url(&data_url)?;
+    let ext_from_name = file_name.as_deref().and_then(extension_from_name);
+    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let stem = sanitize_segment(file_name.as_deref().unwrap_or("wallpaper"));
+    let ts = chrono::Utc::now().timestamp();
+    let file = wallpaper_root.join(format!("wallpaper_{safe_sid}_{stem}_{ts}.{ext}"));
+    fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+
+    if let Some(prev) = previous_path {
+        let prev_path = PathBuf::from(prev);
+        if prev_path.starts_with(&wallpaper_root) && prev_path.exists() {
+            let _ = fs::remove_file(prev_path);
+        }
+    }
+
+    Ok(WallpaperSaveResult {
+        path: file.to_string_lossy().to_string(),
+        bytes: bytes.len(),
     })
 }
 

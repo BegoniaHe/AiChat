@@ -1,5 +1,34 @@
 # 開發進度追蹤（必更新）(必须使用当下时间记录)
 
+## 2026-01-14 16:31
+- 聊天设置：气泡/字体颜色改为仅作用当前聊天室（CSS 变量 + 会话切换应用）。
+- 聊天壁纸：新增拖拽/上传框，提供预览比例、拖拽裁切、缩放、旋转与重置/清除。
+- 壁纸本地化：新增 Tauri 命令写入 AppData 壁纸文件并按需加载显示。
+- 修改：
+  - `src/index.html`
+  - `src/assets/css/qq-legacy.css`
+  - `src/scripts/ui/app.js`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`
+
+## 2026-01-14 16:35
+- 聊天设置新增“应用范围”（当前/全部）选项，气泡/字体可一键同步到全部会话。
+- 修改：
+  - `src/index.html`
+  - `src/assets/css/qq-legacy.css`
+  - `src/scripts/ui/app.js`
+
+## 2026-01-14 16:53
+- 聊天设置：新增恢复默认按钮；全局默认色存储并用于新会话继承。
+- 壁纸显示：顶部渐变遮罩层级提升，避免状态栏区域透出壁纸。
+- 壁纸屏保：聊天页无操作 2 分钟仅显示壁纸，点击/操作恢复。
+- 修改：
+  - `src/index.html`
+  - `src/assets/css/qq-legacy.css`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/storage/chat-store.js`
+
 ## 2026-01-06 10:11
 - Phase 7：记忆表格 AI 自动提取（<tableEdit> JSON 指令 + 自动写表）。
 - Prompt 注入新增记忆表格编辑规则，行索引/表索引指引；记忆注入支持行编号与表 ID 标注。
@@ -1946,3 +1975,23 @@
   - `src/scripts/memory/memory-prompt-utils.js`
   - `src/scripts/memory/default-template.js`
   - `src/assets/css/qq-legacy.css`
+
+## 2026-01-14 17:31
+- 聊天设置：气泡/字体支持“当前/全局”应用；新增恢复默认按钮；新会话继承全局颜色。
+- 壁纸设置：支持拖拽上传、预览裁剪（拖拽/缩放/旋转）；本地保存并按需加载；无操作 2 分钟进入仅壁纸屏保模式。
+- 壁纸显示修正：顶部渐变区域遮挡壁纸。
+- Persona：新增用户气泡颜色设置（默认 #E8F0FE）。
+- 默认颜色调整（气泡 #c9c9c9、字体 #1F2937）；聊天设置弹窗加宽；气泡与头像间距加大。
+- 表情包加载增加本地路径 fallback 与重试逻辑，降低桌面加载失败概率。
+- 修改：
+  - `src/index.html`
+  - `src/assets/css/qq-legacy.css`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/scripts/storage/app-settings.js`
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/storage/persona-store.js`
+  - `src/scripts/ui/persona-panel.js`
+  - `src/scripts/utils/media-assets.js`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`

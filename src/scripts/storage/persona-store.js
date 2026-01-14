@@ -14,6 +14,12 @@ export const persona_description_positions = {
 
 const DEFAULT_DEPTH = 2;
 const DEFAULT_ROLE = 0; // 0=system, 1=user, 2=assistant
+const DEFAULT_USER_BUBBLE_COLOR = '#E8F0FE';
+
+const normalizeBubbleColor = (value) => {
+    const raw = String(value || '').trim();
+    return /^#[0-9A-F]{6}$/i.test(raw) ? raw : DEFAULT_USER_BUBBLE_COLOR;
+};
 
 export class PersonaStore {
     constructor() {
@@ -53,6 +59,7 @@ export class PersonaStore {
                     name: String(obj.name || '').trim() || '我',
                     avatar: typeof obj.avatar === 'string' ? obj.avatar : '',
                     description: typeof obj.description === 'string' ? obj.description : '',
+                    userBubbleColor: normalizeBubbleColor(obj.userBubbleColor),
                     position,
                     depth,
                     role,
@@ -64,6 +71,7 @@ export class PersonaStore {
                     normalized.name !== obj.name ||
                     normalized.avatar !== obj.avatar ||
                     normalized.description !== obj.description ||
+                    normalized.userBubbleColor !== obj.userBubbleColor ||
                     normalized.position !== obj.position ||
                     normalized.depth !== obj.depth ||
                     normalized.role !== obj.role ||
@@ -103,6 +111,7 @@ export class PersonaStore {
             name: '我',
             avatar: '', // Will fallback to app default in UI
             description: '',
+            userBubbleColor: DEFAULT_USER_BUBBLE_COLOR,
             position: persona_description_positions.IN_PROMPT,
             depth: DEFAULT_DEPTH,
             role: DEFAULT_ROLE,
@@ -154,6 +163,7 @@ export class PersonaStore {
             name: data.name || 'User',
             avatar: data.avatar || '',
             description: data.description || '',
+            userBubbleColor: normalizeBubbleColor(data.userBubbleColor),
             position,
             depth,
             role,
@@ -181,6 +191,9 @@ export class PersonaStore {
         if (data && Object.prototype.hasOwnProperty.call(data, 'role')) {
             const r = Number(data.role);
             next.role = Number.isFinite(r) ? Math.max(0, Math.min(2, Math.trunc(r))) : DEFAULT_ROLE;
+        }
+        if (data && Object.prototype.hasOwnProperty.call(data, 'userBubbleColor')) {
+            next.userBubbleColor = normalizeBubbleColor(data.userBubbleColor);
         }
 
         this.personas[idx] = {
