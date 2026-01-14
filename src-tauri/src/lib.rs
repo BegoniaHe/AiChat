@@ -5,6 +5,7 @@ mod memory_db;
 mod storage;
 
 use tauri::Manager;
+use commands::WallpaperStreamState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,6 +24,10 @@ pub fn run() {
             commands::load_kv,
             commands::ensure_media_bundle,
             commands::save_wallpaper,
+            commands::save_wallpaper_chunked,
+            commands::save_wallpaper_stream_start,
+            commands::save_wallpaper_stream_chunk,
+            commands::save_wallpaper_stream_finish,
             commands::http_request,
             commands::log_js,
             commands::save_raw_reply,
@@ -44,6 +49,7 @@ pub fn run() {
             let memory_db = memory_db::MemoryDb::new(&handle)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
             _app.manage(memory_db);
+            _app.manage(WallpaperStreamState::default());
             #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
             {
                 use tauri::Manager;

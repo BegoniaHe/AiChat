@@ -13,7 +13,7 @@
   --qq-color-bg-input: rgba(255, 255, 255, 0.2); /* 输入框背景（半透明） */
   --qq-color-bubble-default: #c9c9c9; /* 默认消息气泡 */
   --qq-color-bubble-alt: rgba(208, 174, 118, 0.9); /* 辅助气泡色 */
-  --qq-color-text-primary: #1F2937; /* 主文本颜色 */
+  --qq-color-text-primary: #1f2937; /* 主文本颜色 */
   --qq-color-text-secondary: #a1a1a1; /* 次要文本（时间戳） */
   --qq-color-border: #000000; /* 边框颜色 */
   --qq-color-divider: rgb(240, 244, 245); /* 分割线 */
@@ -23,7 +23,7 @@
   /* 尺寸 */
   --qq-size-avatar: 40px; /* 头像尺寸 */
   --qq-size-input-height: 30px; /* 输入框高度 */
-  --qq-size-input-bar: calc(68px + env(safe-area-inset-bottom, 0px)); /* 输入栏整体高度 */
+  --qq-size-input-bar: calc(56px + env(safe-area-inset-bottom, 0px)); /* 输入栏整体高度 (8+40+8) */
   --qq-size-sticker-panel: 288px; /* 贴图面板高度 */
   --qq-size-sticker-preview: 64px; /* 输入框贴图预览高度 */
   --qq-size-action-panel: 108px; /* 快捷功能面板高度 */
@@ -259,7 +259,7 @@
   padding-left: 8px;
   padding-right: 8px;
   padding-top: 14px; /* 首條消息與頂欄留出間距 */
-  padding-bottom: var(--qq-size-input-bar); /* 为输入框预留空间 */
+  padding-bottom: calc(var(--qq-size-input-bar) - 48px); /* 为输入框预留空间 */
   margin-bottom: 0;
 
   /* 隐藏滚动条 */
@@ -268,9 +268,8 @@
 }
 
 .QQ_chat_page.sticker-preview-active .msgcontent {
-  padding-bottom: calc(var(--qq-size-input-bar) + var(--qq-size-sticker-preview));
+  padding-bottom: calc(var(--qq-size-input-bar) + var(--qq-size-sticker-preview) - 48px);
 }
-
 
 .msgcontent::-webkit-scrollbar {
   display: none !important;
@@ -298,17 +297,24 @@
   margin-left: var(--qq-spacing-lg);
 }
 
-body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] {
+.msgcontent > .QQ_chat_charmsg:last-child,
+.msgcontent > .QQ_chat_mymsg:last-child,
+.msgcontent > .QQ_chat_sysmsg:last-child,
+.msgcontent > .QQ_chat_unread-divider:last-child {
+  margin-bottom: 0;
+}
+
+body[data-creative-wide='on'] .QQ_chat_charmsg[data-creative='1'] {
   max-width: calc(100% - 16px);
   margin-left: 8px;
   grid-template-columns: 0 1fr;
 }
 
-body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_head {
+body[data-creative-wide='on'] .QQ_chat_charmsg[data-creative='1'] .QQ_chat_head {
   display: none;
 }
 
-body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_msgdiv {
+body[data-creative-wide='on'] .QQ_chat_charmsg[data-creative='1'] .QQ_chat_msgdiv {
   width: 100%;
 }
 
@@ -1399,7 +1405,7 @@ body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_msgdi
   padding: 6px 10px;
   border-radius: 10px;
   background: #c9c9c9;
-  color: #1F2937;
+  color: #1f2937;
   font-size: 12px;
   box-shadow: 0 3px 8px rgba(15, 23, 42, 0.18);
 }
@@ -1464,7 +1470,7 @@ body[data-creative-wide="on"] .QQ_chat_charmsg[data-creative="1"] .QQ_chat_msgdi
 }
 
 #chat-setting-preview span {
-  color: #1F2937;
+  color: #1f2937;
   font-size: 14px;
 }
 

@@ -13,7 +13,10 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 
@@ -128,6 +131,40 @@ pub struct WallpaperSaveResult {
     pub bytes: usize,
 }
 
+#[derive(Default)]
+pub struct WallpaperStreamState {
+    inner: Mutex<HashMap<String, WallpaperStreamEntry>>,
+}
+
+struct WallpaperStreamEntry {
+    path: PathBuf,
+    previous_path: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct WallpaperStreamStartResult {
+    pub upload_id: String,
+    pub path: String,
+}
+
+fn decode_base64_payload(payload: &str) -> Result<Vec<u8>, String> {
+    let raw = payload.trim();
+    if raw.is_empty() {
+        return Err("empty base64 payload".to_string());
+    }
+    let data = if raw.starts_with("data:") {
+        let mut parts = raw.splitn(2, ',');
+        let _meta = parts.next().unwrap_or("");
+        parts.next().unwrap_or("")
+    } else {
+        raw
+    };
+    if data.is_empty() {
+        return Err("empty base64 payload".to_string());
+    }
+    BASE64_ENGINE.decode(data).map_err(|e| e.to_string())
+}
+
 /// Ensure bundled media assets exist in app data dir.
 #[tauri::command]
 pub async fn ensure_media_bundle(app: AppHandle) -> Result<MediaBundleInfo, String> {
@@ -226,6 +263,150 @@ pub async fn save_wallpaper(
     Ok(WallpaperSaveResult {
         path: file.to_string_lossy().to_string(),
         bytes: bytes.len(),
+    })
+}
+
+/// 保存聊天壁纸（分块传输，支持原图无损保存）
+#[tauri::command]
+pub async fn save_wallpaper_chunked(
+    app: AppHandle,
+    session_id: String,
+    chunks: Vec<String>,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+    previous_path: Option<String>,
+) -> Result<WallpaperSaveResult, String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let safe_sid = sanitize_segment(&session_id);
+    let wallpaper_root = data_dir.join("wallpapers").join(&safe_sid);
+    fs::create_dir_all(&wallpaper_root).map_err(|e| e.to_string())?;
+
+    // 合并所有Base64块并解码
+    let combined = chunks.join("");
+    let bytes = BASE64_ENGINE.decode(&combined)
+        .map_err(|e| format!("Base64解码失败: {}", e))?;
+
+    // 确定扩展名
+    let ext_from_mime = mime_type.as_deref().and_then(|m| match m {
+        "image/png" => Some("png".to_string()),
+        "image/jpeg" | "image/jpg" => Some("jpg".to_string()),
+        "image/webp" => Some("webp".to_string()),
+        "image/gif" => Some("gif".to_string()),
+        _ => None,
+    });
+    let ext_from_name = file_name.as_deref().and_then(extension_from_name);
+    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+
+    let stem = sanitize_segment(file_name.as_deref().unwrap_or("wallpaper"));
+    let ts = chrono::Utc::now().timestamp();
+    let file = wallpaper_root.join(format!("wallpaper_{safe_sid}_{stem}_{ts}.{ext}"));
+
+    fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+
+    // 删除旧壁纸
+    if let Some(prev) = previous_path {
+        let prev_path = PathBuf::from(prev);
+        if prev_path.starts_with(&wallpaper_root) && prev_path.exists() {
+            let _ = fs::remove_file(prev_path);
+        }
+    }
+
+    Ok(WallpaperSaveResult {
+        path: file.to_string_lossy().to_string(),
+        bytes: bytes.len(),
+    })
+}
+
+/// 保存聊天壁纸（流式分块，避免大 payload）
+#[tauri::command]
+pub async fn save_wallpaper_stream_start(
+    app: AppHandle,
+    session_id: String,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+    previous_path: Option<String>,
+    state: State<'_, WallpaperStreamState>,
+) -> Result<WallpaperStreamStartResult, String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let safe_sid = sanitize_segment(&session_id);
+    let wallpaper_root = data_dir.join("wallpapers").join(&safe_sid);
+    fs::create_dir_all(&wallpaper_root).map_err(|e| e.to_string())?;
+
+    let ext_from_mime = mime_type.as_deref().and_then(|m| match m {
+        "image/png" => Some("png".to_string()),
+        "image/jpeg" | "image/jpg" => Some("jpg".to_string()),
+        "image/webp" => Some("webp".to_string()),
+        "image/gif" => Some("gif".to_string()),
+        _ => None,
+    });
+    let ext_from_name = file_name.as_deref().and_then(extension_from_name);
+    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let stem = sanitize_segment(file_name.as_deref().unwrap_or("wallpaper"));
+    let ts = chrono::Utc::now().timestamp_millis();
+    let file = wallpaper_root.join(format!("wallpaper_{safe_sid}_{stem}_{ts}.{ext}"));
+
+    fs::write(&file, &[]).map_err(|e| e.to_string())?;
+
+    let upload_id = format!("{safe_sid}_{ts}");
+    let entry = WallpaperStreamEntry {
+        path: file.clone(),
+        previous_path,
+    };
+    let mut map = state.inner.lock().map_err(|_| "stream state lock poisoned".to_string())?;
+    map.insert(upload_id.clone(), entry);
+
+    Ok(WallpaperStreamStartResult {
+        upload_id,
+        path: file.to_string_lossy().to_string(),
+    })
+}
+
+/// 追加壁纸分块
+#[tauri::command]
+pub async fn save_wallpaper_stream_chunk(
+    upload_id: String,
+    chunk: String,
+    state: State<'_, WallpaperStreamState>,
+) -> Result<(), String> {
+    let (path, _) = {
+        let map = state.inner.lock().map_err(|_| "stream state lock poisoned".to_string())?;
+        let entry = map.get(upload_id.trim()).ok_or("invalid upload id".to_string())?;
+        (entry.path.clone(), entry.previous_path.clone())
+    };
+
+    let bytes = decode_base64_payload(&chunk)?;
+    let mut file = OpenOptions::new().append(true).open(&path).map_err(|e| e.to_string())?;
+    file.write_all(&bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 完成保存壁纸
+#[tauri::command]
+pub async fn save_wallpaper_stream_finish(
+    upload_id: String,
+    state: State<'_, WallpaperStreamState>,
+) -> Result<WallpaperSaveResult, String> {
+    let entry = {
+        let mut map = state.inner.lock().map_err(|_| "stream state lock poisoned".to_string())?;
+        map.remove(upload_id.trim()).ok_or("invalid upload id".to_string())?
+    };
+
+    if let Some(prev) = entry.previous_path.clone() {
+        let prev_path = PathBuf::from(prev);
+        if prev_path.starts_with(entry.path.parent().unwrap_or(Path::new(""))) && prev_path.exists() {
+            let _ = fs::remove_file(prev_path);
+        }
+    }
+
+    let bytes = fs::metadata(&entry.path)
+        .map_err(|e| e.to_string())?
+        .len() as usize;
+
+    Ok(WallpaperSaveResult {
+        path: entry.path.to_string_lossy().to_string(),
+        bytes,
     })
 }
 

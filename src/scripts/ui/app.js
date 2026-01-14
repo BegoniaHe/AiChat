@@ -2671,6 +2671,7 @@ ${listPart || '-（无）'}
   const chatWallpaperStatus = document.getElementById('wallpaper-status');
   const wallpaperPreview = document.getElementById('wallpaper-preview');
   const wallpaperPreviewImage = document.getElementById('wallpaper-preview-image');
+  const wallpaperSaveOriginal = document.getElementById('wallpaper-save-original');
   const wallpaperZoomInput = document.getElementById('wallpaper-zoom');
   const wallpaperRotateInput = document.getElementById('wallpaper-rotate');
   const wallpaperFitBtn = document.getElementById('wallpaper-fit-btn');
@@ -3066,6 +3067,7 @@ ${listPart || '-（无）'}
     chatOriginPage = originPage || 'chat';
     chatList?.classList.add('hidden');
     chatRoom?.classList.remove('hidden');
+    chatInputGapTweak = 0;
     setStickerPanelOpen(false);
     if (typeof requestAnimationFrame === 'function') {
       requestAnimationFrame(() => {
@@ -3129,19 +3131,29 @@ ${listPart || '-（无）'}
         if (typeof window !== 'undefined' && window.requestAnimationFrame) {
           window.requestAnimationFrame(() => {
             if (!jumpToUnread()) setTimeout(jumpToUnread, 80);
+            requestAnimationFrame(syncChatBottomGap);
           });
         } else {
           setTimeout(() => {
             if (!jumpToUnread()) setTimeout(jumpToUnread, 80);
+            setTimeout(syncChatBottomGap, 0);
           }, 0);
         }
       } catch {
         setTimeout(() => {
           if (!jumpToUnread()) setTimeout(jumpToUnread, 80);
+          setTimeout(syncChatBottomGap, 0);
         }, 0);
       }
     } else {
-      setTimeout(() => ui.scrollToBottom(), 0);
+      setTimeout(() => {
+        ui.scrollToBottom();
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(syncChatBottomGap);
+        } else {
+          setTimeout(syncChatBottomGap, 0);
+        }
+      }, 0);
     }
     // Mark read once user enters the chatroom
     try {
@@ -6927,7 +6939,9 @@ ${listPart || '-（无）'}
     mode: 'keep',
     sessionId: '',
     fileName: '',
+    fileType: '',
     fileDataUrl: '',
+    file: null,
     previewUrl: '',
     zoom: 1,
     rotate: 0,
@@ -6936,6 +6950,7 @@ ${listPart || '-（无）'}
     width: 0,
     height: 0,
     dirtyTransform: false,
+    saveOriginal: false,
     initial: null,
     current: null,
     dragging: false,
@@ -7139,7 +7154,9 @@ ${listPart || '-（无）'}
   const resetWallpaperState = (next = {}) => {
     wallpaperState.mode = next.mode || 'keep';
     wallpaperState.fileName = next.fileName || '';
+    wallpaperState.fileType = next.fileType || '';
     wallpaperState.fileDataUrl = next.fileDataUrl || '';
+    wallpaperState.file = next.file || null;
     wallpaperState.previewUrl = next.previewUrl || '';
     wallpaperState.zoom = Number(next.zoom || 1);
     wallpaperState.rotate = Number(next.rotate || 0);
@@ -7148,6 +7165,7 @@ ${listPart || '-（无）'}
     wallpaperState.width = Number(next.width || 0);
     wallpaperState.height = Number(next.height || 0);
     wallpaperState.dirtyTransform = Boolean(next.dirtyTransform);
+    wallpaperState.saveOriginal = Boolean(next.saveOriginal);
     wallpaperState.current = next.current || null;
     wallpaperState.initial = next.initial || null;
   };
@@ -7172,6 +7190,7 @@ ${listPart || '-（无）'}
     };
     init.initial = { ...init };
     resetWallpaperState(init);
+    if (wallpaperSaveOriginal) wallpaperSaveOriginal.checked = Boolean(wallpaperState.saveOriginal);
     if (wallpaperZoomInput) wallpaperZoomInput.value = String(wallpaperState.zoom || 1);
     if (wallpaperRotateInput) wallpaperRotateInput.value = String(wallpaperState.rotate || 0);
     setWallpaperPreviewSource(url, current?.name || '');
@@ -7244,16 +7263,25 @@ ${listPart || '-（无）'}
     reader.onload = async () => {
       const rawDataUrl = String(reader.result || '');
       let dataUrl = rawDataUrl;
-      try {
-        const scaled = await shrinkWallpaperDataUrl(rawDataUrl);
-        if (scaled?.dataUrl) dataUrl = scaled.dataUrl;
-      } catch (err) {
-        logger.warn('壁纸压缩失败，使用原图', err);
+      const shouldCompress = !wallpaperSaveOriginal?.checked;
+
+      if (shouldCompress) {
+        try {
+          const scaled = await shrinkWallpaperDataUrl(rawDataUrl);
+          if (scaled?.dataUrl) dataUrl = scaled.dataUrl;
+        } catch (err) {
+          logger.warn('壁纸压缩失败，使用原图', err);
+        }
+      } else {
+        logger.info('保存原图模式：跳过压缩');
       }
+
       const init = {
         mode: 'new',
         fileName: file.name || 'wallpaper',
+        fileType: file.type || '',
         fileDataUrl: dataUrl,
+        file,
         previewUrl: dataUrl,
         zoom: 1,
         rotate: 0,
@@ -7261,6 +7289,7 @@ ${listPart || '-（无）'}
         offsetY: 0,
         dirtyTransform: true,
         current: null,
+        saveOriginal: !shouldCompress,
       };
       init.initial = { ...init };
       resetWallpaperState(init);
@@ -7284,7 +7313,9 @@ ${listPart || '-（无）'}
     resetWallpaperState({
       mode: 'clear',
       fileName: '',
+      fileType: '',
       fileDataUrl: '',
+      file: null,
       previewUrl: '',
       zoom: 1,
       rotate: 0,
@@ -7292,6 +7323,7 @@ ${listPart || '-（无）'}
       offsetY: 0,
       dirtyTransform: true,
       current: null,
+      saveOriginal: Boolean(wallpaperSaveOriginal?.checked),
     });
     if (wallpaperZoomInput) wallpaperZoomInput.value = '1';
     if (wallpaperRotateInput) wallpaperRotateInput.value = '0';
@@ -7326,6 +7358,71 @@ ${listPart || '-（无）'}
     applyWallpaperToChatRoom(settings);
   }
 
+  const saveWallpaperChunked = async (sessionId, dataUrl, fileName, previousPath) => {
+    const parts = dataUrl.split(',');
+    if (parts.length !== 2) throw new Error('Invalid data URL');
+    const base64Data = parts[1];
+    const mimeMatch = parts[0].match(/data:(.*?);base64/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+    // 分块传输（每块 400KB）
+    const chunkSize = 400 * 1024;
+    const chunks = [];
+    for (let i = 0; i < base64Data.length; i += chunkSize) {
+      chunks.push(base64Data.slice(i, i + chunkSize));
+    }
+
+    logger.info(`壁纸分块传输: ${chunks.length} 块, 总大小 ${(base64Data.length / 1024).toFixed(1)}KB`);
+
+    return await safeInvoke('save_wallpaper_chunked', {
+      sessionId,
+      chunks,
+      fileName,
+      mimeType,
+      previousPath: previousPath || '',
+    });
+  };
+
+  const readFileChunkAsBase64 = (file, start, end) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const idx = result.indexOf(',');
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('read chunk failed'));
+    reader.readAsDataURL(file.slice(start, end));
+  });
+
+  const saveWallpaperStreamed = async ({
+    sessionId,
+    file,
+    fileName,
+    mimeType,
+    previousPath,
+  }) => {
+    if (!file) throw new Error('wallpaper file missing');
+    const startResp = await safeInvoke('save_wallpaper_stream_start', {
+      sessionId,
+      fileName: fileName || '',
+      mimeType: mimeType || '',
+      previousPath: previousPath || '',
+    });
+    const uploadId = startResp?.upload_id;
+    if (!uploadId) throw new Error('invalid wallpaper upload id');
+    const chunkSize = 256 * 1024;
+    const total = file.size || 0;
+    if (!total) throw new Error('wallpaper file size invalid');
+    for (let offset = 0; offset < total; offset += chunkSize) {
+      const chunk = await readFileChunkAsBase64(file, offset, Math.min(total, offset + chunkSize));
+      await safeInvoke('save_wallpaper_stream_chunk', {
+        uploadId,
+        chunk,
+      });
+    }
+    return await safeInvoke('save_wallpaper_stream_finish', { uploadId });
+  };
+
   const persistWallpaperIfNeeded = async (sessionId, baseSettings) => {
     const existing = baseSettings?.wallpaper || null;
     if (wallpaperState.mode === 'clear') {
@@ -7334,13 +7431,44 @@ ${listPart || '-（无）'}
     if (wallpaperState.mode === 'new') {
       if (!wallpaperState.fileDataUrl) return {};
       try {
-        const resp = await safeInvoke('save_wallpaper', {
-          session_id: sessionId,
-          data_url: wallpaperState.fileDataUrl,
-          file_name: wallpaperState.fileName || '',
-          previous_path: existing?.path || '',
-        });
+        const fileRef = wallpaperState.file;
+        const canStream = fileRef && typeof fileRef.slice === 'function' && Number.isFinite(fileRef.size);
+        const useStream = wallpaperState.saveOriginal && canStream;
+        const useChunked = !useStream && wallpaperState.fileDataUrl.length > 2 * 1024 * 1024;
+        let resp;
+
+        if (useStream) {
+          logger.info('使用流式方式保存壁纸');
+          resp = await saveWallpaperStreamed({
+            sessionId,
+            file: fileRef,
+            fileName: wallpaperState.fileName || '',
+            mimeType: wallpaperState.fileType || fileRef?.type || '',
+            previousPath: existing?.path || '',
+          });
+        } else if (useChunked) {
+          logger.info('使用分块传输保存壁纸');
+          resp = await saveWallpaperChunked(
+            sessionId,
+            wallpaperState.fileDataUrl,
+            wallpaperState.fileName || '',
+            existing?.path || ''
+          );
+        } else {
+          if (wallpaperState.saveOriginal && !useStream) {
+            logger.warn('保存原图失败：缺少文件句柄，回退到 dataUrl');
+          }
+          logger.info('使用标准方式保存壁纸');
+          resp = await safeInvoke('save_wallpaper', {
+            sessionId,
+            dataUrl: wallpaperState.fileDataUrl,
+            fileName: wallpaperState.fileName || '',
+            previousPath: existing?.path || '',
+          });
+        }
+
         if (resp?.path) {
+          logger.info(`壁纸保存成功: ${resp.path}, ${(resp.bytes / 1024).toFixed(1)}KB`);
           return {
             wallpaper: {
               path: resp.path,
@@ -7356,9 +7484,13 @@ ${listPart || '-（无）'}
           };
         }
       } catch (err) {
+        const message = String(err?.message || err || '').trim();
         logger.warn('保存壁纸失败', err);
+        window.toastr?.warning?.(`壁纸保存失败: ${message || '未知错误'}`);
       }
-      window.toastr?.warning?.('壁纸保存失败，当前壁纸仅本次有效');
+      if (!wallpaperState.saveOriginal) {
+        window.toastr?.warning?.('壁纸保存失败，当前壁纸仅本次有效');
+      }
       return {
         wallpaper: {
           url: wallpaperState.fileDataUrl,
@@ -7570,6 +7702,10 @@ ${listPart || '-（无）'}
     const file = e.target?.files?.[0];
     if (file) pickWallpaperFile(file);
     if (chatWallpaperFile) chatWallpaperFile.value = '';
+  });
+
+  wallpaperSaveOriginal?.addEventListener('change', e => {
+    wallpaperState.saveOriginal = Boolean(e.target?.checked);
   });
 
   wallpaperPreview?.addEventListener('pointerdown', handleWallpaperDragStart);
