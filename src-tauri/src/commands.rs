@@ -147,6 +147,12 @@ pub struct WallpaperStreamStartResult {
     pub path: String,
 }
 
+#[derive(serde::Serialize)]
+pub struct WallpaperCleanupResult {
+    pub removed: usize,
+    pub kept: usize,
+}
+
 fn decode_base64_payload(payload: &str) -> Result<Vec<u8>, String> {
     let raw = payload.trim();
     if raw.is_empty() {
@@ -408,6 +414,89 @@ pub async fn save_wallpaper_stream_finish(
         path: entry.path.to_string_lossy().to_string(),
         bytes,
     })
+}
+
+/// 删除聊天壁纸文件
+#[tauri::command]
+pub async fn delete_wallpaper(
+    app: AppHandle,
+    session_id: String,
+    path: Option<String>,
+) -> Result<bool, String> {
+    let raw = path.unwrap_or_default();
+    if raw.trim().is_empty() {
+        return Ok(false);
+    }
+    let data_dir = get_data_dir(&app)?;
+    let safe_sid = sanitize_segment(&session_id);
+    let wallpaper_root = data_dir.join("wallpapers").join(&safe_sid);
+    let target = PathBuf::from(raw);
+    if !target.starts_with(&wallpaper_root) {
+        return Err("invalid wallpaper path".to_string());
+    }
+    if target.exists() {
+        fs::remove_file(&target).map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// 清理未引用的壁纸文件
+#[tauri::command]
+pub async fn cleanup_wallpapers(
+    app: AppHandle,
+    referenced_paths: Vec<String>,
+) -> Result<WallpaperCleanupResult, String> {
+    let data_dir = get_data_dir(&app)?;
+    let wallpaper_root = data_dir.join("wallpapers");
+    if !wallpaper_root.exists() {
+        return Ok(WallpaperCleanupResult { removed: 0, kept: 0 });
+    }
+
+    let mut referenced = std::collections::HashSet::new();
+    for raw in referenced_paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        referenced.insert(trimmed.to_string());
+        if let Ok(canon) = PathBuf::from(trimmed).canonicalize() {
+            referenced.insert(canon.to_string_lossy().to_string());
+        }
+    }
+
+    let mut removed = 0usize;
+    let mut kept = 0usize;
+    let mut stack = vec![wallpaper_root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let raw_path = path.to_string_lossy().to_string();
+            let mut in_use = referenced.contains(&raw_path);
+            if !in_use {
+                if let Ok(canon) = path.canonicalize() {
+                    let canon_str = canon.to_string_lossy().to_string();
+                    if referenced.contains(&canon_str) {
+                        in_use = true;
+                    }
+                }
+            }
+            if in_use {
+                kept += 1;
+            } else {
+                fs::remove_file(&path).map_err(|e| e.to_string())?;
+                removed += 1;
+            }
+        }
+    }
+
+    Ok(WallpaperCleanupResult { removed, kept })
 }
 
 /// 保存配置

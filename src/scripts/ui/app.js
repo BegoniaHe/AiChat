@@ -7132,6 +7132,7 @@ ${listPart || '-（无）'}
     wallpaperState.previewUrl = url || '';
     wallpaperPreviewImage.src = url || '';
     wallpaperPreviewImage.style.opacity = url ? '1' : '0';
+    wallpaperPreview?.classList.toggle('has-image', Boolean(url));
     updateWallpaperStatus(url ? (name || '已设置壁纸') : '未设置壁纸');
     if (!url) {
       wallpaperPreviewImage.style.transform = 'translate(-50%, -50%)';
@@ -7426,6 +7427,14 @@ ${listPart || '-（无）'}
   const persistWallpaperIfNeeded = async (sessionId, baseSettings) => {
     const existing = baseSettings?.wallpaper || null;
     if (wallpaperState.mode === 'clear') {
+      if (existing?.path) {
+        safeInvoke('delete_wallpaper', {
+          sessionId,
+          path: existing.path,
+        }).catch(err => {
+          logger.warn('清理壁纸文件失败', err);
+        });
+      }
       return { cleared: true };
     }
     if (wallpaperState.mode === 'new') {

@@ -5,6 +5,7 @@
 
 import { avatarDataUrlFromFile } from '../utils/image.js';
 import { logger } from '../utils/logger.js';
+import { safeInvoke } from '../utils/tauri.js';
 
 export class SessionPanel {
   constructor(chatStore, contactsStore, ui, { onUpdated } = {}) {
@@ -167,6 +168,18 @@ export class SessionPanel {
   remove(id) {
     const name = this.contactsStore?.getContact?.(id)?.name || id;
     if (!confirm(`確認刪除：${name}？此操作會刪除聊天室與好友記錄（不可恢復）。`)) return;
+
+    try {
+      const settings = this.store?.getSessionSettings?.(id) || null;
+      const path = String(settings?.wallpaper?.path || '').trim();
+      if (path) {
+        safeInvoke('delete_wallpaper', { sessionId: id, path }).catch(err => {
+          logger.warn('删除联系人时清理壁纸失败', err);
+        });
+      }
+    } catch (err) {
+      logger.warn('删除联系人时读取壁纸失败', err);
+    }
 
     // 清理世界书映射
     const map = window.appBridge?.worldSessionMap;

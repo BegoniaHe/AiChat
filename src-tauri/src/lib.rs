@@ -28,6 +28,8 @@ pub fn run() {
             commands::save_wallpaper_stream_start,
             commands::save_wallpaper_stream_chunk,
             commands::save_wallpaper_stream_finish,
+            commands::delete_wallpaper,
+            commands::cleanup_wallpapers,
             commands::http_request,
             commands::log_js,
             commands::save_raw_reply,

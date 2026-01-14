@@ -1402,12 +1402,17 @@ body[data-creative-wide='on'] .QQ_chat_charmsg[data-creative='1'] .QQ_chat_msgdi
 }
 
 .wallpaper-preview-bubble {
+  display: none;
   padding: 6px 10px;
   border-radius: 10px;
   background: #c9c9c9;
   color: #1f2937;
   font-size: 12px;
   box-shadow: 0 3px 8px rgba(15, 23, 42, 0.18);
+}
+
+.wallpaper-preview.has-image .wallpaper-preview-bubble {
+  display: inline-block;
 }
 
 .wallpaper-controls label {

@@ -1,5 +1,6 @@
 import { appSettings } from '../storage/app-settings.js';
 import { ConfigManager } from '../storage/config.js';
+import { safeInvoke } from '../utils/tauri.js';
 
 export class GeneralSettingsPanel {
   constructor() {
@@ -29,6 +30,8 @@ export class GeneralSettingsPanel {
     this.memoryInjectDepthInput = null;
     this.memoryAutoConfirmToggle = null;
     this.memoryAutoStepToggle = null;
+    this.cleanWallpapersBtn = null;
+    this.cleanWallpapersStatus = null;
     this.configManager = new ConfigManager();
   }
 
@@ -378,6 +381,19 @@ export class GeneralSettingsPanel {
           </div>
         </div>
 
+        <div style="margin: 8px 0 12px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
+          <div style="font-size: 12px; color:#64748b; margin-bottom: 10px;">存储清理</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap;">
+            <button id="general-clean-wallpapers"
+                    style="padding: 6px 10px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; font-size: 12px; color: #0f172a;">
+              清理壁纸残留
+            </button>
+            <span id="general-clean-wallpapers-status" style="font-size: 12px; color:#64748b;">
+              仅清理未被会话引用的旧文件
+            </span>
+          </div>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; gap: 8px;">
           <button id="general-settings-done" style="padding: 8px 14px; border-radius: 8px; border: 1px solid #e2e8f0;
                                                    background: #f8fafc; cursor: pointer; font-size: 14px; color: #475569;">
@@ -420,6 +436,8 @@ export class GeneralSettingsPanel {
     this.memoryInjectDepthInput = this.element.querySelector('#general-memory-inject-depth');
     this.memoryAutoConfirmToggle = this.element.querySelector('#general-memory-auto-confirm');
     this.memoryAutoStepToggle = this.element.querySelector('#general-memory-auto-step');
+    this.cleanWallpapersBtn = this.element.querySelector('#general-clean-wallpapers');
+    this.cleanWallpapersStatus = this.element.querySelector('#general-clean-wallpapers-status');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -548,6 +566,43 @@ export class GeneralSettingsPanel {
       const enabled = Boolean(e?.target?.checked);
       appSettings.update({ memoryAutoStepByStep: enabled });
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoStepByStep', value: enabled } }));
+    });
+
+    this.cleanWallpapersBtn?.addEventListener('click', async () => {
+      const confirmed = confirm('将清理未被会话引用的壁纸文件，是否继续？');
+      if (!confirmed) return;
+      const store = window?.appBridge?.chatStore || null;
+      const sessionIds = store?.listSessions?.() || [];
+      const referenced = sessionIds
+        .map((sid) => store?.getSessionSettings?.(sid)?.wallpaper?.path || '')
+        .map((val) => String(val || '').trim())
+        .filter(Boolean);
+      const unique = Array.from(new Set(referenced));
+      if (this.cleanWallpapersBtn) {
+        this.cleanWallpapersBtn.disabled = true;
+        this.cleanWallpapersBtn.textContent = '清理中...';
+      }
+      if (this.cleanWallpapersStatus) {
+        this.cleanWallpapersStatus.textContent = `已引用 ${unique.length} 个壁纸文件`;
+      }
+      try {
+        const result = await safeInvoke('cleanup_wallpapers', { referencedPaths: unique });
+        const removed = Number(result?.removed || 0);
+        const kept = Number(result?.kept || 0);
+        if (this.cleanWallpapersStatus) {
+          this.cleanWallpapersStatus.textContent = `已清理 ${removed} 个残留文件，保留 ${kept} 个在用壁纸`;
+        }
+      } catch (err) {
+        const message = String(err?.message || err || '清理失败').trim();
+        if (this.cleanWallpapersStatus) {
+          this.cleanWallpapersStatus.textContent = `清理失败: ${message}`;
+        }
+      } finally {
+        if (this.cleanWallpapersBtn) {
+          this.cleanWallpapersBtn.disabled = false;
+          this.cleanWallpapersBtn.textContent = '清理壁纸残留';
+        }
+      }
     });
     this.memoryInjectPositionSelect?.addEventListener('change', (e) => {
       const raw = String(e?.target?.value || 'template').toLowerCase();
