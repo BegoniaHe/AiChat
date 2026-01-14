@@ -87,6 +87,8 @@ const sliceTailWithinChars = (arr, getText, { maxItems, maxChars } = {}) => {
   return picked;
 };
 
+const MAX_WALLPAPER_DATA_URL_CHARS = 200000;
+
 const sanitizeSessionForPersist = session => {
   if (!session || typeof session !== 'object') return session;
   const out = { ...session };
@@ -208,6 +210,22 @@ const sanitizeSessionForPersist = session => {
       })
       .filter(Boolean);
     out.archives = sanitized.slice(0, MAX_PERSIST_ARCHIVES_PER_SESSION);
+  } catch {}
+
+  try {
+    const settings = out.settings;
+    const wallpaper = settings?.wallpaper;
+    if (wallpaper && typeof wallpaper === 'object') {
+      const path = typeof wallpaper.path === 'string' ? wallpaper.path.trim() : '';
+      const url = typeof wallpaper.url === 'string' ? wallpaper.url : '';
+      const isDataUrl = url.startsWith('data:');
+      const tooLarge = url.length > MAX_WALLPAPER_DATA_URL_CHARS;
+      if (!path && (wallpaper.transient || (isDataUrl && tooLarge))) {
+        out.settings = { ...(settings || {}), wallpaper: { ...wallpaper } };
+        out.settings.wallpaper.url = '';
+        out.settings.wallpaper.dataUrl = '';
+      }
+    }
   } catch {}
 
   return out;

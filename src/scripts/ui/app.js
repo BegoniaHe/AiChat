@@ -1650,6 +1650,7 @@ ${listPart || '-（无）'}
       actionPanel.el.classList.remove('is-active');
       chatRoom.classList.remove('action-panel-open');
     }
+    syncChatInputOffset();
   };
 
   const setStickerPanelOpen = open => {
@@ -1667,6 +1668,7 @@ ${listPart || '-（无）'}
       chatRoom.classList.remove('sticker-panel-open');
     }
     updateStickerPreview(composerInput?.value || '');
+    syncChatInputOffset();
   };
 
   const renderChatList = () => {
@@ -1984,7 +1986,64 @@ ${listPart || '-（无）'}
   };
   const chatList = document.getElementById('chat-list');
   chatRoom = document.getElementById('chat-room');
+  const chatScroll = document.getElementById('chat-scroll');
   const composerInput = document.getElementById('composer-input');
+  const chatInputContainer = document.querySelector('.chat-input-container');
+  let chatInputGapTweak = 0;
+  const syncChatInputOffset = () => {
+    if (!chatRoom || !chatInputContainer || !chatScroll) return;
+    if (chatRoom.classList.contains('hidden')) return;
+    const inputRect = chatInputContainer.getBoundingClientRect();
+    const scrollRect = chatScroll.getBoundingClientRect();
+    const baseOffset = Math.max(0, Math.round(scrollRect.bottom - inputRect.top));
+    const offset = Math.max(0, baseOffset + chatInputGapTweak);
+    if (offset) {
+      chatRoom.style.setProperty('--qq-size-input-bar', `${offset}px`);
+    }
+  };
+  const syncChatBottomGap = () => {
+    if (!chatRoom || !chatInputContainer || !chatScroll) return;
+    if (chatRoom.classList.contains('hidden')) return;
+    const maxScroll = chatScroll.scrollHeight - chatScroll.clientHeight;
+    if (maxScroll > 0 && chatScroll.scrollTop < maxScroll - 2) return;
+    const last = chatScroll.lastElementChild;
+    if (!last) return;
+    const gap = Math.round(chatInputContainer.getBoundingClientRect().top - last.getBoundingClientRect().bottom);
+    if (!Number.isFinite(gap)) return;
+    const desired = 8;
+    const delta = desired - gap;
+    if (Math.abs(delta) < 2) return;
+    chatInputGapTweak = Math.max(-120, Math.min(120, chatInputGapTweak + delta));
+    syncChatInputOffset();
+  };
+  syncChatInputOffset();
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(syncChatBottomGap);
+  }
+  if (typeof ResizeObserver !== 'undefined' && chatInputContainer) {
+    const observer = new ResizeObserver(() => {
+      syncChatInputOffset();
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncChatBottomGap);
+    });
+    observer.observe(chatInputContainer);
+  }
+  window.addEventListener('resize', () => {
+    syncChatInputOffset();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncChatBottomGap);
+  });
+  composerInput?.addEventListener('input', () => {
+    requestAnimationFrame(syncChatInputOffset);
+    requestAnimationFrame(syncChatBottomGap);
+  });
+  chatScroll?.addEventListener('scroll', () => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncChatBottomGap);
+  }, { passive: true });
+  if (chatScroll && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(() => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncChatBottomGap);
+    });
+    observer.observe(chatScroll, { childList: true });
+  }
   const stickerToggleBtn = document.querySelector('.voice-btn');
   let chatSettingsReady = false;
   let pendingChatSettingsSessionId = '';
@@ -3008,6 +3067,14 @@ ${listPart || '-（无）'}
     chatList?.classList.add('hidden');
     chatRoom?.classList.remove('hidden');
     setStickerPanelOpen(false);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        syncChatInputOffset();
+        requestAnimationFrame(syncChatInputOffset);
+      });
+    } else {
+      setTimeout(syncChatInputOffset, 0);
+    }
 
     // 隐藏消息界面顶部和底部导航栏
     const messageTopbar = document.getElementById('message-topbar');
@@ -7146,11 +7213,43 @@ ${listPart || '-（无）'}
     wallpaperPreview?.releasePointerCapture?.(event.pointerId);
   };
 
+  const loadImageFromDataUrl = (dataUrl) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('wallpaper image load failed'));
+    img.src = dataUrl;
+  });
+
+  const shrinkWallpaperDataUrl = async (dataUrl, { maxSize = 2048, quality = 0.85 } = {}) => {
+    if (!dataUrl || !String(dataUrl).startsWith('data:')) return { dataUrl, width: 0, height: 0 };
+    const img = await loadImageFromDataUrl(dataUrl);
+    const iw = img.naturalWidth || img.width || 0;
+    const ih = img.naturalHeight || img.height || 0;
+    if (!iw || !ih) return { dataUrl, width: iw, height: ih };
+    const scale = Math.min(1, maxSize / Math.max(iw, ih));
+    if (scale >= 0.999) return { dataUrl, width: iw, height: ih };
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(iw * scale));
+    canvas.height = Math.max(1, Math.round(ih * scale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { dataUrl, width: iw, height: ih };
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const output = canvas.toDataURL('image/jpeg', quality);
+    return { dataUrl: output, width: canvas.width, height: canvas.height };
+  };
+
   const pickWallpaperFile = async (file) => {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result || '');
+    reader.onload = async () => {
+      const rawDataUrl = String(reader.result || '');
+      let dataUrl = rawDataUrl;
+      try {
+        const scaled = await shrinkWallpaperDataUrl(rawDataUrl);
+        if (scaled?.dataUrl) dataUrl = scaled.dataUrl;
+      } catch (err) {
+        logger.warn('壁纸压缩失败，使用原图', err);
+      }
       const init = {
         mode: 'new',
         fileName: file.name || 'wallpaper',
@@ -7259,6 +7358,7 @@ ${listPart || '-（无）'}
       } catch (err) {
         logger.warn('保存壁纸失败', err);
       }
+      window.toastr?.warning?.('壁纸保存失败，当前壁纸仅本次有效');
       return {
         wallpaper: {
           url: wallpaperState.fileDataUrl,
@@ -7270,6 +7370,7 @@ ${listPart || '-（无）'}
           width: wallpaperState.width,
           height: wallpaperState.height,
           updatedAt: Date.now(),
+          transient: true,
         },
       };
     }
