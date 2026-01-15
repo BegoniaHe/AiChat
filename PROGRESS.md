@@ -1,5 +1,37 @@
 # 開發進度追蹤（必更新）(必须使用当下时间记录)
 
+## 2026-01-15 10:25
+- 资料迁移：新增一键打包/导入资料包（聊天记录、联系人、壁纸、记忆表格等），导出为 ZIP 并支持覆盖导入。
+- 导入前关闭记忆表格 DB 连接，避免 Windows 文件占用导致导入失败。
+- 通用设定新增资料迁移入口与状态提示，导入后提示重启。
+- 修改：
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/memory_db.rs`
+  - `src/scripts/ui/general-settings-panel.js`
+
+## 2026-01-15 10:33
+- 资料包排除 API 配置与 keyring 文件，避免迁移敏感资讯。
+- 资料迁移 UI 文案补充安全提醒，导入提示覆盖所有资料。
+- 导出时同步写入 app_settings，以便迁移 UI 偏好。
+- 修改：
+  - `src-tauri/src/commands.rs`
+  - `src/scripts/ui/general-settings-panel.js`
+
+## 2026-01-15 00:56
+- 聊天室底部留白微调：消息列表底部预留缩减（输入框间距更紧）。
+- 壁纸持久化补强：新增原图流式分块写入、修正保存参数命名、失败提示带错误信息。
+- 壁纸清理：清除壁纸/删除联系人同步删除本地文件；通用设定新增“清理壁纸残留”入口。
+- 壁纸预览：无壁纸时隐藏预览气泡，上传后再显示。
+- 修改：
+  - `src/assets/css/qq-legacy.css`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/general-settings-panel.js`
+  - `src/scripts/ui/session-panel.js`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`
+
 ## 2026-01-14 20:09
 - 聊天室底部留白对齐修正：消息列表改为使用输入栏位置计算的底部内边距，避免多余空白。
 - 面板开合时同步更新底部偏移，贴图预览仍单独加高。

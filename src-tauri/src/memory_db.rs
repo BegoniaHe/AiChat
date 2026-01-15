@@ -127,6 +127,15 @@ impl MemoryDb {
         })
     }
 
+    pub fn close_all(&self) {
+        #[cfg(not(target_os = "android"))]
+        {
+            if let Ok(mut guard) = self.connections.lock() {
+                guard.clear();
+            }
+        }
+    }
+
     pub fn init_database(&self, scope_id: Option<String>) -> Result<(), String> {
         self.with_conn(scope_id, |_| Ok(()))
     }

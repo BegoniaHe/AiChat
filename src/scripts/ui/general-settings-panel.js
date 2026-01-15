@@ -32,6 +32,10 @@ export class GeneralSettingsPanel {
     this.memoryAutoStepToggle = null;
     this.cleanWallpapersBtn = null;
     this.cleanWallpapersStatus = null;
+    this.bundleExportBtn = null;
+    this.bundleImportBtn = null;
+    this.bundleStatus = null;
+    this.bundleImportInput = null;
     this.configManager = new ConfigManager();
   }
 
@@ -382,6 +386,25 @@ export class GeneralSettingsPanel {
         </div>
 
         <div style="margin: 8px 0 12px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
+          <div style="font-size: 12px; color:#64748b; margin-bottom: 10px;">资料迁移</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap;">
+            <button id="general-bundle-export"
+                    style="padding: 6px 10px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; font-size: 12px; color: #0f172a;">
+              一键打包
+            </button>
+            <button id="general-bundle-import"
+                    style="padding: 6px 10px; border-radius: 8px; border: 1px solid #e2e8f0; background: #fff; cursor: pointer; font-size: 12px; color: #0f172a;">
+              导入资料包
+            </button>
+            <span id="general-bundle-status" style="font-size: 12px; color:#64748b;">
+              将聊天记录/联系人/壁纸/记忆表格打包为 ZIP（不包含 API 配置）
+            </span>
+          </div>
+          <small style="color:#94a3b8; display:block; margin-top:6px;">导入会覆盖当前资料，请勿导入来源不明的资料包。</small>
+          <input type="file" id="general-bundle-file" accept=".zip,application/zip" style="display:none;">
+        </div>
+
+        <div style="margin: 8px 0 12px; padding-top: 6px; border-top: 1px dashed #e2e8f0;">
           <div style="font-size: 12px; color:#64748b; margin-bottom: 10px;">存储清理</div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap;">
             <button id="general-clean-wallpapers"
@@ -438,6 +461,10 @@ export class GeneralSettingsPanel {
     this.memoryAutoStepToggle = this.element.querySelector('#general-memory-auto-step');
     this.cleanWallpapersBtn = this.element.querySelector('#general-clean-wallpapers');
     this.cleanWallpapersStatus = this.element.querySelector('#general-clean-wallpapers-status');
+    this.bundleExportBtn = this.element.querySelector('#general-bundle-export');
+    this.bundleImportBtn = this.element.querySelector('#general-bundle-import');
+    this.bundleStatus = this.element.querySelector('#general-bundle-status');
+    this.bundleImportInput = this.element.querySelector('#general-bundle-file');
     this.debugToggle?.addEventListener('change', async (e) => {
       const enabled = Boolean(e?.target?.checked);
       const settings = appSettings.update({ showDebugToggle: enabled });
@@ -566,6 +593,84 @@ export class GeneralSettingsPanel {
       const enabled = Boolean(e?.target?.checked);
       appSettings.update({ memoryAutoStepByStep: enabled });
       window.dispatchEvent(new CustomEvent('app-settings-changed', { detail: { key: 'memoryAutoStepByStep', value: enabled } }));
+    });
+
+    const setBundleStatus = (text) => {
+      if (this.bundleStatus) this.bundleStatus.textContent = text;
+    };
+
+    const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+      reader.readAsDataURL(file);
+    });
+
+    this.bundleExportBtn?.addEventListener('click', async () => {
+      if (this.bundleExportBtn) this.bundleExportBtn.disabled = true;
+      setBundleStatus('正在打包...');
+      try {
+        await safeInvoke('save_kv', { name: 'app_settings_v1', data: appSettings.get() });
+        const bridge = window?.appBridge;
+        await bridge?.chatStore?.flush?.();
+        await bridge?.momentsStore?.flush?.();
+      } catch {}
+      try {
+        const result = await safeInvoke('export_data_bundle', {});
+        const path = String(result?.path || '').trim();
+        const bytes = Number(result?.bytes || 0);
+        const size = bytes ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : '';
+        setBundleStatus(path ? `已导出：${path}${size ? `（${size}）` : ''}` : '导出完成');
+        window.toastr?.success?.('资料包导出完成');
+      } catch (err) {
+        const message = String(err?.message || err || '导出失败').trim();
+        setBundleStatus(`导出失败: ${message}`);
+        window.toastr?.error?.('资料包导出失败');
+      } finally {
+        if (this.bundleExportBtn) this.bundleExportBtn.disabled = false;
+      }
+    });
+
+    this.bundleImportBtn?.addEventListener('click', () => {
+      const confirmed = confirm(
+        '导入会覆盖当前所有资料（不包含 API 配置），且无法撤销。\n请确认资料包来源可信，避免泄露隐私。\n确定继续吗？',
+      );
+      if (!confirmed) return;
+      if (this.bundleImportInput) this.bundleImportInput.value = '';
+      this.bundleImportInput?.click();
+    });
+
+    this.bundleImportInput?.addEventListener('change', async () => {
+      const file = this.bundleImportInput?.files?.[0];
+      if (!file) return;
+      if (this.bundleImportBtn) this.bundleImportBtn.disabled = true;
+      setBundleStatus('正在导入...');
+      try {
+        const mode = 'replace';
+        const filePath = typeof file.path === 'string' ? file.path : '';
+        if (filePath) {
+          await safeInvoke('import_data_bundle', { path: filePath, mode });
+        } else {
+          const dataUrl = await readFileAsDataUrl(file);
+          await safeInvoke('import_data_bundle_bytes', { data: dataUrl, mode });
+        }
+        try {
+          const prefs = await safeInvoke('load_kv', { name: 'app_settings_v1' });
+          if (prefs && typeof prefs === 'object' && !prefs._tooLarge) {
+            appSettings.update(prefs);
+          }
+        } catch {}
+        setBundleStatus('导入完成，请重启应用以加载新资料');
+        window.toastr?.success?.('资料包导入完成');
+        const restart = confirm('资料导入完成，是否立即重启应用？');
+        if (restart) window.location.reload();
+      } catch (err) {
+        const message = String(err?.message || err || '导入失败').trim();
+        setBundleStatus(`导入失败: ${message}`);
+        window.toastr?.error?.('资料包导入失败');
+      } finally {
+        if (this.bundleImportBtn) this.bundleImportBtn.disabled = false;
+      }
     });
 
     this.cleanWallpapersBtn?.addEventListener('click', async () => {

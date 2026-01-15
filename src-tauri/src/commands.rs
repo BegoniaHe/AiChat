@@ -14,11 +14,13 @@ use tauri::{AppHandle, Manager, State};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use zip::write::FileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 #[cfg(target_os = "android")]
 use std::os::unix::io::AsRawFd;
@@ -153,6 +155,18 @@ pub struct WallpaperCleanupResult {
     pub kept: usize,
 }
 
+#[derive(serde::Serialize)]
+pub struct DataBundleResult {
+    pub path: String,
+    pub bytes: u64,
+    pub files: usize,
+}
+
+#[derive(serde::Serialize)]
+pub struct DataBundleImportResult {
+    pub files: usize,
+}
+
 fn decode_base64_payload(payload: &str) -> Result<Vec<u8>, String> {
     let raw = payload.trim();
     if raw.is_empty() {
@@ -169,6 +183,122 @@ fn decode_base64_payload(payload: &str) -> Result<Vec<u8>, String> {
         return Err("empty base64 payload".to_string());
     }
     BASE64_ENGINE.decode(data).map_err(|e| e.to_string())
+}
+
+fn resolve_export_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(dir) = app.path().download_dir() {
+        return Ok(dir);
+    }
+    if let Ok(dir) = app.path().document_dir() {
+        return Ok(dir);
+    }
+    get_data_dir(app)
+}
+
+fn clear_data_dir(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        } else {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn is_sensitive_bundle_path(path: &Path) -> bool {
+    let name = match path.file_name().and_then(|s| s.to_str()) {
+        Some(value) => value,
+        None => return false,
+    };
+    matches!(
+        name,
+        "config.json"
+            | "llm_profiles_v1.json"
+            | "llm_keyring_v1.json"
+            | "llm_keyring_master_v1.json"
+    )
+}
+
+fn add_dir_to_zip<W: Write + Seek>(
+    writer: &mut ZipWriter<W>,
+    base: &Path,
+    dir: &Path,
+    options: FileOptions,
+    skip: Option<&Path>,
+) -> Result<usize, String> {
+    if is_sensitive_bundle_path(dir) {
+        return Ok(0);
+    }
+    if let Some(skip_path) = skip {
+        if dir == skip_path {
+            return Ok(0);
+        }
+    }
+    if dir.is_dir() {
+        let rel = dir.strip_prefix(base).map_err(|_| "invalid base path".to_string())?;
+        if !rel.as_os_str().is_empty() {
+            let name = format!("{}/", rel.to_string_lossy().replace('\\', "/"));
+            writer.add_directory(name, options).map_err(|e| e.to_string())?;
+        }
+        let mut count = 0;
+        for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            count += add_dir_to_zip(writer, base, &entry.path(), options, skip)?;
+        }
+        return Ok(count);
+    }
+    let rel = dir.strip_prefix(base).map_err(|_| "invalid base path".to_string())?;
+    let name = rel.to_string_lossy().replace('\\', "/");
+    writer.start_file(name, options).map_err(|e| e.to_string())?;
+    let mut file = fs::File::open(dir).map_err(|e| e.to_string())?;
+    std::io::copy(&mut file, writer).map_err(|e| e.to_string())?;
+    Ok(1)
+}
+
+fn import_bundle_from_reader<R: Read + Seek>(
+    data_dir: &Path,
+    memory_db: &MemoryDb,
+    reader: R,
+    mode: &str,
+) -> Result<DataBundleImportResult, String> {
+    memory_db.close_all();
+    if mode != "merge" {
+        clear_data_dir(data_dir)?;
+    }
+    let mut archive = ZipArchive::new(reader).map_err(|e| e.to_string())?;
+    let mut files = 0usize;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = file.name();
+        if name == "bundle.json" {
+            continue;
+        }
+        if is_sensitive_bundle_path(Path::new(name)) {
+            continue;
+        }
+        if name.ends_with('/') {
+            if let Some(rel) = file.enclosed_name() {
+                let out_dir = data_dir.join(rel);
+                fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+            }
+            continue;
+        }
+        let Some(rel) = file.enclosed_name() else { continue; };
+        let out_path = data_dir.join(rel);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+        files += 1;
+    }
+    Ok(DataBundleImportResult { files })
 }
 
 /// Ensure bundled media assets exist in app data dir.
@@ -497,6 +627,85 @@ pub async fn cleanup_wallpapers(
     }
 
     Ok(WallpaperCleanupResult { removed, kept })
+}
+
+/// 导出本地资料包（聊天记录/联系人/壁纸/记忆表格等）
+#[tauri::command]
+pub async fn export_data_bundle(
+    app: AppHandle,
+    state: State<'_, MemoryDb>,
+) -> Result<DataBundleResult, String> {
+    state.close_all();
+    let data_dir = get_data_dir(&app)?;
+    let export_dir = resolve_export_dir(&app)?;
+    fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let file_name = format!("chatapp_backup_{ts}.zip");
+    let output_path = export_dir.join(file_name);
+    let file = fs::File::create(&output_path).map_err(|e| e.to_string())?;
+    let mut writer = ZipWriter::new(file);
+    let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    let manifest = serde_json::json!({
+        "format": "tauri-chat-app-backup-v1",
+        "createdAt": chrono::Utc::now().to_rfc3339(),
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "excluded": [
+            "config.json",
+            "llm_profiles_v1.json",
+            "llm_keyring_v1.json",
+            "llm_keyring_master_v1.json"
+        ]
+    });
+    writer.start_file("bundle.json", options).map_err(|e| e.to_string())?;
+    writer
+        .write_all(manifest.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let files = add_dir_to_zip(&mut writer, &data_dir, &data_dir, options, Some(&output_path))?;
+    writer.finish().map_err(|e| e.to_string())?;
+    let bytes = fs::metadata(&output_path).map_err(|e| e.to_string())?.len();
+
+    Ok(DataBundleResult {
+        path: output_path.to_string_lossy().to_string(),
+        bytes,
+        files,
+    })
+}
+
+/// 导入本地资料包
+#[tauri::command]
+pub async fn import_data_bundle(
+    app: AppHandle,
+    path: String,
+    mode: Option<String>,
+    state: State<'_, MemoryDb>,
+) -> Result<DataBundleImportResult, String> {
+    let mode = mode.unwrap_or_else(|| "replace".to_string()).to_lowercase();
+    let data_dir = get_data_dir(&app)?;
+    let path_buf = PathBuf::from(path);
+    if mode != "merge" && path_buf.starts_with(&data_dir) {
+        let bytes = fs::read(&path_buf).map_err(|e| e.to_string())?;
+        let cursor = std::io::Cursor::new(bytes);
+        return import_bundle_from_reader(&data_dir, &state, cursor, &mode);
+    }
+    let file = fs::File::open(&path_buf).map_err(|e| e.to_string())?;
+    import_bundle_from_reader(&data_dir, &state, file, &mode)
+}
+
+/// 导入本地资料包（base64/dataURL）
+#[tauri::command]
+pub async fn import_data_bundle_bytes(
+    app: AppHandle,
+    data: String,
+    mode: Option<String>,
+    state: State<'_, MemoryDb>,
+) -> Result<DataBundleImportResult, String> {
+    let mode = mode.unwrap_or_else(|| "replace".to_string()).to_lowercase();
+    let data_dir = get_data_dir(&app)?;
+    let bytes = decode_base64_payload(&data)?;
+    let cursor = std::io::Cursor::new(bytes);
+    import_bundle_from_reader(&data_dir, &state, cursor, &mode)
 }
 
 /// 保存配置
