@@ -1310,15 +1310,16 @@ ${listPart || '-（无）'}
       if (m.type === 'image') {
         const content = typeof m.content === 'string' ? m.content : '';
         const localPath = String(meta?.localPath || '').trim();
-        if (localPath && isAttachmentExpired(meta)) {
-          queueAttachmentCleanup(localPath, sessionId);
+        if (isAttachmentExpired(meta)) {
+          if (localPath) queueAttachmentCleanup(localPath, sessionId);
+          const expiredMeta = (meta && typeof meta === 'object') ? { ...meta, expired: true } : { expired: true };
           return {
             ...m,
             type: 'text',
             content: '[图片已过期]',
             avatar,
             status: m.status,
-            meta: { ...meta, expired: true },
+            meta: expiredMeta,
           };
         }
         if (localPath && (!content || content === '[binary omitted]')) {
@@ -2373,6 +2374,54 @@ ${listPart || '-（无）'}
       if (targetId) removeComposerAttachment(targetId);
     });
   }
+  const scanExpiredAttachments = () => {
+    const sessions = chatStore.listSessions();
+    if (!sessions || !sessions.length) return;
+    const queue = sessions.map(sid => String(sid || '').trim()).filter(Boolean);
+    const currentId = String(chatStore.getCurrent() || '');
+    const runSessionScan = (sessionId) => {
+      const messages = chatStore.getMessages(sessionId) || [];
+      messages.forEach((message) => {
+        if (!message || message.type !== 'image') return;
+        const meta = (message.meta && typeof message.meta === 'object') ? message.meta : {};
+        if (!isAttachmentExpired(meta)) return;
+        const localPath = String(meta.localPath || '').trim();
+        if (localPath) queueAttachmentCleanup(localPath, sessionId);
+        if (meta.expired) return;
+        const nextMeta = { ...meta, expired: true };
+        const updated = chatStore.updateMessage(message.id, { meta: nextMeta }, sessionId);
+        if (sessionId === currentId && updated) ui.updateMessage(message.id, updated);
+      });
+    };
+    const work = (deadline) => {
+      const getRemaining = () => (typeof deadline?.timeRemaining === 'function' ? deadline.timeRemaining() : 0);
+      while (queue.length && (getRemaining() > 6 || deadline?.didTimeout)) {
+        const sessionId = queue.shift();
+        if (sessionId) runSessionScan(sessionId);
+      }
+      if (!queue.length) return;
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(work, { timeout: 2000 });
+      } else {
+        setTimeout(() => work({ didTimeout: true, timeRemaining: () => 0 }), 16);
+      }
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(work, { timeout: 2000 });
+    } else {
+      setTimeout(() => work({ didTimeout: true, timeRemaining: () => 0 }), 0);
+    }
+  };
+  const ATTACHMENT_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const scheduleExpiredAttachmentScan = () => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => scanExpiredAttachments(), { timeout: 2000 });
+    } else {
+      setTimeout(() => scanExpiredAttachments(), 0);
+    }
+  };
+  scheduleExpiredAttachmentScan();
+  setInterval(() => scheduleExpiredAttachmentScan(), ATTACHMENT_SCAN_INTERVAL_MS);
   const stickerToggleBtn = document.querySelector('.voice-btn');
   let chatSettingsReady = false;
   let pendingChatSettingsSessionId = '';
@@ -3123,33 +3172,40 @@ ${listPart || '-（无）'}
       if (action === 'vars') variablePanel.show();
       if (action === 'chat-settings') openChatSettings();
       if (action === 'prompt-preview') {
-        const sid = chatStore.getCurrent();
-        const contact = contactsStore.getContact(sid);
-        const name = contact?.name || sid;
-        const req = window.appBridge?.lastRequest;
-        const msgs = Array.isArray(req?.messages) ? req.messages : null;
-        if (!msgs || !msgs.length) {
-          window.toastr?.warning?.('暂无本次 Prompt 记录（请先发送一次）');
-        } else {
-          const at = req?.at ? new Date(req.at).toLocaleString() : '';
-          const head = [
-            `provider: ${req?.provider || ''}`,
-            `model: ${req?.model || ''}`,
-            `baseUrl: ${req?.baseUrl || ''}`,
-            `stream: ${req?.stream ? 'true' : 'false'}`,
-            req?.options
-              ? `options: ${Object.entries(req.options)
-                  .filter(([_, v]) => v !== undefined)
-                  .map(([k, v]) => `${k}=${v}`)
-                  .join(', ')}`
-              : '',
-          ]
-            .filter(Boolean)
-            .join('\n');
-          // Display only: show prompt text content for easier reading (no JSON, no numbering).
-          const body = buildRequestPromptText(msgs);
-          const meta = `${name}${at ? ` · ${at}` : ''}`;
-          promptPreviewModal.show(`${head}\n\n${body}`.trim(), meta);
+        try {
+          const sid = chatStore.getCurrent();
+          const contact = contactsStore.getContact(sid);
+          const name = contact?.name || sid;
+          const req = window.appBridge?.lastRequest;
+          const msgs = Array.isArray(req?.messages) ? req.messages : null;
+          if (!msgs || !msgs.length) {
+            window.toastr?.warning?.('暂无本次 Prompt 记录（请先发送一次）');
+          } else {
+            const at = req?.at ? new Date(req.at).toLocaleString() : '';
+            const head = [
+              `provider: ${req?.provider || ''}`,
+              `model: ${req?.model || ''}`,
+              `baseUrl: ${req?.baseUrl || ''}`,
+              `stream: ${req?.stream ? 'true' : 'false'}`,
+              req?.options
+                ? `options: ${Object.entries(req.options)
+                    .filter(([_, v]) => v !== undefined)
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join(', ')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n');
+            // Display only: show prompt text content for easier reading (no JSON, no numbering).
+            const body = (typeof buildRequestPromptText === 'function')
+              ? buildRequestPromptText(msgs)
+              : msgs.map(m => String(m?.content ?? '')).filter(t => t.trim().length > 0).join('\n\n');
+            const meta = `${name}${at ? ` · ${at}` : ''}`;
+            promptPreviewModal.show(`${head}\n\n${body}`.trim(), meta);
+          }
+        } catch (err) {
+          logger.warn('prompt preview failed', err);
+          window.toastr?.error?.('打开本次 Prompt 失败');
         }
       }
       if (action === 'raw-reply') {
@@ -5549,6 +5605,7 @@ ${listPart || '-（无）'}
       };
       const resolveImageAttachment = (msg) => {
         if (!msg || typeof msg !== 'object') return '';
+        if (isAttachmentExpired(msg.meta)) return '';
         if (msg.type === 'image' && typeof msg.content === 'string') {
           const raw = String(msg.content || '').trim();
           if (!raw || raw === '[binary omitted]' || raw === '[图片]') return '';
