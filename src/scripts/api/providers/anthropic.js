@@ -26,14 +26,64 @@ export class AnthropicProvider {
      * 转换消息格式（OpenAI -> Anthropic）
      */
     convertMessages(messages) {
+        const parseDataUrl = (url) => {
+            const raw = String(url || '').trim();
+            if (!raw.startsWith('data:')) return null;
+            const match = raw.match(/^data:([^;]+);base64,(.+)$/i);
+            if (!match) return null;
+            return { mime: match[1], data: match[2] };
+        };
+        const toAnthropicContent = (content) => {
+            if (Array.isArray(content)) {
+                const parts = [];
+                content.forEach((part) => {
+                    if (!part || typeof part !== 'object') return;
+                    if (part.type === 'text') {
+                        const text = String(part.text || '');
+                        if (text) parts.push({ type: 'text', text });
+                        return;
+                    }
+                    if (part.type === 'image_url') {
+                        const url = part?.image_url?.url;
+                        const parsed = parseDataUrl(url);
+                        if (parsed?.data) {
+                            parts.push({
+                                type: 'image',
+                                source: {
+                                    type: 'base64',
+                                    media_type: parsed.mime || 'image/jpeg',
+                                    data: parsed.data,
+                                },
+                            });
+                        } else if (url) {
+                            parts.push({ type: 'text', text: `[图片] ${String(url)}` });
+                        }
+                    }
+                });
+                return parts.length ? parts : [{ type: 'text', text: '' }];
+            }
+            return [{ type: 'text', text: String(content ?? '') }];
+        };
+        const toSystemText = (content) => {
+            if (Array.isArray(content)) {
+                return content
+                    .map((part) => (part?.type === 'text' ? String(part.text || '') : ''))
+                    .filter(Boolean)
+                    .join('\n');
+            }
+            return String(content ?? '');
+        };
         const systemMessages = messages.filter(m => m.role === 'system');
         const otherMessages = messages.filter(m => m.role !== 'system');
 
-        const system = systemMessages.map(m => m.content).join('\n');
+        const system = systemMessages.map(m => toSystemText(m.content)).join('\n');
 
         return {
             system: system || undefined,
-            messages: otherMessages
+            messages: otherMessages.map(m => ({
+                role: m.role,
+                content: toAnthropicContent(m.content),
+            })),
         };
     }
 

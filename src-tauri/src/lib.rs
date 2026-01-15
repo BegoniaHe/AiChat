@@ -30,6 +30,8 @@ pub fn run() {
             commands::save_wallpaper_stream_finish,
             commands::delete_wallpaper,
             commands::cleanup_wallpapers,
+            commands::save_attachment,
+            commands::delete_attachment,
             commands::export_data_bundle,
             commands::import_data_bundle,
             commands::import_data_bundle_bytes,

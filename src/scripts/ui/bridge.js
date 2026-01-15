@@ -1396,6 +1396,36 @@ class AppBridge {
         depth: 0,
       });
     })();
+    const normalizeAttachmentParts = (parts) => {
+      const list = Array.isArray(parts) ? parts : [];
+      return list
+        .map((part) => {
+          if (!part || typeof part !== 'object') return null;
+          if (part.type === 'text') {
+            const text = String(part.text || '');
+            return text ? { type: 'text', text } : null;
+          }
+          if (part.type === 'image_url') {
+            const url = String(part.image_url?.url || '').trim();
+            return url ? { type: 'image_url', image_url: { url } } : null;
+          }
+          return null;
+        })
+        .filter(Boolean);
+    };
+    const userAttachmentParts = normalizeAttachmentParts(context?.meta?.userAttachmentParts);
+    const hasUserAttachments = userAttachmentParts.length > 0;
+    const buildUserContentWithAttachments = (text) => {
+      if (!hasUserAttachments) return text;
+      const parts = [];
+      const base = String(text ?? '');
+      if (base.trim()) parts.push({ type: 'text', text: base });
+      userAttachmentParts.forEach(part => parts.push(part));
+      return parts;
+    };
+    const pendingUserContent = buildUserContentWithAttachments(pendingUserPrompt);
+    const attachmentOnlyContent = hasUserAttachments ? buildUserContentWithAttachments('') : '';
+    let attachmentsInserted = false;
     const effectiveLastUserMessage = overrideLastUserMessageRaw.trim()
       ? overrideLastUserMessageRaw.trim()
       : pendingUserPrompt;
@@ -1422,8 +1452,17 @@ class AppBridge {
       ? Math.max(0, Math.min(2, Math.trunc(Number(context.user.personaRole))))
       : 0; // 0=system
     const personaText = personaRaw ? processTextMacrosWithPendingFlag(personaRaw, { user: name1, char: name2 }) : '';
+    const stringifyMatchContent = (content) => {
+      if (Array.isArray(content)) {
+        return content
+          .map((part) => (part?.type === 'text' ? String(part.text || '') : ''))
+          .filter(Boolean)
+          .join('\n');
+      }
+      return String(content ?? '');
+    };
     const historyForMatch = Array.isArray(context.history) ? context.history : [];
-    const historyMatchLines = historyForMatch.map(m => String(m?.content ?? '')).filter(Boolean);
+    const historyMatchLines = historyForMatch.map(m => stringifyMatchContent(m?.content)).filter(Boolean);
     const matchText = [String(userMessage ?? ''), ...historyMatchLines].join('\n');
     const matchContext = {
       userMessage: String(userMessage ?? ''),
@@ -2092,8 +2131,8 @@ class AppBridge {
         return { role, content: withSpeakerPrefix(normalized, speaker) };
       });
 
-      const pendingUserHistoryEntry = pendingUserPrompt
-        ? { role: 'user', content: pendingUserPrompt }
+      const pendingUserHistoryEntry = (pendingUserPrompt || hasUserAttachments)
+        ? { role: 'user', content: pendingUserContent }
         : null;
       let pendingUserInsertIndex = -1;
       const insertPendingUserIntoHistory = () => {
@@ -2101,11 +2140,13 @@ class AppBridge {
         if (pendingUserInsertIndex >= 0) return;
         pendingUserInsertIndex = messages.length;
         messages.push(pendingUserHistoryEntry);
+        if (hasUserAttachments) attachmentsInserted = true;
       };
       const removePendingUserFromHistory = () => {
         if (pendingUserInsertIndex < 0) return;
         messages.splice(pendingUserInsertIndex, 1);
         pendingUserInsertIndex = -1;
+        if (hasUserAttachments) attachmentsInserted = false;
       };
 
       // 聊天提示词：按位置注入（IN_PROMPT 走 worldInfo marker，SYSTEM_DEPTH_1 在 history 后）。
@@ -2366,8 +2407,12 @@ class AppBridge {
 
       // Append current user message (unless already injected via {{lastUserMessage}} in prompt blocks)
       const pendingUserInserted = pendingUserInsertIndex >= 0;
-      if (!usedLastUserMessageForPendingInput && !pendingUserInserted && pendingUserPrompt) {
-        messages.push({ role: 'user', content: pendingUserPrompt });
+      if (!usedLastUserMessageForPendingInput && !pendingUserInserted && (pendingUserPrompt || hasUserAttachments)) {
+        messages.push({ role: 'user', content: pendingUserContent });
+        if (hasUserAttachments) attachmentsInserted = true;
+      }
+      if (hasUserAttachments && !attachmentsInserted && attachmentOnlyContent) {
+        messages.push({ role: 'user', content: attachmentOnlyContent });
       }
       return messages;
     }
@@ -2558,6 +2603,19 @@ class AppBridge {
     insertMemoryPromptAt('system_end');
 
     // 3) History
+    const stringifyPromptContent = (content) => {
+      if (Array.isArray(content)) {
+        const parts = content.map((part) => {
+          if (!part || typeof part !== 'object') return '';
+          if (part.type === 'text') return String(part.text || '');
+          if (part.type === 'image_url') return '[图片]';
+          if (part.type === 'input_audio') return '[语音]';
+          return '';
+        });
+        return parts.filter(Boolean).join('\n');
+      }
+      return String(content ?? '');
+    };
     const history = Array.isArray(context.history) ? context.history.map(m => ({ ...m })) : [];
     // Prefix speaker names to reduce model confusion (role is still preserved)
     try {
@@ -2565,17 +2623,26 @@ class AppBridge {
         if (!m || typeof m !== 'object') continue;
         if (m.role !== 'user' && m.role !== 'assistant') continue;
 
+        const mediaUrl = typeof m.__mediaUrl === 'string' ? m.__mediaUrl.trim() : '';
+        let contentText = stringifyPromptContent(m.content);
+
         // Prevent OOM: Replace heavy Base64 content with placeholders for LLM context
-        if (m.type === 'image' || (typeof m.content === 'string' && m.content.startsWith('data:image'))) {
-          m.content = '[图片]';
-        } else if (m.type === 'audio' || (typeof m.content === 'string' && m.content.startsWith('data:audio'))) {
-          m.content = '[语音]';
+        if (!contentText) contentText = '';
+        if (mediaUrl) {
+          if (!contentText) contentText = '[图片]';
+          if (m.role === 'user') {
+            m.__media = { kind: 'image', url: mediaUrl };
+          }
+        } else if (m.type === 'image' || (typeof contentText === 'string' && contentText.startsWith('data:image'))) {
+          contentText = '[图片]';
+        } else if (m.type === 'audio' || (typeof contentText === 'string' && contentText.startsWith('data:audio'))) {
+          contentText = '[语音]';
         }
 
         const speaker = m.role === 'assistant' && isGroupChat
           ? (String(m?.name || '').trim() || name2)
           : (m.role === 'user' ? name1 : name2);
-        m.content = normalizeHistoryLineBreaks(m.content, m.role);
+        m.content = normalizeHistoryLineBreaks(contentText, m.role);
         m.content = withSpeakerPrefix(m.content, speaker);
       }
     } catch {}
@@ -2672,7 +2739,26 @@ class AppBridge {
 	      }
 	    }
 	    if (history.length > 0) {
-	      messages.push(...history);
+	      const historyForSend = history.map((msg) => {
+	        if (!msg || typeof msg !== 'object') return msg;
+	        const media = msg.__media;
+	        const mediaUrl = media && typeof media.url === 'string' ? media.url.trim() : '';
+	        if (media && media.kind === 'image' && mediaUrl) {
+	          const text = String(msg.content || '').trim();
+	          const parts = [];
+	          if (text) parts.push({ type: 'text', text });
+	          else parts.push({ type: 'text', text: '' });
+	          parts.push({ type: 'image_url', image_url: { url: mediaUrl } });
+	          const { __media, __mediaUrl, __mediaKind, ...rest } = msg;
+	          return { ...rest, content: parts };
+	        }
+	        if ('__mediaUrl' in msg || '__mediaKind' in msg || '__media' in msg) {
+	          const { __media, __mediaUrl, __mediaKind, ...rest } = msg;
+	          return rest;
+	        }
+	        return msg;
+	      });
+	      messages.push(...historyForSend);
 	    }
     if (chatGuideDepthContent) {
       messages.push({ role: 'system', content: chatGuideDepthContent });
@@ -2715,8 +2801,12 @@ class AppBridge {
     } catch {}
 
     // 5) Current user message
-    if (!usedLastUserMessageForPendingInput && pendingUserPrompt) {
-      messages.push({ role: 'user', content: pendingUserPrompt });
+    if (!usedLastUserMessageForPendingInput && (pendingUserPrompt || hasUserAttachments)) {
+      messages.push({ role: 'user', content: pendingUserContent });
+      if (hasUserAttachments) attachmentsInserted = true;
+    }
+    if (hasUserAttachments && !attachmentsInserted && attachmentOnlyContent) {
+      messages.push({ role: 'user', content: attachmentOnlyContent });
     }
     return messages;
   }

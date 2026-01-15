@@ -92,3 +92,42 @@ export const avatarDataUrlFromFile = async (file, opts = {}) => {
     return out || original;
 };
 
+/**
+ * Compress a data URL image for chat attachments.
+ * - Keeps GIF animation (no canvas conversion).
+ */
+export const compressImageDataUrl = async (dataUrl, opts = {}) => {
+    const raw = String(dataUrl || '').trim();
+    if (!raw.startsWith('data:image/')) return raw;
+    if (raw.startsWith('data:image/gif')) return raw;
+
+    const maxDim = Number.isFinite(opts.maxDim) ? opts.maxDim : 1280;
+    const quality = Number.isFinite(opts.quality) ? opts.quality : 0.82;
+    const targetMime = String(opts.mime || 'image/jpeg');
+    const maxBytes = Number.isFinite(opts.maxBytes) ? opts.maxBytes : 1_200_000;
+
+    const img = await loadImage(raw);
+    const w0 = img.naturalWidth || img.width || 1;
+    const h0 = img.naturalHeight || img.height || 1;
+    const scale = Math.min(1, maxDim / Math.max(w0, h0));
+    const w = Math.max(1, Math.round(w0 * scale));
+    const h = Math.max(1, Math.round(h0 * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { alpha: true });
+    if (!ctx) return raw;
+    ctx.drawImage(img, 0, 0, w, h);
+
+    let q = quality;
+    let out = canvasToDataUrl(canvas, { mime: targetMime, quality: q }) || raw;
+    for (let i = 0; i < 5; i++) {
+        const approxBytes = Math.ceil((out.length * 3) / 4);
+        if (approxBytes <= maxBytes) break;
+        q = clamp(q - 0.12, 0.4, 0.92);
+        out = canvasToDataUrl(canvas, { mime: targetMime, quality: q }) || out;
+    }
+
+    return out || raw;
+};

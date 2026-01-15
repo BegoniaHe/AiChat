@@ -11,6 +11,7 @@ import { appSettings } from '../storage/app-settings.js';
 import { normalizeScopeId } from '../storage/store-scope.js';
 import { logger } from '../utils/logger.js';
 import { initMediaAssets, listMediaAssets, resolveMediaAsset, isAssetRef, isLikelyUrl } from '../utils/media-assets.js';
+import { compressImageDataUrl } from '../utils/image.js';
 import { safeInvoke } from '../utils/tauri.js';
 import './bridge.js';
 import { LLMClient } from '../api/client.js';
@@ -192,13 +193,29 @@ const initApp = async () => {
   const stickerPicker = new StickerPicker(tag => handleSticker(tag));
   const mediaPicker = new MediaPicker({
     onUrl: url => handleImage(url),
-    onFile: (dataUrl, file) => {
-      const kind = file?.type?.startsWith('audio') ? 'audio' : 'image';
-      if (kind === 'audio') {
-        handleMusicFile(dataUrl, file?.name);
-      } else {
-        handleImage(dataUrl);
+    onFile: async (dataUrl, file, kind) => {
+      const resolvedKind = kind || (file?.type?.startsWith('audio') ? 'audio' : 'image');
+      if (resolvedKind === 'document') {
+        await handleDocumentFile(file);
+        return;
       }
+      if (resolvedKind === 'audio') {
+        handleMusicFile(dataUrl, file?.name);
+        return;
+      }
+      let payload = dataUrl;
+      try {
+        const compressed = await compressImageDataUrl(dataUrl, {
+          maxDim: 1280,
+          quality: 0.82,
+          maxBytes: 1_200_000,
+          mime: 'image/jpeg',
+        });
+        if (compressed) payload = compressed;
+      } catch (err) {
+        logger.warn('compress image failed', err);
+      }
+      handleImage(payload, file?.name);
     },
   });
   const worldIndicator = new WorldInfoIndicator();
@@ -1213,6 +1230,25 @@ ${listPart || '-（无）'}
       if (m && (m.role === 'user' || m.role === 'assistant')) convPos.set(i, convPos.size);
     });
     const total = convPos.size;
+    const resolveLocalAttachmentUrl = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      try {
+        const g = typeof globalThis !== 'undefined' ? globalThis : window;
+        const convert =
+          g?.__TAURI__?.core?.convertFileSrc ||
+          g?.__TAURI__?.convertFileSrc ||
+          g?.__TAURI_INTERNALS__?.convertFileSrc;
+        if (typeof convert === 'function') {
+          const converted = convert(raw);
+          if (converted) return converted;
+        }
+      } catch {}
+      if (/^(file|asset|tauri|app|https?|data|blob):/i.test(raw)) return raw;
+      if (/^[a-zA-Z]:[\\/]/.test(raw)) return `file:///${raw.replace(/\\/g, '/')}`;
+      if (raw.startsWith('/')) return `file://${raw}`;
+      return raw;
+    };
 
     return list.map((m, i) => {
       if (!m || typeof m !== 'object') return m;
@@ -1271,6 +1307,27 @@ ${listPart || '-（无）'}
       if (m.role === 'user' && (m.type === 'text' || !m.type)) {
         return { ...m, avatar, content: window.appBridge.applyInputDisplayRegex(base, { depth }), status: m.status, meta }; // 保留 status 字段
       }
+      if (m.type === 'image') {
+        const content = typeof m.content === 'string' ? m.content : '';
+        const localPath = String(meta?.localPath || '').trim();
+        if (localPath && isAttachmentExpired(meta)) {
+          queueAttachmentCleanup(localPath, sessionId);
+          return {
+            ...m,
+            type: 'text',
+            content: '[图片已过期]',
+            avatar,
+            status: m.status,
+            meta: { ...meta, expired: true },
+          };
+        }
+        if (localPath && (!content || content === '[binary omitted]')) {
+          const localUrl = resolveLocalAttachmentUrl(localPath);
+          if (localUrl) {
+            return { ...m, avatar, content: localUrl, status: m.status, meta };
+          }
+        }
+      }
       return { ...m, avatar, status: m.status, meta }; // 保留 status 字段
     });
   };
@@ -1323,6 +1380,8 @@ ${listPart || '-（无）'}
         return `[转账] ${msg.content || ''}`.trim();
       case 'sticker':
         return '[表情]';
+      case 'document':
+        return `[文件] ${msg.content || ''}`.trim();
       default: {
         const text = String(msg.content || '')
           .replace(/\s+/g, ' ')
@@ -1422,6 +1481,9 @@ ${listPart || '-（无）'}
       const key = String(message.content || '').trim();
       return key ? buildStickerToken(key) : '';
     }
+    if (message.type === 'image') return '[图片]';
+    if (message.type === 'audio') return '[语音]';
+    if (message.type === 'document') return `[文件] ${message.content || ''}`.trim();
     return String(message.content || '').trim();
   };
 
@@ -2043,6 +2105,273 @@ ${listPart || '-（无）'}
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(syncChatBottomGap);
     });
     observer.observe(chatScroll, { childList: true });
+  }
+  const composerAttachmentsEl = document.getElementById('composer-attachments');
+  const MAX_IMAGE_ATTACHMENTS = 6;
+  const ATTACHMENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const MAX_DOC_TEXT_CHARS = 20_000;
+  const MAX_DOC_BYTES = 400_000;
+  let composerAttachments = [];
+  const expiredAttachmentCleanup = new Set();
+  const createAttachmentId = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    return `att_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  };
+  const formatFileSize = (bytes) => {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return '';
+    if (size < 1024) return `${size} B`;
+    const kb = size / 1024;
+    if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+  };
+  const isAttachmentExpired = (meta) => {
+    const expiresAt = Number(meta?.expiresAt || 0);
+    return Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() > expiresAt;
+  };
+  const queueAttachmentCleanup = (path, sessionId) => {
+    const target = String(path || '').trim();
+    if (!target || expiredAttachmentCleanup.has(target)) return;
+    expiredAttachmentCleanup.add(target);
+    safeInvoke('delete_attachment', { sessionId, path: target }).catch(() => {});
+  };
+  const isTextDocumentFile = (file) => {
+    if (!file) return false;
+    const type = String(file.type || '').toLowerCase();
+    if (type.startsWith('text/')) return true;
+    if (/(json|xml|csv|yaml|markdown)/.test(type)) return true;
+    const name = String(file.name || '').toLowerCase();
+    const ext = name.includes('.') ? name.split('.').pop() : '';
+    const textExts = new Set(['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'xml', 'yaml', 'yml', 'ini', 'cfg', 'conf']);
+    return textExts.has(ext);
+  };
+  const readBlobText = async (blob) => {
+    if (!blob) return '';
+    if (typeof blob.text === 'function') return blob.text();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('read text failed'));
+      reader.readAsText(blob);
+    });
+  };
+  const extractDocumentText = async (file) => {
+    if (!file || !isTextDocumentFile(file)) return { text: '', truncated: false, supported: false };
+    const total = Number(file.size || 0);
+    const slice = total > MAX_DOC_BYTES ? file.slice(0, MAX_DOC_BYTES) : file;
+    let text = '';
+    try {
+      text = await readBlobText(slice);
+    } catch (err) {
+      return { text: '', truncated: false, supported: false };
+    }
+    let truncated = false;
+    if (text.length > MAX_DOC_TEXT_CHARS) {
+      text = text.slice(0, MAX_DOC_TEXT_CHARS);
+      truncated = true;
+    }
+    if (total > MAX_DOC_BYTES) truncated = true;
+    return { text, truncated, supported: true };
+  };
+  const renderComposerAttachments = () => {
+    if (!composerAttachmentsEl) return;
+    composerAttachmentsEl.innerHTML = '';
+    if (!composerAttachments.length) {
+      composerAttachmentsEl.classList.remove('is-active');
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => {
+          syncChatInputOffset();
+          requestAnimationFrame(syncChatBottomGap);
+        });
+      } else {
+        syncChatInputOffset();
+        syncChatBottomGap();
+      }
+      return;
+    }
+    composerAttachmentsEl.classList.add('is-active');
+    composerAttachments.forEach((attachment) => {
+      if (!attachment || typeof attachment !== 'object') return;
+      const item = document.createElement('div');
+      item.className = 'chat-attachment-item';
+      item.dataset.attachmentId = attachment.id || '';
+
+      if (attachment.kind === 'image') {
+        const img = document.createElement('img');
+        img.src = attachment.url || '';
+        img.alt = attachment.name || 'image';
+        item.appendChild(img);
+      } else {
+        const doc = document.createElement('div');
+        doc.className = 'chat-attachment-doc';
+        const icon = document.createElement('div');
+        icon.className = 'chat-attachment-doc-icon';
+        icon.textContent = 'DOC';
+        const name = document.createElement('div');
+        name.className = 'chat-attachment-doc-name';
+        name.textContent = attachment.name || '文件';
+        doc.appendChild(icon);
+        doc.appendChild(name);
+        if (attachment.sizeLabel) {
+          const meta = document.createElement('div');
+          meta.className = 'chat-attachment-doc-meta';
+          meta.textContent = attachment.sizeLabel;
+          doc.appendChild(meta);
+        }
+        item.appendChild(doc);
+      }
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'chat-attachment-remove';
+      remove.dataset.attachmentId = attachment.id || '';
+      remove.textContent = 'x';
+      item.appendChild(remove);
+      composerAttachmentsEl.appendChild(item);
+    });
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        syncChatInputOffset();
+        requestAnimationFrame(syncChatBottomGap);
+      });
+    } else {
+      syncChatInputOffset();
+      syncChatBottomGap();
+    }
+  };
+  const addComposerAttachment = (attachment) => {
+    if (!attachment || typeof attachment !== 'object') return false;
+    const item = { ...attachment };
+    if (!item.id) item.id = createAttachmentId();
+    if (item.kind === 'image') {
+      const count = composerAttachments.filter(a => a?.kind === 'image').length;
+      if (count >= MAX_IMAGE_ATTACHMENTS) {
+        window.toastr?.warning?.(`一次最多发送 ${MAX_IMAGE_ATTACHMENTS} 张图片`);
+        return false;
+      }
+      if (!item.url) return false;
+    }
+    if (item.kind === 'document') {
+      item.name = item.name || '文件';
+      item.sizeLabel = item.sizeLabel || formatFileSize(item.size);
+    }
+    composerAttachments.push(item);
+    renderComposerAttachments();
+    return true;
+  };
+  const removeComposerAttachment = (id) => {
+    const targetId = String(id || '');
+    if (!targetId) return;
+    const idx = composerAttachments.findIndex(a => String(a?.id || '') === targetId);
+    if (idx === -1) return;
+    composerAttachments.splice(idx, 1);
+    renderComposerAttachments();
+  };
+  const clearComposerAttachments = () => {
+    if (!composerAttachments.length) return;
+    composerAttachments = [];
+    renderComposerAttachments();
+  };
+  const buildDocumentPromptText = (attachment) => {
+    const name = String(attachment?.name || '文件').trim() || '文件';
+    const meta = [];
+    if (attachment?.mime) meta.push(String(attachment.mime));
+    if (attachment?.sizeLabel) meta.push(String(attachment.sizeLabel));
+    const header = meta.length ? `【文件】${name} (${meta.join(', ')})` : `【文件】${name}`;
+    const body = String(attachment?.text || '').trim();
+    if (!body) return `${header}\n[无法读取文件内容，仅提供文件信息]`;
+    const suffix = attachment?.textTruncated ? '\n[内容已截断]' : '';
+    return `${header}\n${body}${suffix}`;
+  };
+  const buildAttachmentParts = (attachments) => {
+    const parts = [];
+    (attachments || []).forEach((attachment) => {
+      if (!attachment || typeof attachment !== 'object') return;
+      if (attachment.kind === 'image' && attachment.url) {
+        parts.push({ type: 'image_url', image_url: { url: attachment.url } });
+        return;
+      }
+      if (attachment.kind === 'document') {
+        const text = buildDocumentPromptText(attachment);
+        if (text) parts.push({ type: 'text', text });
+      }
+    });
+    return parts;
+  };
+  const buildAttachmentMessages = (attachments, { name, avatar } = {}) => {
+    const list = [];
+    (attachments || []).forEach((attachment) => {
+      if (!attachment || typeof attachment !== 'object') return;
+      if (attachment.kind === 'image' && attachment.url) {
+        const expiresAt = Date.now() + ATTACHMENT_TTL_MS;
+        list.push({
+          role: 'user',
+          type: 'image',
+          content: attachment.url,
+          name: name || '我',
+          avatar,
+          time: formatNowTime(),
+          meta: {
+            attachmentId: attachment.id || '',
+            originalName: attachment.name || '',
+            expiresAt,
+          },
+        });
+        return;
+      }
+      if (attachment.kind === 'document') {
+        list.push({
+          role: 'user',
+          type: 'document',
+          content: attachment.name || '文件',
+          name: name || '我',
+          avatar,
+          time: formatNowTime(),
+          meta: {
+            attachmentId: attachment.id || '',
+            mime: attachment.mime || '',
+            size: Number(attachment.size || 0),
+            sizeLabel: attachment.sizeLabel || '',
+            textTruncated: Boolean(attachment.textTruncated),
+          },
+        });
+      }
+    });
+    return list;
+  };
+  const persistImageAttachmentMessage = async (message, attachment, sessionId) => {
+    if (!message || !attachment) return;
+    const dataUrl = String(attachment.url || '').trim();
+    if (!dataUrl.startsWith('data:image/')) return;
+    try {
+      const resp = await safeInvoke('save_attachment', {
+        sessionId,
+        dataUrl,
+        fileName: attachment.name || '',
+      });
+      const path = String(resp?.path || '').trim();
+      if (!path) return;
+      const nextMeta = {
+        ...(message.meta || {}),
+        localPath: path,
+        localBytes: Number(resp?.bytes || 0) || undefined,
+        savedAt: Date.now(),
+      };
+      const updated = chatStore.updateMessage(message.id, { meta: nextMeta }, sessionId);
+      ui.updateMessage(message.id, updated || { ...message, meta: nextMeta });
+    } catch (err) {
+      logger.warn('save attachment failed', err);
+    }
+  };
+  if (composerAttachmentsEl) {
+    composerAttachmentsEl.addEventListener('click', (event) => {
+      const btn = event?.target?.closest ? event.target.closest('.chat-attachment-remove') : null;
+      if (!btn) return;
+      event.preventDefault();
+      const targetId = btn.dataset.attachmentId || '';
+      if (targetId) removeComposerAttachment(targetId);
+    });
   }
   const stickerToggleBtn = document.querySelector('.voice-btn');
   let chatSettingsReady = false;
@@ -2818,10 +3147,7 @@ ${listPart || '-（无）'}
             .filter(Boolean)
             .join('\n');
           // Display only: show prompt text content for easier reading (no JSON, no numbering).
-          const body = msgs
-            .map(m => String(m?.content ?? ''))
-            .filter(t => t.trim().length > 0)
-            .join('\n\n');
+          const body = buildRequestPromptText(msgs);
           const meta = `${name}${at ? ` · ${at}` : ''}`;
           promptPreviewModal.show(`${head}\n\n${body}`.trim(), meta);
         }
@@ -3295,7 +3621,7 @@ ${listPart || '-（无）'}
       setStickerPanelOpen(true);
     },
     document: async () => {
-      window.toastr?.info?.('文档发送功能待完成');
+      await mediaPicker.pickFile('document');
     },
   };
   const runQuickAction = (action) => {
@@ -3792,6 +4118,9 @@ ${listPart || '-（无）'}
     const existingUserMessageId = typeof options.existingUserMessageId === 'string' ? options.existingUserMessageId : '';
     const skipInputRegex = Boolean(options.skipInputRegex);
     const creativeMode = sendMode === 'creative';
+    const includeAttachments = options.includeAttachments !== false && !targetMessageId;
+    const attachmentQueue = includeAttachments ? composerAttachments.slice() : [];
+    const hasAttachments = attachmentQueue.length > 0;
     const sessionId = chatStore.getCurrent();
     const allMessages = chatStore.getMessages(sessionId);
 
@@ -3861,7 +4190,7 @@ ${listPart || '-（无）'}
       text = messagesToSend.map(getMessageSendText).filter(Boolean).join('\n');
       pendingMessagesToConfirm = messagesToSend;
 
-      if (!text) {
+      if (!text && !hasAttachments) {
         window.toastr?.warning?.('没有可发送的消息');
         return false;
       }
@@ -3877,7 +4206,7 @@ ${listPart || '-（无）'}
     } else {
       // 没有 pending 消息，使用输入框内容（兼容旧行为）
       text = overrideText || ui.getInputText();
-      if (!text) return false;
+      if (!text && !hasAttachments) return false;
     }
     const contact = contactsStore.getContact(sessionId);
     const characterName =
@@ -4951,10 +5280,39 @@ ${listPart || '-（无）'}
     }
     const buildRequestPromptText = (messages) => {
       if (!Array.isArray(messages)) return '';
+      const describeMediaToken = (raw) => {
+        const text = String(raw || '').trim();
+        if (!text) return '';
+        if (text.startsWith('data:image/')) {
+          const mime = text.slice('data:'.length).split(';')[0].toLowerCase();
+          if (mime.includes('gif')) return '[gif]';
+          return '[图片]';
+        }
+        if (text.startsWith('data:audio/')) return '[语音]';
+        return '';
+      };
+      const stringifyContent = (content) => {
+        if (Array.isArray(content)) {
+          const parts = content.map((part) => {
+            if (!part || typeof part !== 'object') return '';
+            if (part.type === 'text') return String(part.text || '');
+            if (part.type === 'image_url') {
+              const url = String(part.image_url?.url || '').toLowerCase();
+              if (url.startsWith('data:image/gif')) return '[gif]';
+              return '[图片]';
+            }
+            if (part.type === 'input_audio') return '[语音]';
+            return '';
+          });
+          return parts.filter(Boolean).join('\n');
+        }
+        const raw = String(content ?? '');
+        return describeMediaToken(raw) || raw;
+      };
       const parts = messages
         .map((m) => {
           const role = String(m?.role || 'message');
-          const content = String(m?.content ?? '').trim();
+          const content = stringifyContent(m?.content).trim();
           if (!content) return '';
           return `${role}:\n${content}`;
         })
@@ -5043,7 +5401,10 @@ ${listPart || '-（无）'}
         (round.messages || []).forEach((m) => {
           const name = String(m?.name || (m?.role === 'assistant' ? '助手' : m?.role === 'user' ? '用户' : '系统'));
           const rawText = String(m?.rawOriginal || m?.raw || m?.content || '');
-          const clean = m?.role === 'assistant' ? stripTableEditBlocks(rawText) : rawText;
+          let clean = m?.role === 'assistant' ? stripTableEditBlocks(rawText) : rawText;
+          if (m?.type === 'image' || rawText.startsWith('data:image')) clean = '[图片]';
+          if (m?.type === 'audio' || rawText.startsWith('data:audio')) clean = '[语音]';
+          if (m?.type === 'document') clean = `[文件] ${m?.content || ''}`.trim();
           const clipped = clean.length > 4000 ? `${clean.slice(0, 4000)}…` : clean;
           if (!clipped.trim()) return;
           lines.push(`${name}: ${clipped}`);
@@ -5179,6 +5540,24 @@ ${listPart || '-（无）'}
       });
       const total = convPos.size;
       const getDepthForIndex = idx => (convPos.has(idx) ? total - 1 - convPos.get(idx) : undefined);
+      const isPromptImageUrl = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return false;
+        if (raw.startsWith('data:image/')) return true;
+        if (/^https?:\/\//i.test(raw)) return true;
+        return false;
+      };
+      const resolveImageAttachment = (msg) => {
+        if (!msg || typeof msg !== 'object') return '';
+        if (msg.type === 'image' && typeof msg.content === 'string') {
+          const raw = String(msg.content || '').trim();
+          if (!raw || raw === '[binary omitted]' || raw === '[图片]') return '';
+          return isPromptImageUrl(raw) ? raw : '';
+        }
+        const raw = typeof msg.content === 'string' ? msg.content.trim() : '';
+        if (isPromptImageUrl(raw)) return raw;
+        return '';
+      };
       const resolveCreativeHistorySummary = (msg) => {
         const direct = String(msg?.meta?.summary || '').trim();
         if (direct) return direct;
@@ -5217,6 +5596,50 @@ ${listPart || '-（无）'}
             };
           }
           let content = typeof m.raw === 'string' ? m.raw : m.content;
+          const reasoning =
+            m.role === 'assistant' && typeof m?.meta?.reasoning === 'string' ? m.meta.reasoning : '';
+          const imageUrl = resolveImageAttachment(m);
+          if (imageUrl) {
+            const out = {
+              role: m.role,
+              content: '[图片]',
+              name: typeof m.name === 'string' ? m.name : '',
+              __creative: isCreativeReply,
+              __reasoning: reasoning,
+            };
+            if (m.role === 'user') {
+              out.__mediaKind = 'image';
+              out.__mediaUrl = imageUrl;
+            }
+            return out;
+          }
+          if (m.type === 'image') {
+            return {
+              role: m.role,
+              content: '[图片]',
+              name: typeof m.name === 'string' ? m.name : '',
+              __creative: isCreativeReply,
+              __reasoning: reasoning,
+            };
+          }
+          if (m.type === 'audio' || (typeof content === 'string' && content.startsWith('data:audio'))) {
+            return {
+              role: m.role,
+              content: '[语音]',
+              name: typeof m.name === 'string' ? m.name : '',
+              __creative: isCreativeReply,
+              __reasoning: reasoning,
+            };
+          }
+          if (m.type === 'document') {
+            return {
+              role: m.role,
+              content: `[文件] ${m.content || ''}`.trim(),
+              name: typeof m.name === 'string' ? m.name : '',
+              __creative: isCreativeReply,
+              __reasoning: reasoning,
+            };
+          }
           if (creativeMode && (m.role === 'assistant' || m.role === 'user')) {
             const plain = resolveMessagePlainText(m, {
               depth,
@@ -5234,8 +5657,6 @@ ${listPart || '-（无）'}
             if (key) content = buildStickerToken(key);
           }
           if (!String(content || '').trim()) return null;
-          const reasoning =
-            m.role === 'assistant' && typeof m?.meta?.reasoning === 'string' ? m.meta.reasoning : '';
           return {
             role: m.role,
             content,
@@ -5339,6 +5760,7 @@ ${listPart || '-（无）'}
       return history;
     };
     let disableSummaryForThis = false;
+    const attachmentParts = hasAttachments ? buildAttachmentParts(attachmentQueue) : [];
     const llmContext = (pendingUserText) => {
       const settings = appSettings.get();
       const memoryInjectPosition = String(settings.memoryInjectPosition || 'template').toLowerCase();
@@ -5367,6 +5789,7 @@ ${listPart || '-（无）'}
           memoryAutoExtract: isMemoryAutoExtractInline(),
           memoryInjectPosition,
           memoryInjectDepth,
+          userAttachmentParts: attachmentParts,
         },
         group: isGroupChat
           ? {
@@ -5404,10 +5827,35 @@ ${listPart || '-（无）'}
       return false;
     }
 
+    let attachmentMessages = [];
+    let attachmentPrimaryId = '';
+    if (hasAttachments) {
+      attachmentMessages = buildAttachmentMessages(attachmentQueue, { name: userName, avatar: avatars.user });
+      clearComposerAttachments();
+      attachmentMessages.forEach((msg) => {
+        ui.addMessage(msg);
+        chatStore.appendMessage(msg, sessionId);
+      });
+      attachmentPrimaryId = attachmentMessages[0]?.id || '';
+      const attachmentById = new Map(
+        attachmentQueue
+          .filter(item => item && typeof item === 'object')
+          .map(item => [String(item.id || ''), item]),
+      );
+      attachmentMessages.forEach((msg) => {
+        if (msg?.type !== 'image') return;
+        const attachment = attachmentById.get(String(msg?.meta?.attachmentId || ''));
+        if (!attachment) return;
+        persistImageAttachmentMessage(msg, attachment, sessionId);
+      });
+    }
+    let appendedUserOutput = attachmentMessages.length > 0;
+    const hasUserText = Boolean(String(text || '').trim());
+
     // 只有在没有 pending 消息时，才创建新的用户消息气泡
     let userMsg = null;
     if (!pendingMessagesToConfirm || pendingMessagesToConfirm.length === 0) {
-      if (!suppressUserMessage) {
+      if (!suppressUserMessage && hasUserText) {
         const stickerKey = parseStickerToken(text);
         if (stickerKey) {
           userMsg = {
@@ -5434,20 +5882,22 @@ ${listPart || '-（无）'}
         }
         ui.addMessage(userMsg);
         chatStore.appendMessage(userMsg, sessionId);
-        activeGeneration = { sessionId, userMsgId: userMsg.id, streamCtrl: null, cancelled: false };
-        refreshChatAndContacts();
-        ui.clearInput();
-      } else {
-        activeGeneration = {
-          sessionId,
-          userMsgId: existingUserMessageId || null,
-          streamCtrl: null,
-          cancelled: false,
-        };
+        appendedUserOutput = true;
       }
+      const primaryId = userMsg?.id || existingUserMessageId || attachmentPrimaryId || null;
+      activeGeneration = {
+        sessionId,
+        userMsgId: primaryId,
+        streamCtrl: null,
+        cancelled: false,
+      };
+      if (appendedUserOutput) refreshChatAndContacts();
+      if (!suppressUserMessage && appendedUserOutput) ui.clearInput();
     } else {
       // 有 pending 消息时，使用第一条 pending 消息的 ID
       activeGeneration = { sessionId, userMsgId: pendingMessagesToConfirm[0]?.id, streamCtrl: null, cancelled: false };
+      if (attachmentMessages.length) refreshChatAndContacts();
+      if (!suppressUserMessage && attachmentMessages.length) ui.clearInput();
     }
     ui.setSendingState(true);
 
@@ -6722,6 +7172,7 @@ ${listPart || '-（无）'}
         suppressUserMessage: true,
         skipInputRegex: true,
         existingUserMessageId: prevUser?.id || '',
+        includeAttachments: false,
       });
       return;
     }
@@ -6867,6 +7318,38 @@ ${listPart || '-（无）'}
     );
   } catch {}
 
+  async function handleDocumentFile(file) {
+    if (!file) {
+      window.toastr?.warning?.('未选择文档');
+      return;
+    }
+    const name = String(file?.name || '').trim() || '文件';
+    const mime = String(file?.type || '').trim();
+    const size = Number(file?.size || 0);
+    const sizeLabel = formatFileSize(size);
+    let text = '';
+    let textTruncated = false;
+    let supported = false;
+    try {
+      const extracted = await extractDocumentText(file);
+      text = extracted.text || '';
+      textTruncated = Boolean(extracted.truncated);
+      supported = Boolean(extracted.supported);
+    } catch {}
+    if (!supported && mime) {
+      window.toastr?.info?.('该文件类型暂不支持解析，将仅发送文件信息');
+    }
+    addComposerAttachment({
+      kind: 'document',
+      name,
+      mime,
+      size,
+      sizeLabel,
+      text,
+      textTruncated,
+    });
+  }
+
   function handleSticker(tag) {
     const sessionId = chatStore.getCurrent();
     bumpStickerUsage(tag);
@@ -6882,18 +7365,14 @@ ${listPart || '-（无）'}
     chatStore.appendMessage(msg, sessionId);
   }
 
-  function handleImage(url) {
-    const sessionId = chatStore.getCurrent();
-    const msg = {
-      role: 'user',
-      type: 'image',
-      content: url,
-      name: getEffectivePersona(sessionId)?.name || '我',
-      avatar: avatars.user,
-      time: formatNowTime(),
-    };
-    ui.addMessage(msg);
-    chatStore.appendMessage(msg, sessionId);
+  function handleImage(url, name = '') {
+    const resolved = String(url || '').trim();
+    if (!resolved) return;
+    addComposerAttachment({
+      kind: 'image',
+      url: resolved,
+      name: String(name || '').trim(),
+    });
   }
 
   function handleMusicFile(dataUrl, name = '本地音頻') {

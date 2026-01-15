@@ -8,6 +8,9 @@ export class MediaPicker {
     this.onFile = onFile;
     this.inputImage = this.createFileInput('image/*');
     this.inputAudio = this.createFileInput('audio/*');
+    this.inputDocument = this.createFileInput(
+      'text/*,.txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.yaml,.yml,.ini,.cfg,.conf,.pdf,.doc,.docx',
+    );
   }
 
   createFileInput(accept) {
@@ -25,14 +28,25 @@ export class MediaPicker {
   }
 
   async pickFile(kind = 'image') {
-    const input = kind === 'audio' ? this.inputAudio : this.inputImage;
+    const input =
+      kind === 'audio'
+        ? this.inputAudio
+        : kind === 'document'
+          ? this.inputDocument
+          : this.inputImage;
     return new Promise((resolve) => {
       input.onchange = () => {
         const file = input.files?.[0];
+        input.value = '';
         if (!file) return;
+        if (kind === 'document') {
+          this.onFile?.(null, file, 'document');
+          resolve(null);
+          return;
+        }
         const reader = new FileReader();
         reader.onload = () => {
-          this.onFile?.(reader.result, file);
+          this.onFile?.(reader.result, file, kind);
           resolve(reader.result);
         };
         reader.onerror = () => {

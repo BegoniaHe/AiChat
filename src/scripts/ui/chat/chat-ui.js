@@ -463,7 +463,7 @@ export class ChatUI {
    * Render a message bubble - QQ Legacy Structure
    * @param {Object} message
    * @param {'user'|'assistant'|'system'} message.role
-   * @param {'text'|'image'|'audio'|'music'|'transfer'|'sticker'|'meta'} message.type
+   * @param {'text'|'image'|'audio'|'music'|'transfer'|'sticker'|'document'|'meta'} message.type
    * @param {string} message.content
    * @param {string} message.avatar - 头像URL
    * @param {string} message.name - 发送者名称
@@ -602,6 +602,24 @@ export class ChatUI {
         audioEl.onerror = () => {
           toastOnce('語音加載失敗');
         };
+        break;
+      }
+      case 'document': {
+        const titleText = String(message.content || message.meta?.name || '文件');
+        const metaLine = [message.meta?.mime, message.meta?.sizeLabel].filter(Boolean).join(' · ');
+        const card = document.createElement('div');
+        card.className = 'card file-card';
+        const title = document.createElement('div');
+        title.className = 'card-title';
+        title.textContent = titleText;
+        card.appendChild(title);
+        if (metaLine) {
+          const subtitle = document.createElement('div');
+          subtitle.className = 'card-subtitle';
+          subtitle.textContent = metaLine;
+          card.appendChild(subtitle);
+        }
+        bubble.appendChild(card);
         break;
       }
       case 'music': {

@@ -58,7 +58,18 @@ const estimateOpenAIRequestChars = ({ model, messages, stream, options } = {}) =
     n += 64;
     if (typeof m.role === 'string') n += m.role.length;
     if (typeof m.name === 'string') n += m.name.length;
-    if (typeof m.content === 'string') n += m.content.length;
+    if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        if (!part || typeof part !== 'object') continue;
+        if (typeof part.text === 'string') n += part.text.length;
+        const imageUrl = part?.image_url?.url;
+        if (typeof imageUrl === 'string') n += imageUrl.length;
+        const audioData = part?.input_audio?.data;
+        if (typeof audioData === 'string') n += audioData.length;
+      }
+    } else if (typeof m.content === 'string') {
+      n += m.content.length;
+    }
   }
   return n;
 };

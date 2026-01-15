@@ -43,15 +43,56 @@ export class GeminiProvider {
   convertMessages(messages) {
     const contents = [];
     let systemInstruction = '';
+    const parseDataUrl = (url) => {
+      const raw = String(url || '').trim();
+      if (!raw.startsWith('data:')) return null;
+      const match = raw.match(/^data:([^;]+);base64,(.+)$/i);
+      if (!match) return null;
+      return { mime: match[1], data: match[2] };
+    };
+    const toGeminiParts = (content) => {
+      if (Array.isArray(content)) {
+        const parts = [];
+        content.forEach((part) => {
+          if (!part || typeof part !== 'object') return;
+          if (part.type === 'text') {
+            const text = String(part.text || '');
+            if (text) parts.push({ text });
+            return;
+          }
+          if (part.type === 'image_url') {
+            const url = part?.image_url?.url;
+            const parsed = parseDataUrl(url);
+            if (parsed?.data) {
+              parts.push({ inlineData: { mimeType: parsed.mime || 'image/jpeg', data: parsed.data } });
+            } else if (url) {
+              parts.push({ text: `[图片] ${String(url)}` });
+            }
+          }
+        });
+        return parts.length ? parts : [{ text: '' }];
+      }
+      return [{ text: String(content ?? '') }];
+    };
+    const toSystemText = (content) => {
+      if (Array.isArray(content)) {
+        return content
+          .map((part) => (part?.type === 'text' ? String(part.text || '') : ''))
+          .filter(Boolean)
+          .join('\n');
+      }
+      return String(content ?? '');
+    };
 
     for (const msg of messages) {
       if (msg.role === 'system') {
         // Accumulate system messages into systemInstruction
-        systemInstruction += (systemInstruction ? '\n\n' : '') + msg.content;
+        const text = toSystemText(msg.content);
+        systemInstruction += (systemInstruction ? '\n\n' : '') + text;
       } else {
         contents.push({
           role: msg.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: msg.content }],
+          parts: toGeminiParts(msg.content),
         });
       }
     }

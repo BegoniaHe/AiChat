@@ -133,6 +133,12 @@ pub struct WallpaperSaveResult {
     pub bytes: usize,
 }
 
+#[derive(serde::Serialize)]
+pub struct AttachmentSaveResult {
+    pub path: String,
+    pub bytes: usize,
+}
+
 #[derive(Default)]
 pub struct WallpaperStreamState {
     inner: Mutex<HashMap<String, WallpaperStreamEntry>>,
@@ -597,6 +603,59 @@ pub async fn delete_wallpaper(
     let target = PathBuf::from(raw);
     if !target.starts_with(&wallpaper_root) {
         return Err("invalid wallpaper path".to_string());
+    }
+    if target.exists() {
+        fs::remove_file(&target).map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// 保存附件图片到本地（AppData）
+#[tauri::command]
+pub async fn save_attachment(
+    app: AppHandle,
+    session_id: String,
+    data_url: String,
+    file_name: Option<String>,
+) -> Result<AttachmentSaveResult, String> {
+    let data_dir = get_data_dir(&app)?;
+    fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    let safe_sid = sanitize_segment(&session_id);
+    let attach_root = data_dir.join("attachments").join(&safe_sid);
+    fs::create_dir_all(&attach_root).map_err(|e| e.to_string())?;
+
+    let (bytes, ext_from_mime) = decode_data_url(&data_url)?;
+    let ext_from_name = file_name.as_deref().and_then(extension_from_name);
+    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let stem = sanitize_segment(file_name.as_deref().unwrap_or("attachment"));
+    let ts = chrono::Utc::now().timestamp_millis();
+    let file = attach_root.join(format!("attachment_{safe_sid}_{stem}_{ts}.{ext}"));
+    fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+
+    Ok(AttachmentSaveResult {
+        path: file.to_string_lossy().to_string(),
+        bytes: bytes.len(),
+    })
+}
+
+/// 删除附件文件
+#[tauri::command]
+pub async fn delete_attachment(
+    app: AppHandle,
+    session_id: String,
+    path: String,
+) -> Result<bool, String> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Ok(false);
+    }
+    let data_dir = get_data_dir(&app)?;
+    let safe_sid = sanitize_segment(&session_id);
+    let attach_root = data_dir.join("attachments").join(&safe_sid);
+    let target = PathBuf::from(raw);
+    if !target.starts_with(&attach_root) {
+        return Err("invalid attachment path".to_string());
     }
     if target.exists() {
         fs::remove_file(&target).map_err(|e| e.to_string())?;

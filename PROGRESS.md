@@ -52,6 +52,19 @@
   - `src-tauri/src/commands.rs`
   - `src-tauri/src/lib.rs`
 
+## 2026-01-15 17:53
+- 聊天附件：图片/文档先进入输入框上方预览，发送按钮才真正发请求；仅附件也可触发请求。
+- 图片持久化：新增附件保存到 AppData，消息记录保存路径与过期时间（默认 7 天），过期自动清理。
+- Prompt 预览：图片/语音改为占位符显示（含 gif），不再展示 base64 长串。
+- 修改：
+  - `src/assets/css/qq-legacy.css`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/bridge.js`
+  - `src/scripts/ui/chat/chat-ui.js`
+  - `src/scripts/ui/media-picker.js`
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`
+
 ## 2026-01-14 20:09
 - 聊天室底部留白对齐修正：消息列表改为使用输入栏位置计算的底部内边距，避免多余空白。
 - 面板开合时同步更新底部偏移，贴图预览仍单独加高。
