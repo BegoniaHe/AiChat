@@ -5,6 +5,7 @@
  */
 
 import { convertSTWorld } from '../storage/worldinfo.js';
+import { BUILTIN_PHONE_FORMAT_WORLDBOOK_ID } from '../storage/builtin-worldbooks.js';
 import { logger } from '../utils/logger.js';
 import { WorldEditorModal } from './world-editor.js';
 
@@ -47,9 +48,10 @@ export class WorldPanel {
             const sessionId = this.getSessionId ? this.getSessionId() : (window.appBridge?.activeSessionId || 'default');
             const contact = this.contactsStore?.getContact?.(sessionId) || null;
             const isGroupSession = this.scope === 'session' && (Boolean(contact?.isGroup) || String(sessionId).startsWith('group:'));
-            const currentId = this.scope === 'global'
+            const rawCurrentId = this.scope === 'global'
                 ? (window.appBridge.globalWorldId || '')
                 : (window.appBridge.currentWorldId || '');
+            const currentId = rawCurrentId === BUILTIN_PHONE_FORMAT_WORLDBOOK_ID ? '' : rawCurrentId;
             const indicator = this.panel?.querySelector('#world-current');
             if (indicator) {
                 indicator.textContent = this.scope === 'global'
@@ -57,7 +59,8 @@ export class WorldPanel {
                     : (isGroupSession ? `群聊 ${contact?.name || sessionId}：按成员绑定世界书` : `會話 ${sessionId} 當前：${currentId || '未啟用'}`);
             }
             const names = await window.appBridge.listWorlds?.();
-            if (!names || !names.length) {
+            const visibleNames = (names || []).filter((name) => name !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID);
+            if (!visibleNames.length) {
                 const li = document.createElement('li');
                 li.textContent = '（暫無世界書）';
                 li.style.color = '#888';
@@ -98,7 +101,8 @@ export class WorldPanel {
                     const memberId = String(mid || '').trim();
                     if (!memberId) return;
                     const { name, avatar } = getMemberLabel(memberId);
-                    const bound = window.appBridge?.getWorldForSession?.(memberId) || '';
+                    const rawBound = window.appBridge?.getWorldForSession?.(memberId) || '';
+                    const bound = rawBound === BUILTIN_PHONE_FORMAT_WORLDBOOK_ID ? '' : rawBound;
 
                     const row = document.createElement('div');
                     row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px; border:1px solid rgba(0,0,0,0.08); border-radius:12px; background:#fff;';
@@ -118,7 +122,7 @@ export class WorldPanel {
                     pickBtn.textContent = bound ? '更换' : '绑定';
                     pickBtn.style.cssText = 'padding:6px 10px;border:1px solid #ddd;border-radius:10px;background:#fff;cursor:pointer;';
                     pickBtn.onclick = () => {
-                        const options = (names || []).slice().sort((a, b) => String(a).localeCompare(String(b)));
+                        const options = visibleNames.slice().sort((a, b) => String(a).localeCompare(String(b)));
                         const hint = options.slice(0, 40).join('\n');
                         const raw = prompt(`为「${name}」选择要绑定的世界书名称（输入名称即可）：\n\n（部分列表）\n${hint}\n\n也可直接输入完整名称`, bound || '');
                         const next = String(raw || '').trim();
@@ -151,7 +155,7 @@ export class WorldPanel {
                 this.listEl.appendChild(host);
             }
 
-            names.forEach((name) => {
+            visibleNames.forEach((name) => {
                 const li = document.createElement('li');
                 li.style.display = 'flex';
                 li.style.alignItems = 'center';

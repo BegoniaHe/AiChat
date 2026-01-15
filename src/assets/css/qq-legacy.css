@@ -151,13 +151,13 @@
 }
 
 .QQ_chat_page .chat-room-topbar,
-.QQ_chat_page .msgcontent,
-.QQ_chat_page .chat-input-container,
-.QQ_chat_page .sticker-panel,
-.QQ_chat_page .sticker-preview,
-.QQ_chat_page .pending-float {
+.QQ_chat_page .msgcontent {
   position: relative;
   z-index: 2;
+}
+
+.QQ_chat_page .chat-input-container {
+  z-index: 5;
 }
 
 .QQ_chat_page::before {

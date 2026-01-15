@@ -26,6 +26,19 @@
   - `src-tauri/src/commands.rs`
   - `src/scripts/ui/general-settings-panel.js`
 
+## 2026-01-15 11:18
+- 世界书管理隐藏内置「手机-格式」，避免与自动注入逻辑混淆。
+- 群聊成员绑定列表同步隐藏内置世界书选项。
+- 修改：
+  - `src/scripts/ui/world-panel.js`
+
+## 2026-01-15 12:42
+- 桌面端联系人拖拽改为 pointer 方案，移动端仍走原 HTML5 拖拽。
+- 贴图面板打开时修正聊天输入栏高度计算，避免出现大块空白。
+- 修改：
+  - `src/scripts/ui/contact-drag-manager.js`
+  - `src/scripts/ui/app.js`
+
 ## 2026-01-15 00:56
 - 聊天室底部留白微调：消息列表底部预留缩减（输入框间距更紧）。
 - 壁纸持久化补强：新增原图流式分块写入、修正保存参数命名、失败提示带错误信息。
