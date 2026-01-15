@@ -1,5 +1,32 @@
 # 開發進度追蹤（必更新）(必须使用当下时间记录)
 
+## 2026-01-15 21:35
+- 未分组联系人区域常驻显示；为空时显示占位并支持拖拽回未分组。
+- 修改：
+  - `src/scripts/ui/contact-group-renderer.js`
+
+## 2026-01-15 21:31
+- 分组拖拽优化：仅高亮当前悬停分组，支持拖拽悬停自动展开并可投放到不同层级。
+- 修改：
+  - `src/scripts/ui/contact-drag-manager.js`
+
+## 2026-01-15 21:22
+- 联系人分组：长按分组名称弹出联系人选择清单，支持批量加入该分组。
+- 联系人分组：新增嵌套/层级分组支持，分组可设置上级并在列表中呈现层级。
+- 修改：
+  - `src/scripts/storage/group-store.js`
+  - `src/scripts/ui/contact-group-renderer.js`
+  - `src/scripts/ui/group-panel.js`
+  - `src/scripts/ui/app.js`
+
+## 2026-01-15 21:04
+- 记忆表格模式：开启新聊天改为按钮选择（保留摘要/清空全部/取消）。
+- 记忆表格与存档绑定：清空后开启新聊天仅影响新存档，切回历史存档会恢复表格内容。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/ui/contact-settings-panel.js`
+  - `src/scripts/ui/group-chat-panels.js`
+
 ## 2026-01-15 20:14
 - 附件发送补强：Enter 可缓存仅附件的待发送气泡；发送时不再因“发送到这里”而忽略附件。
 - 修改：

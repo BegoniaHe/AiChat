@@ -112,7 +112,7 @@ export class GroupStore {
     /**
      * 创建新分组
      */
-    createGroup(name) {
+    createGroup(name, parentId = '') {
         if (!name || !name.trim()) {
             throw new Error('分组名称不能为空');
         }
@@ -121,10 +121,15 @@ export class GroupStore {
         if ((this.state.groups || []).some(g => g.name === trimmed)) {
             throw new Error('分组名称已存在');
         }
+        const nextParentId = String(parentId || '').trim();
+        if (nextParentId && !this.getGroup(nextParentId)) {
+            throw new Error('上级分组不存在');
+        }
         const newGroup = {
             id: 'group_' + Date.now(),
             name: trimmed,
             contacts: [],
+            parentId: nextParentId || '',
             collapsed: false,
             order: (this.state.groups || []).length,
             createdAt: Date.now(),
@@ -162,6 +167,20 @@ export class GroupStore {
         if (Array.isArray(updates.contacts)) {
             group.contacts = updates.contacts;
         }
+        if (Object.prototype.hasOwnProperty.call(updates, 'parentId')) {
+            const nextParentId = String(updates.parentId || '').trim();
+            if (nextParentId) {
+                if (nextParentId === groupId) throw new Error('不能设置自身为上级分组');
+                const parent = this.getGroup(nextParentId);
+                if (!parent) throw new Error('上级分组不存在');
+                let cursor = nextParentId;
+                while (cursor) {
+                    if (cursor === groupId) throw new Error('不可设置子分组为上级');
+                    cursor = String(this.getGroup(cursor)?.parentId || '').trim();
+                }
+            }
+            group.parentId = nextParentId || '';
+        }
         group.updatedAt = Date.now();
         this._persist();
         logger.info('更新分组:', group.name);
@@ -174,6 +193,13 @@ export class GroupStore {
     deleteGroup(groupId) {
         const group = this.getGroup(groupId);
         if (!group) return false;
+        const parentId = String(group.parentId || '').trim();
+        (this.state.groups || []).forEach((g) => {
+            if (String(g.parentId || '').trim() === groupId) {
+                g.parentId = parentId || '';
+                g.updatedAt = Date.now();
+            }
+        });
         this.state.groups = (this.state.groups || []).filter(g => g.id !== groupId);
         this._persist();
         logger.info('删除分组:', group.name);

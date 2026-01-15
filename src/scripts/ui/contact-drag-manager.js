@@ -22,6 +22,9 @@ export class ContactDragManager {
         this.pointerOverZone = null;
         this.suppressClick = false;
         this.initialized = false;
+        this.activeDropZone = null;
+        this.expandTimer = null;
+        this.expandTargetId = null;
 
         this.boundDragStart = this.handleDragStart.bind(this);
         this.boundDragOver = this.handleDragOver.bind(this);
@@ -101,9 +104,7 @@ export class ContactDragManager {
         }
 
         contact.classList.add('dragging');
-        document.querySelectorAll('.drop-zone').forEach(zone => {
-            zone.classList.add('active');
-        });
+        this.setActiveDropZone(null);
         return true;
     }
 
@@ -112,9 +113,8 @@ export class ContactDragManager {
             this.draggedElement.classList.remove('dragging');
         }
         this.clearDropZoneHighlights();
-        document.querySelectorAll('.drop-zone').forEach(zone => {
-            zone.classList.remove('active');
-        });
+        this.setActiveDropZone(null);
+        this.clearExpandTimer();
         this.draggedElement = null;
         this.draggedContactId = null;
         this.draggedFromGroupId = null;
@@ -168,15 +168,12 @@ export class ContactDragManager {
      * 拖拽悬停处理
      */
     handleDragOver(event) {
-        const dropZone = event.target.closest('.drop-zone');
+        const dropZone = this.resolveDropZoneFromTarget(event.target);
+        this.updateDropZoneHover(dropZone);
         if (!dropZone) return;
 
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
-
-        // 高亮当前悬停的放置区
-        this.clearDropZoneHighlights();
-        dropZone.classList.add('drag-over');
     }
 
     /**
@@ -186,7 +183,7 @@ export class ContactDragManager {
         event.preventDefault();
         event.stopPropagation();
 
-        const dropZone = event.target.closest('.drop-zone');
+        const dropZone = this.resolveDropZoneFromTarget(event.target);
         this.dropOnZone(dropZone);
     }
 
@@ -209,10 +206,16 @@ export class ContactDragManager {
     }
 
     updateDropZoneHover(dropZone) {
-        this.clearDropZoneHighlights();
+        if (this.pointerOverZone !== dropZone) {
+            this.clearDropZoneHighlights();
+        }
         this.pointerOverZone = dropZone || null;
+        this.setActiveDropZone(dropZone);
         if (this.pointerOverZone) {
             this.pointerOverZone.classList.add('drag-over');
+            this.scheduleExpandForZone(this.pointerOverZone);
+        } else {
+            this.clearExpandTimer();
         }
     }
 
@@ -245,7 +248,7 @@ export class ContactDragManager {
         }
         event.preventDefault();
         const target = document.elementFromPoint(event.clientX, event.clientY);
-        const dropZone = target?.closest ? target.closest('.drop-zone') : null;
+        const dropZone = this.resolveDropZoneFromTarget(target);
         this.updateDropZoneHover(dropZone);
     }
 
@@ -253,7 +256,7 @@ export class ContactDragManager {
         if (event.pointerId !== this.pointerId) return;
         if (this.pointerDragging) {
             const target = document.elementFromPoint(event.clientX, event.clientY);
-            const dropZone = this.pointerOverZone || (target?.closest ? target.closest('.drop-zone') : null);
+            const dropZone = this.pointerOverZone || this.resolveDropZoneFromTarget(target);
             this.dropOnZone(dropZone);
             this.suppressClick = true;
         }
@@ -284,6 +287,65 @@ export class ContactDragManager {
         this.pointerTarget = null;
         this.pointerDragging = false;
         this.pointerOverZone = null;
+    }
+
+    setActiveDropZone(dropZone) {
+        if (this.activeDropZone === dropZone) return;
+        if (this.activeDropZone) this.activeDropZone.classList.remove('active');
+        this.activeDropZone = dropZone || null;
+        if (this.activeDropZone) this.activeDropZone.classList.add('active');
+    }
+
+    resolveDropZoneFromTarget(target) {
+        if (!target || !target.closest) return null;
+        const directZone = target.closest('.drop-zone');
+        if (directZone) return directZone;
+        const groupContainer = target.closest('.contact-group-container');
+        if (groupContainer) return this.getDirectDropZone(groupContainer);
+        const ungrouped = target.closest('.contact-ungrouped-section');
+        if (ungrouped) return this.getDirectDropZone(ungrouped);
+        return null;
+    }
+
+    getDirectDropZone(container) {
+        if (!container) return null;
+        const scoped = container.querySelector(':scope > .drop-zone');
+        if (scoped) return scoped;
+        const children = Array.from(container.children || []);
+        return children.find(child => child?.classList?.contains('drop-zone')) || null;
+    }
+
+    scheduleExpandForZone(dropZone) {
+        const groupId = dropZone?.getAttribute?.('data-group-id') || '';
+        if (!groupId || groupId === 'ungrouped') return;
+        if (this.expandTargetId === groupId) return;
+        this.clearExpandTimer();
+        this.expandTargetId = groupId;
+        this.expandTimer = setTimeout(() => {
+            this.ensureGroupExpanded(groupId);
+        }, 260);
+    }
+
+    clearExpandTimer() {
+        if (this.expandTimer) clearTimeout(this.expandTimer);
+        this.expandTimer = null;
+        this.expandTargetId = null;
+    }
+
+    ensureGroupExpanded(groupId) {
+        if (!groupId) return;
+        const group = this.groupStore?.getGroup?.(groupId);
+        if (!group || !group.collapsed) return;
+        try {
+            this.groupStore?.updateGroup?.(groupId, { collapsed: false });
+        } catch {}
+        const groupEl = document.querySelector(`.contact-group-container[data-group-id="${groupId}"]`);
+        if (!groupEl) return;
+        const toggle = groupEl.querySelector('.group-toggle');
+        const content = groupEl.querySelector('.contact-group-content');
+        toggle?.classList.remove('collapsed');
+        content?.classList.remove('collapsed');
+        content?.classList.add('expanded');
     }
 
     /**

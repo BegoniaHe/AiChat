@@ -1794,6 +1794,11 @@ ${listPart || '-（无）'}
     groupStore,
     contactsStore,
     dragManager: contactDragManager,
+    onGroupChanged: () => {
+      try {
+        refreshChatAndContacts();
+      } catch {}
+    },
     renderContactFn: contact => {
       const id = contact.id;
       const last = getLastVisibleMessage(id);
