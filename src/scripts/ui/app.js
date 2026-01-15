@@ -1476,6 +1476,8 @@ ${listPart || '-（无）'}
 
   const getMessageSendText = message => {
     if (!message || typeof message !== 'object') return '';
+    const meta = (message.meta && typeof message.meta === 'object') ? message.meta : null;
+    if (meta?.attachmentsOnly) return '';
     const raw = typeof message.raw === 'string' ? message.raw.trim() : '';
     if (raw) return raw;
     if (message.type === 'sticker') {
@@ -4116,23 +4118,35 @@ ${listPart || '-（无）'}
    */
   const handleEnter = () => {
     const text = ui.getInputText();
-    if (!text) return;
+    const hasAttachments = composerAttachments.length > 0;
+    if (!text && !hasAttachments) return;
 
     const sessionId = chatStore.getCurrent();
     const activePersona = getEffectivePersona(sessionId);
-    const stickerKey = parseStickerToken(text);
+    const stickerKey = text ? parseStickerToken(text) : '';
+    const attachmentSummary = () => {
+      const images = composerAttachments.filter(a => a?.kind === 'image').length;
+      const docs = composerAttachments.filter(a => a?.kind === 'document').length;
+      const parts = [];
+      if (images) parts.push(images === 1 ? '[图片]' : `[图片]x${images}`);
+      if (docs) parts.push(docs === 1 ? '[文件]' : `[文件]x${docs}`);
+      return parts.join(' ');
+    };
 
     // 创建 pending 消息（status: 'pending'）
     const pendingMessage = {
       role: 'user',
       type: stickerKey ? 'sticker' : 'text',
-      content: stickerKey || text,
+      content: stickerKey || text || attachmentSummary() || '[附件]',
       raw: stickerKey ? text : undefined,
       status: 'pending', // 标记为待发送
       avatar: avatars.user,
       name: activePersona.name || '我',
       time: formatNowTime(),
     };
+    if (!text && hasAttachments && !stickerKey) {
+      pendingMessage.meta = { attachmentsOnly: true };
+    }
 
     // 添加到聊天历史（作为 pending 状态的消息）
     const saved = chatStore.appendMessage(pendingMessage, sessionId);
@@ -4174,7 +4188,7 @@ ${listPart || '-（无）'}
     const existingUserMessageId = typeof options.existingUserMessageId === 'string' ? options.existingUserMessageId : '';
     const skipInputRegex = Boolean(options.skipInputRegex);
     const creativeMode = sendMode === 'creative';
-    const includeAttachments = options.includeAttachments !== false && !targetMessageId;
+    const includeAttachments = options.includeAttachments !== false;
     const attachmentQueue = includeAttachments ? composerAttachments.slice() : [];
     const hasAttachments = attachmentQueue.length > 0;
     const sessionId = chatStore.getCurrent();
