@@ -912,7 +912,7 @@ export class ChatStore {
     )} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
 
-  archiveCurrentMessages(id = this.currentId, name = '', forceCreate = false) {
+  archiveCurrentMessages(id = this.currentId, name = '', forceCreate = false, options = {}) {
     if (!this.state.sessions[id]) return null;
     const messages = this.state.sessions[id].messages || [];
     if (!messages.length) return null;
@@ -925,12 +925,17 @@ export class ChatStore {
     const timestamp = Date.now();
     const suffix = ` (${this._tsSuffix()})`;
 
+    const memoryTableSnapshot = options?.memoryTableSnapshot;
+
     // 1. Update existing archive (if not forced new and attached)
     if (!forceCreate && currentArchiveId) {
       const idx = this.state.sessions[id].archives.findIndex(a => a.id === currentArchiveId);
       if (idx !== -1) {
         this.state.sessions[id].archives[idx].messages = [...messages];
         this.state.sessions[id].archives[idx].timestamp = timestamp;
+        if (memoryTableSnapshot) {
+          this.state.sessions[id].archives[idx].memoryTableSnapshot = memoryTableSnapshot;
+        }
         // Snapshot summaries into archive (for attached mode, it's the source of truth)
         try {
           const list = this.state.sessions[id].archives[idx].summaries;
@@ -1014,26 +1019,31 @@ export class ChatStore {
       }
     };
 
-    this.state.sessions[id].archives.push({
+    const nextArchive = {
       id: archiveId,
       name: baseName,
       timestamp,
       messages: [...messages],
       summaries: getCurrentSummariesSnapshot(),
       compactedSummary: getCurrentCompactedSummarySnapshot(),
-    });
+    };
+    if (memoryTableSnapshot) {
+      nextArchive.memoryTableSnapshot = memoryTableSnapshot;
+    }
+    this.state.sessions[id].archives.push(nextArchive);
 
     this._persist();
     return archiveId;
   }
 
-  startNewChat(id = this.currentId, archiveName = '') {
+  startNewChat(id = this.currentId, archiveName = '', options = {}) {
     const session = this.state.sessions[id];
     if (!session) return;
 
+    let archiveId = null;
     if (session.messages && session.messages.length > 0) {
       // Force create a snapshot of current state before clearing
-      this.archiveCurrentMessages(id, archiveName, true);
+      archiveId = this.archiveCurrentMessages(id, archiveName, true, options);
     }
 
     session.messages = [];
@@ -1043,13 +1053,14 @@ export class ChatStore {
     session.draft = '';
     session.lastRawResponse = '';
     this._persist();
+    return archiveId;
   }
 
   getArchives(id = this.currentId) {
     return (this.state.sessions[id]?.archives || []).sort((a, b) => b.timestamp - a.timestamp);
   }
 
-  loadArchivedMessages(archiveId, id = this.currentId) {
+  loadArchivedMessages(archiveId, id = this.currentId, options = {}) {
     const session = this.state.sessions[id];
     if (!session || !session.archives) return false;
 
@@ -1060,7 +1071,7 @@ export class ChatStore {
     if (session.messages && session.messages.length > 0) {
       const isDetached = !session.currentArchiveId;
       const autoName = isDetached ? '自动存档' : '';
-      this.archiveCurrentMessages(id, autoName, false);
+      this.archiveCurrentMessages(id, autoName, false, options);
     }
 
     session.messages = [...archive.messages];

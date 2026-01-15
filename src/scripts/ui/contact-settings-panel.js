@@ -30,23 +30,158 @@ const resolveDefaultMemoryTemplateId = async () => {
     return '';
 };
 
-const askMemoryTableNewChatMode = () => {
-    const tip = [
-        '记忆表格模式：选择新聊天处理方式',
-        '1) 保留其他表格（仅清空摘要）',
-        '2) 清空全部记忆表格',
-        '0) 取消开启新聊天',
-        '',
-        '请输入 1 / 2 / 0：',
-    ].join('\n');
-    const raw = prompt(tip, '1');
-    if (raw === null) return 'cancel';
-    const value = String(raw || '').trim();
-    if (!value || value === '1' || value.includes('保留')) return 'keep';
-    if (value === '2' || value.includes('清空')) return 'clear';
-    if (value === '0' || value.includes('取消')) return 'cancel';
-    alert('未识别的选项，已取消开启新聊天。');
-    return 'cancel';
+const askMemoryTableNewChatMode = () => new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+        position:fixed; inset:0; background:rgba(15,23,42,0.45);
+        display:flex; align-items:center; justify-content:center;
+        padding:16px; z-index:22000;
+    `;
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+        width:min(360px, 92vw);
+        background:#fff; border-radius:14px;
+        padding:16px; box-shadow:0 20px 60px rgba(0,0,0,0.3);
+        display:flex; flex-direction:column; gap:10px;
+    `;
+    panel.innerHTML = `
+        <div style="font-weight:800; color:#0f172a;">记忆表格：开启新聊天</div>
+        <div style="font-size:12px; color:#64748b;">请选择新聊天处理方式</div>
+    `;
+    const btnWrap = document.createElement('div');
+    btnWrap.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+    const buildBtn = (text, style) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = text;
+        btn.style.cssText = `
+            padding:10px 12px; border-radius:10px; border:1px solid #e2e8f0;
+            background:#fff; font-weight:700; cursor:pointer; text-align:left;
+            ${style || ''}
+        `;
+        return btn;
+    };
+    const keepBtn = buildBtn('保留其他表格（仅清空摘要/大纲）', 'color:#0f172a;');
+    const clearBtn = buildBtn('清空全部记忆表格', 'color:#ef4444; border-color:#fecaca; background:#fff5f5;');
+    const cancelBtn = buildBtn('取消', 'color:#475569; background:#f8fafc;');
+    const done = (value) => {
+        overlay.remove();
+        resolve(value);
+    };
+    keepBtn.onclick = () => done('keep');
+    clearBtn.onclick = () => done('clear');
+    cancelBtn.onclick = () => done('cancel');
+    btnWrap.appendChild(keepBtn);
+    btnWrap.appendChild(clearBtn);
+    btnWrap.appendChild(cancelBtn);
+    panel.appendChild(btnWrap);
+    overlay.appendChild(panel);
+    overlay.addEventListener('click', () => done('cancel'));
+    panel.addEventListener('click', (e) => e.stopPropagation());
+    document.body.appendChild(overlay);
+});
+
+const buildMemoryTableSnapshot = async ({ sessionId, isGroup } = {}) => {
+    const memoryTableStore = window.appBridge?.memoryTableStore;
+    if (!memoryTableStore?.getMemories) return null;
+    const templateId = await resolveDefaultMemoryTemplateId();
+    if (!templateId) return null;
+    const sid = String(sessionId || '').trim();
+    if (!sid) return null;
+    let rows = [];
+    try {
+        rows = await memoryTableStore.getMemories({
+            scope: isGroup ? 'group' : 'contact',
+            group_id: isGroup ? sid : undefined,
+            contact_id: isGroup ? undefined : sid,
+            template_id: templateId,
+        });
+    } catch {
+        return null;
+    }
+    const picked = Array.isArray(rows)
+        ? rows
+              .map((row) => {
+                  const tableId = String(row?.table_id || '').trim();
+                  if (!tableId) return null;
+                  return {
+                      id: String(row?.id || '').trim(),
+                      table_id: tableId,
+                      row_data: row?.row_data ?? {},
+                      is_active: row?.is_active !== false,
+                      is_pinned: Boolean(row?.is_pinned),
+                      priority: Number.isFinite(Number(row?.priority)) ? Number(row.priority) : 0,
+                      sort_order: Number.isFinite(Number(row?.sort_order)) ? Number(row.sort_order) : 0,
+                  };
+              })
+              .filter(Boolean)
+        : [];
+    return { templateId, rows: picked };
+};
+
+const applyMemoryTableSnapshot = async ({ sessionId, isGroup, snapshot } = {}) => {
+    if (!snapshot) return false;
+    const memoryTableStore = window.appBridge?.memoryTableStore;
+    if (!memoryTableStore?.getMemories) return false;
+    const sid = String(sessionId || '').trim();
+    if (!sid) return false;
+    const templateId = String(snapshot?.templateId || '').trim() || (await resolveDefaultMemoryTemplateId());
+    if (!templateId) return false;
+    let existing = [];
+    try {
+        existing = await memoryTableStore.getMemories({
+            scope: isGroup ? 'group' : 'contact',
+            group_id: isGroup ? sid : undefined,
+            contact_id: isGroup ? undefined : sid,
+            template_id: templateId,
+        });
+    } catch {}
+    const ids = Array.isArray(existing)
+        ? existing.map(row => String(row?.id || '').trim()).filter(Boolean)
+        : [];
+    if (ids.length) {
+        try {
+            await memoryTableStore.batchDeleteMemories?.(ids);
+        } catch {
+            for (const id of ids) {
+                try {
+                    await memoryTableStore.deleteMemory?.(id);
+                } catch {}
+            }
+        }
+    }
+    const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+    const inputs = rows
+        .map((row) => {
+            const tableId = String(row?.table_id || '').trim();
+            if (!tableId) return null;
+            return {
+                id: row?.id ? String(row.id) : undefined,
+                template_id: templateId,
+                table_id: tableId,
+                contact_id: isGroup ? null : sid,
+                group_id: isGroup ? sid : null,
+                row_data: row?.row_data ?? {},
+                is_active: row?.is_active !== false,
+                is_pinned: Boolean(row?.is_pinned),
+                priority: Number.isFinite(Number(row?.priority)) ? Number(row.priority) : 0,
+                sort_order: Number.isFinite(Number(row?.sort_order)) ? Number(row.sort_order) : 0,
+            };
+        })
+        .filter(Boolean);
+    if (inputs.length) {
+        try {
+            await memoryTableStore.batchCreateMemories?.(inputs);
+        } catch {
+            for (const input of inputs) {
+                try {
+                    await memoryTableStore.createMemory?.(input);
+                } catch {}
+            }
+        }
+    }
+    window.dispatchEvent(new CustomEvent('memory-rows-updated', { detail: { sessionId: sid, templateId } }));
+    return true;
 };
 
 const clearSessionMemoriesForNewChat = async ({ sessionId, isGroup, keepNonSummary } = {}) => {
@@ -683,10 +818,23 @@ export class ContactSettingsPanel {
                 <div style="font-weight:600; color:#334155; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${arc.name || '未命名存档'} ${isCurrent ? '(当前)' : ''}</div>
                 <div style="color:#94a3b8; font-size:11px;">${dateStr} · ${msgCount}条消息</div>
             `;
-            info.onclick = () => {
+            info.onclick = async () => {
                 if (isCurrent) return;
                 if (confirm(`确定要加载存档「${arc.name}」吗？\n当前聊天将被自动保存。`)) {
-                    this.chatStore.loadArchivedMessages(arc.id, sid);
+                    const memoryTableOn = getMemoryStorageMode() === 'table';
+                    let currentSnapshot = null;
+                    if (memoryTableOn) {
+                        currentSnapshot = await buildMemoryTableSnapshot({ sessionId: sid, isGroup: false });
+                    }
+                    const targetSnapshot = arc?.memoryTableSnapshot;
+                    const loaded = this.chatStore.loadArchivedMessages(arc.id, sid, { memoryTableSnapshot: currentSnapshot });
+                    if (loaded && memoryTableOn && targetSnapshot) {
+                        try {
+                            await applyMemoryTableSnapshot({ sessionId: sid, isGroup: false, snapshot: targetSnapshot });
+                        } catch (err) {
+                            logger.warn('apply memory table snapshot failed', err);
+                        }
+                    }
                     window.toastr?.success('已加载存档');
                     this.onSaved?.({ id: sid, forceRefresh: true }); 
                     this.hide();
@@ -790,21 +938,23 @@ export class ContactSettingsPanel {
         if (!this.chatStore) return;
         const sid = this.getSessionId();
         let keepNonSummary = false;
+        let memoryTableSnapshot = null;
         if (getMemoryStorageMode() === 'table') {
-            const choice = askMemoryTableNewChatMode();
+            const choice = await askMemoryTableNewChatMode();
             if (choice === 'cancel') return;
             keepNonSummary = choice === 'keep';
         }
         const raw = prompt('请输入当前聊天的存档名称（留空将自动命名）：');
         if (raw === null) return;
         if (getMemoryStorageMode() === 'table') {
+            memoryTableSnapshot = await buildMemoryTableSnapshot({ sessionId: sid, isGroup: false });
             try {
                 await clearSessionMemoriesForNewChat({ sessionId: sid, isGroup: false, keepNonSummary });
             } catch (err) {
                 logger.warn('clear memory tables for new chat failed', err);
             }
         }
-        this.chatStore.startNewChat(sid, raw.trim());
+        this.chatStore.startNewChat(sid, raw.trim(), { memoryTableSnapshot });
         window.toastr?.success('已开启新聊天');
         this.onSaved?.({ id: sid, forceRefresh: true });
         this.hide();
