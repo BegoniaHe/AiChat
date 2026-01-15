@@ -648,11 +648,12 @@ export class GeneralSettingsPanel {
       try {
         const mode = 'replace';
         const filePath = typeof file.path === 'string' ? file.path : '';
+        let result = null;
         if (filePath) {
-          await safeInvoke('import_data_bundle', { path: filePath, mode });
+          result = await safeInvoke('import_data_bundle', { path: filePath, mode });
         } else {
           const dataUrl = await readFileAsDataUrl(file);
-          await safeInvoke('import_data_bundle_bytes', { data: dataUrl, mode });
+          result = await safeInvoke('import_data_bundle_bytes', { data: dataUrl, mode });
         }
         try {
           const prefs = await safeInvoke('load_kv', { name: 'app_settings_v1' });
@@ -660,8 +661,10 @@ export class GeneralSettingsPanel {
             appSettings.update(prefs);
           }
         } catch {}
-        setBundleStatus('导入完成，请重启应用以加载新资料');
-        window.toastr?.success?.('资料包导入完成');
+        const skipped = Number(result?.skipped || 0);
+        const suffix = skipped ? `（跳过 ${skipped} 项）` : '';
+        setBundleStatus(`导入完成${suffix}，请重启应用以加载新资料`);
+        window.toastr?.success?.(`资料包导入完成${suffix}`);
         const restart = confirm('资料导入完成，是否立即重启应用？');
         if (restart) window.location.reload();
       } catch (err) {

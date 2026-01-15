@@ -19,6 +19,13 @@
   - `src-tauri/src/commands.rs`
   - `src/scripts/ui/general-settings-panel.js`
 
+## 2026-01-15 11:04
+- 导入资料包改为容错模式：单个文件失败会跳过并继续导入，统计跳过数量。
+- 导入完成提示增加跳过项数量提示。
+- 修改：
+  - `src-tauri/src/commands.rs`
+  - `src/scripts/ui/general-settings-panel.js`
+
 ## 2026-01-15 00:56
 - 聊天室底部留白微调：消息列表底部预留缩减（输入框间距更紧）。
 - 壁纸持久化补强：新增原图流式分块写入、修正保存参数命名、失败提示带错误信息。

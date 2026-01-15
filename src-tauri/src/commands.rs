@@ -165,6 +165,7 @@ pub struct DataBundleResult {
 #[derive(serde::Serialize)]
 pub struct DataBundleImportResult {
     pub files: usize,
+    pub skipped: usize,
 }
 
 fn decode_base64_payload(payload: &str) -> Result<Vec<u8>, String> {
@@ -273,32 +274,65 @@ fn import_bundle_from_reader<R: Read + Seek>(
     }
     let mut archive = ZipArchive::new(reader).map_err(|e| e.to_string())?;
     let mut files = 0usize;
+    let mut skipped = 0usize;
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = file.name();
+        let mut file = match archive.by_index(i) {
+            Ok(entry) => entry,
+            Err(err) => {
+                skipped += 1;
+                eprintln!("[import_bundle] read entry failed: {}", err);
+                continue;
+            }
+        };
+        let name = file.name().to_string();
         if name == "bundle.json" {
             continue;
         }
-        if is_sensitive_bundle_path(Path::new(name)) {
+        if is_sensitive_bundle_path(Path::new(&name)) {
             continue;
         }
         if name.ends_with('/') {
-            if let Some(rel) = file.enclosed_name() {
-                let out_dir = data_dir.join(rel);
-                fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+            let Some(rel) = file.enclosed_name() else {
+                skipped += 1;
+                eprintln!("[import_bundle] unsafe path: {}", name);
+                continue;
+            };
+            let out_dir = data_dir.join(rel);
+            if let Err(err) = fs::create_dir_all(&out_dir) {
+                skipped += 1;
+                eprintln!("[import_bundle] mkdir failed: {} ({})", name, err);
             }
             continue;
         }
-        let Some(rel) = file.enclosed_name() else { continue; };
+        let Some(rel) = file.enclosed_name() else {
+            skipped += 1;
+            eprintln!("[import_bundle] unsafe path: {}", name);
+            continue;
+        };
         let out_path = data_dir.join(rel);
         if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            if let Err(err) = fs::create_dir_all(parent) {
+                skipped += 1;
+                eprintln!("[import_bundle] mkdir failed: {} ({})", name, err);
+                continue;
+            }
         }
-        let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+        let mut outfile = match fs::File::create(&out_path) {
+            Ok(f) => f,
+            Err(err) => {
+                skipped += 1;
+                eprintln!("[import_bundle] create file failed: {} ({})", name, err);
+                continue;
+            }
+        };
+        if let Err(err) = std::io::copy(&mut file, &mut outfile) {
+            skipped += 1;
+            eprintln!("[import_bundle] write failed: {} ({})", name, err);
+            continue;
+        }
         files += 1;
     }
-    Ok(DataBundleImportResult { files })
+    Ok(DataBundleImportResult { files, skipped })
 }
 
 /// Ensure bundled media assets exist in app data dir.
