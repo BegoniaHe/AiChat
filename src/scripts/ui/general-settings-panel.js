@@ -66,7 +66,7 @@ export class GeneralSettingsPanel {
     if (this.promptTimeToggle) {
       this.promptTimeToggle.checked = settings.promptCurrentTimeEnabled === true;
     }
-    const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
+    const memoryMode = String(settings.memoryStorageMode || 'table').toLowerCase();
     if (this.memoryModeSummary) {
       this.memoryModeSummary.checked = memoryMode !== 'table';
     }
@@ -147,7 +147,7 @@ export class GeneralSettingsPanel {
 
   updateMemoryAutoVisibility() {
     const settings = appSettings.get();
-    const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
+    const memoryMode = String(settings.memoryStorageMode || 'table').toLowerCase();
     const showMemoryTable = memoryMode === 'table';
     const enabled = settings.memoryAutoExtract === true;
     const mode = String(settings.memoryAutoExtractMode || 'inline').toLowerCase();
@@ -296,11 +296,11 @@ export class GeneralSettingsPanel {
             <div style="font-weight: 700; margin-bottom: 8px;">记忆存储方式</div>
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:8px;">
               <input type="radio" name="general-memory-mode" id="general-memory-mode-summary" value="summary">
-              <span>摘要模式（推荐）</span>
+              <span>摘要模式</span>
             </label>
             <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
               <input type="radio" name="general-memory-mode" id="general-memory-mode-table" value="table">
-              <span>记忆表格模式（手动管理，更精确）</span>
+              <span>记忆表格模式</span>
             </label>
             <small style="color:#666; margin-left: 26px;">两种方式互斥，切换后立即生效</small>
           </div>

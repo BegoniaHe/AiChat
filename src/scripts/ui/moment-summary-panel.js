@@ -78,7 +78,7 @@ export class MomentSummaryPanel {
                     <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
                         <div style="font-size:12px; color:#64748b;">大总结（自动生成）</div>
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <button id="moment-compacted-raw" type="button" title="查看原始回覆" style="width:32px; height:28px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#0f172a; font-size:16px; line-height:1;">📄</button>
+                            <button id="moment-compacted-raw" type="button" title="查看原始回复" style="width:32px; height:28px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#0f172a; font-size:16px; line-height:1;">📄</button>
                             <button id="moment-compacted-edit" type="button" title="编辑" style="width:32px; height:28px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#0f172a; font-size:16px; line-height:1;">✎</button>
                             <button id="moment-compacted-run" type="button" title="手动生成/刷新" style="width:32px; height:28px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; cursor:pointer; color:#0f172a; font-size:16px; line-height:1;">↻</button>
                             <button id="moment-compacted-clear" type="button" title="删除" style="width:32px; height:28px; border:1px solid #fecaca; border-radius:10px; background:#fff; cursor:pointer; color:#b91c1c; font-size:16px; line-height:1;">🗑</button>

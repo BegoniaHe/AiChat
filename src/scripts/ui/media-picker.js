@@ -50,7 +50,7 @@ export class MediaPicker {
           resolve(reader.result);
         };
         reader.onerror = () => {
-          alert('讀取文件失敗，請重試');
+          alert('读取文件失败，请重试');
           resolve(null);
         };
         reader.readAsDataURL(file);

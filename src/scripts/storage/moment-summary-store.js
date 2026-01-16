@@ -3,6 +3,21 @@ import { logger } from '../utils/logger.js';
 import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 
 const BASE_STORE_KEY = 'moment_summary_store_v1';
+const LEGACY_MIGRATION_KEY = `${BASE_STORE_KEY}__scoped_migrated`;
+
+const isLegacyMigrated = () => {
+    try {
+        return localStorage.getItem(LEGACY_MIGRATION_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const markLegacyMigrated = () => {
+    try {
+        localStorage.setItem(LEGACY_MIGRATION_KEY, '1');
+    } catch {}
+};
 
 const readLocalState = (key) => {
     try {
@@ -64,6 +79,7 @@ export class MomentSummaryStore {
     constructor({ scopeId = '' } = {}) {
         this.scopeId = normalizeScopeId(scopeId);
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this._scopeToken = 0;
         this.state = makeDefaultState();
         this.isLoaded = false;
         this.ready = this.load();
@@ -71,24 +87,33 @@ export class MomentSummaryStore {
 
     async load() {
         if (this.isLoaded) return this.state;
+        const token = this._scopeToken;
+        const storeKey = this.storeKey;
+        const scopeId = this.scopeId;
         try {
-            let data = await safeInvoke('load_kv', { name: this.storeKey });
-            if (!data && this.scopeId) {
+            let data = await safeInvoke('load_kv', { name: storeKey });
+            if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return this.state;
+            if (data && this.scopeId) markLegacyMigrated();
+            if (!data && this.scopeId && !isLegacyMigrated()) {
                 const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return this.state;
                 if (legacy && typeof legacy === 'object') {
                     data = legacy;
+                    markLegacyMigrated();
                     try {
-                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                        await safeInvoke('save_kv', { name: storeKey, data: legacy });
                     } catch (err) {
                         logger.debug('moment summary store legacy migrate failed (可能非 Tauri)', err);
                     }
                 }
             }
             if (!data) {
-                data = readLocalState(this.storeKey);
+                data = readLocalState(storeKey);
+                if (data && this.scopeId) markLegacyMigrated();
             }
-            if (!data && this.scopeId) {
+            if (!data && this.scopeId && !isLegacyMigrated()) {
                 data = readLocalState(BASE_STORE_KEY);
+                if (data) markLegacyMigrated();
             }
             if (!data || typeof data !== 'object') {
                 this.state = makeDefaultState();
@@ -131,6 +156,7 @@ export class MomentSummaryStore {
     async setScope(scopeId = '') {
         const nextScope = normalizeScopeId(scopeId);
         if (nextScope === this.scopeId) return this.ready;
+        this._scopeToken += 1;
         this.scopeId = nextScope;
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this.state = makeDefaultState();

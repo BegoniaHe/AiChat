@@ -44,6 +44,21 @@ const safeInvoke = async (cmd, args) => {
 };
 
 const BASE_STORE_KEY = 'moments_store_v1';
+const LEGACY_MIGRATION_KEY = `${BASE_STORE_KEY}__scoped_migrated`;
+
+const isLegacyMigrated = () => {
+    try {
+        return localStorage.getItem(LEGACY_MIGRATION_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const markLegacyMigrated = () => {
+    try {
+        localStorage.setItem(LEGACY_MIGRATION_KEY, '1');
+    } catch {}
+};
 
 const readLocalState = (key) => {
     try {
@@ -69,6 +84,7 @@ export class MomentsStore {
     constructor({ scopeId = '' } = {}) {
         this.scopeId = normalizeScopeId(scopeId);
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this._scopeToken = 0;
         this.state = this._load();
         this._normalizeState();
         this.ready = this._hydrateFromDisk();
@@ -103,32 +119,46 @@ export class MomentsStore {
 
     _load() {
         const data = readLocalState(this.storeKey);
-        if (data) return data;
-        if (this.scopeId) {
+        if (data) {
+            if (this.scopeId) markLegacyMigrated();
+            return data;
+        }
+        if (this.scopeId && !isLegacyMigrated()) {
             const legacy = readLocalState(BASE_STORE_KEY);
-            if (legacy) return legacy;
+            if (legacy) {
+                markLegacyMigrated();
+                return legacy;
+            }
         }
         return { moments: [] };
     }
 
     async _hydrateFromDisk() {
+        const token = this._scopeToken;
+        const storeKey = this.storeKey;
+        const scopeId = this.scopeId;
         try {
-            let kv = await safeInvoke('load_kv', { name: this.storeKey });
-            if (!kv && this.scopeId) {
+            let kv = await safeInvoke('load_kv', { name: storeKey });
+            if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+            if (!kv && this.scopeId && !isLegacyMigrated()) {
                 const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
                 if (legacy && typeof legacy === 'object' && Array.isArray(legacy.moments)) {
                     kv = legacy;
+                    markLegacyMigrated();
                     try {
-                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                        await safeInvoke('save_kv', { name: storeKey, data: legacy });
                     } catch (err) {
                         logger.debug('moments store legacy migrate failed (可能非 Tauri)', err);
                     }
                 }
             }
             if (kv && typeof kv === 'object' && Array.isArray(kv.moments)) {
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
                 this.state = kv;
                 this._normalizeState();
-                try { localStorage.setItem(this.storeKey, JSON.stringify(this.state)); } catch (err) {
+                if (this.scopeId) markLegacyMigrated();
+                try { localStorage.setItem(storeKey, JSON.stringify(this.state)); } catch (err) {
                     if (isQuotaError(err)) {
                         this._lsDisabled = true;
                         if (!this._lsQuotaWarned) {
@@ -152,7 +182,7 @@ export class MomentsStore {
                 const g = typeof globalThis !== 'undefined' ? globalThis : window;
                 const msg = String(err?.message || '');
                 const canRetry = Boolean(g?.__TAURI__) && msg.includes('invoke not available');
-                if (canRetry && this._hydrateRetryCount < 3) {
+                if (token === this._scopeToken && canRetry && this._hydrateRetryCount < 3) {
                     const attempt = ++this._hydrateRetryCount;
                     logger.warn(`moments store hydrate retry scheduled (${attempt}/3)`);
                     setTimeout(() => { this._hydrateFromDisk(); }, 800 * attempt);
@@ -204,6 +234,7 @@ export class MomentsStore {
         const nextScope = normalizeScopeId(scopeId);
         if (nextScope === this.scopeId) return this.ready;
         await this.flush();
+        this._scopeToken += 1;
         this.scopeId = nextScope;
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this._lsDisabled = false;

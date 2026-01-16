@@ -84,20 +84,20 @@ export class ConfigPanel {
                         width: 96vw; max-width: 760px; max-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 20px); overflow-y: auto;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
                     <h2 style="margin: 0; color: #0f172a;">API 配置</h2>
-                    <span style="color:#64748b; font-size:12px;">(保存後立即生效)</span>
+                    <span style="color:#64748b; font-size:12px;">(保存后立即生效)</span>
                 </div>
 
                 <div style="margin-bottom: 15px;">
                     <label style="display: flex; align-items:center; justify-content:space-between; margin-bottom: 5px; font-weight: bold;">
-                        <span>連線設定檔</span>
+                        <span>连线设置档</span>
                         <div style="display:flex; gap:6px;">
-                            <button id="profile-new" title="新建設定檔" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">＋</button>
+                            <button id="profile-new" title="新建设置档" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">＋</button>
                             <button id="profile-rename" title="重命名" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">✎</button>
-                            <button id="profile-delete" title="刪除" style="font-size:12px; border:none; background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:6px; cursor:pointer;">🗑</button>
+                            <button id="profile-delete" title="删除" style="font-size:12px; border:none; background:#fee2e2; color:#b91c1c; padding:4px 8px; border-radius:6px; cursor:pointer;">🗑</button>
                         </div>
                     </label>
                     <select id="config-profile" style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; font-size: 14px;"></select>
-                    <small style="color: #666;">可保存多個配置並快速切換（清除緩存也不丟）</small>
+                    <small style="color: #666;">可保存多个配置并快速切换（清除缓存也不丢）</small>
                 </div>
 
                 <div style="margin-bottom: 15px;">
@@ -123,13 +123,13 @@ export class ConfigPanel {
                     <label style="display: flex; align-items:center; justify-content:space-between; margin-bottom: 5px; font-weight: bold;">
                         <span>API Key</span>
                         <div style="display:flex; gap:6px; align-items:center;">
-                            <button id="toggle-apikey" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">顯示</button>
+                            <button id="toggle-apikey" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">显示</button>
                             <button id="manage-keys" title="管理已保存的 Key" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">🔑</button>
                         </div>
                     </label>
                     <input type="password" id="config-apikey" placeholder="sk-..."
                            style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; font-size: 14px; box-sizing: border-box;">
-                    <small id="apikey-help" style="color: #666;">保存後 Key 以遮罩顯示（不可複製）；用 🔑 管理多個 Key</small>
+                    <small id="apikey-help" style="color: #666;">保存后 Key 以遮罩显示（不可复制）；用 🔑 管理多个 Key</small>
                 </div>
 
                 <div id="vertexai-fields" style="display: none;">
@@ -148,7 +148,7 @@ export class ConfigPanel {
                     <div style="margin-bottom: 15px;">
                         <label style="display: flex; align-items:center; justify-content:space-between; margin-bottom: 5px; font-weight: bold;">
                             <span>Service Account JSON</span>
-                            <button id="toggle-sa" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">顯示</button>
+                            <button id="toggle-sa" style="font-size:12px; border:none; background:#f5f5f5; padding:4px 8px; border-radius:6px; cursor:pointer;">显示</button>
                         </label>
                         <textarea id="config-serviceaccount" placeholder='{"type": "service_account", "project_id": "your-project", ...}'
                                   style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; font-size: 12px; box-sizing: border-box; font-family: monospace; min-height: 100px; resize: vertical;"></textarea>
@@ -246,7 +246,7 @@ export class ConfigPanel {
         this.element.querySelector('#toggle-sa')?.addEventListener('click', () => this.toggleServiceAccount());
         this.element.querySelector('#refresh-models').onclick = () => this.refreshModels();
 
-        // 連線設定檔切換
+        // 连线设置档切换
         this.element.querySelector('#config-profile').onchange = async (e) => {
             // 防止刷新选项时触发 onchange
             if (this.isRefreshingProfile) {
@@ -694,7 +694,7 @@ export class ConfigPanel {
         } else {
             vertexaiFields.style.display = 'none';
             if (apiKeyHelp) {
-                apiKeyHelp.textContent = '保存後 Key 以遮罩顯示（不可複製）；用 🔑 管理多個 Key';
+                apiKeyHelp.textContent = '保存后 Key 以遮罩显示（不可复制）；用 🔑 管理多个 Key';
             }
         }
     }
@@ -764,7 +764,7 @@ export class ConfigPanel {
             btn.textContent = '隱藏';
         } else {
             input.type = 'password';
-            btn.textContent = '顯示';
+            btn.textContent = '显示';
         }
     }
 
@@ -779,12 +779,12 @@ export class ConfigPanel {
             btn.textContent = '隱藏';
         } else {
             input.style.webkitTextSecurity = 'disc';
-            btn.textContent = '顯示';
+            btn.textContent = '显示';
         }
     }
 
     async createProfile() {
-        const name = prompt('新設定檔名稱', '新配置');
+        const name = prompt('新设置档名称', '新配置');
         if (!name) return;
         await this.configManager.createProfile(name);
         const config = await this.configManager.load();
@@ -796,7 +796,7 @@ export class ConfigPanel {
     async renameProfile() {
         const active = this.configManager.getActiveProfile?.();
         if (!active) return;
-        const name = prompt('重命名設定檔', active.name || '');
+        const name = prompt('重命名设置档', active.name || '');
         if (!name) return;
         await this.configManager.renameProfile(active.id, name);
         this.refreshProfileOptions();
@@ -806,12 +806,12 @@ export class ConfigPanel {
     async deleteProfile() {
         const profiles = this.configManager.getProfiles?.() || [];
         if (profiles.length <= 1) {
-            window.toastr?.warning('至少保留一个設定檔');
+            window.toastr?.warning('至少保留一个设置档');
             return;
         }
         const active = this.configManager.getActiveProfile?.();
         if (!active) return;
-        if (!confirm(`删除設定檔「${active.name}」？此操作不可恢复。`)) return;
+        if (!confirm(`删除设置档「${active.name}」？此操作不可恢复。`)) return;
         await this.configManager.deleteProfile(active.id);
         const config = await this.configManager.load();
         this.refreshProfileOptions();
@@ -849,7 +849,7 @@ export class ConfigPanel {
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
                 <div>
                     <div style="font-weight:800; color:#0f172a;">🔑 Key 管理</div>
-                    <div style="color:#64748b; font-size:12px;">Key 以遮罩顯示，不可複製；可保存多個並切換當前使用</div>
+                    <div style="color:#64748b; font-size:12px;">Key 以遮罩显示，不可复制；可保存多个并切换当前使用</div>
                 </div>
                 <button id="keymgr-close" style="font-size:18px; border:none; background:transparent; cursor:pointer;">×</button>
             </div>
@@ -860,10 +860,10 @@ export class ConfigPanel {
             <div style="margin-top:12px; border-top:1px solid #eee; padding-top:12px;">
                 <div style="font-weight:700; margin-bottom:6px;">新增 Key</div>
                 <div style="display:flex; gap:8px; align-items:center;">
-                    <input id="keymgr-input" type="password" placeholder="貼上 API Key" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:10px;">
+                    <input id="keymgr-input" type="password" placeholder="贴上 API Key" style="flex:1; padding:10px; border:1px solid #ddd; border-radius:10px;">
                     <button id="keymgr-add" style="padding:10px 12px; border:1px solid #ddd; border-radius:10px; background:#f5f5f5; cursor:pointer;">保存</button>
                 </div>
-                <small style="color:#94a3b8;">保存後將自動設為當前 Key</small>
+                <small style="color:#94a3b8;">保存后将自動设为当前 Key</small>
             </div>
         `;
 
@@ -872,7 +872,7 @@ export class ConfigPanel {
             const input = this.keyModal.querySelector('#keymgr-input');
             const key = (input?.value || '').trim();
             if (!key) {
-                window.toastr?.warning('請輸入 Key');
+                window.toastr?.warning('请输入 Key');
                 return;
             }
             const active = this.configManager.getActiveProfile?.();
@@ -883,7 +883,7 @@ export class ConfigPanel {
                 this.refreshKeyManagerList();
                 this.syncMaskedKeyToForm();
                 await this.syncRuntimeToAppBridge();
-                window.toastr?.success('Key 已保存並設為當前');
+                window.toastr?.success('Key 已保存并设为当前');
             } catch (err) {
                 window.toastr?.error(err.message || '保存 Key 失败');
             }
@@ -919,7 +919,7 @@ export class ConfigPanel {
         if (!keys.length) {
             const li = document.createElement('li');
             li.style.cssText = 'padding:10px 12px; color:#94a3b8;';
-            li.textContent = '（尚無 Key）';
+            li.textContent = '（尚无 Key）';
             list.appendChild(li);
             return;
         }
@@ -998,17 +998,17 @@ export class ConfigPanel {
 
         try {
             if (!formData.baseUrl || !formData.model) {
-                this.showStatus('請填寫 Base URL / 模型', 'error');
+                this.showStatus('请填写 Base URL / 模型', 'error');
                 return;
             }
 
-            // Key：允許「已保存 Key（🔑）」但輸入框仍顯示遮罩（formData.apiKey 會是 null）
+            // Key：允許「已保存 Key（🔑）」但输入框仍显示遮罩（formData.apiKey 会是 null）
             const active = this.configManager.getActiveProfile?.();
             const keys = this.configManager.listKeys?.(active?.id) || [];
             const hasTypedKey = typeof formData.apiKey === 'string' && formData.apiKey.trim().length > 0;
             const hasSavedKey = keys.length > 0;
             if (!hasTypedKey && !hasSavedKey && formData.provider !== 'vertexai') {
-                this.showStatus('請先用 🔑 保存至少一個 API Key，或在此欄貼上 Key 後保存', 'error');
+                this.showStatus('请先用 🔑 保存至少一个 API Key，或在此栏贴上 Key 后保存', 'error');
                 return;
             }
             this.setLoading(true);
@@ -1024,9 +1024,9 @@ export class ConfigPanel {
                 window.appBridge.client = canInitClient(runtime) ? new LLMClient(runtime) : null;
                 window.appBridge.config.set(runtime);
 
-                // 若保存後仍拿不到 key（解密/保存失敗），給出明確提示並不自動關閉
+                // 若保存后仍拿不到 key（解密/保存失败），給出明確提示并不自動关闭
                 if (!canInitClient(runtime)) {
-                    this.showStatus('已保存，但當前 Key 不可用（請用 🔑 重新保存 Key）', 'error');
+                    this.showStatus('已保存，但当前 Key 不可用（请用 🔑 重新保存 Key）', 'error');
                     return;
                 }
             }
@@ -1075,7 +1075,7 @@ export class ConfigPanel {
             const existingKey = (runtime?.apiKey || '').trim();
             const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
             if (!keyToUse) {
-                this.showStatus('請先用 🔑 保存至少一個 API Key，或在此欄貼上 Key', 'error');
+                this.showStatus('请先用 🔑 保存至少一个 API Key，或在此栏贴上 Key', 'error');
                 return;
             }
             const tempClient = new LLMClient({ ...formData, apiKey: keyToUse });
@@ -1148,14 +1148,14 @@ export class ConfigPanel {
         try {
             // 验证必填字段
             if (!formData.baseUrl) {
-                this.showStatus('請先填寫 Base URL', 'error');
+                this.showStatus('请先填写 Base URL', 'error');
                 return;
             }
             const runtime = await this.configManager.load();
             const existingKey = (runtime?.apiKey || '').trim();
             const keyToUse = (typeof formData.apiKey === 'string') ? formData.apiKey.trim() : existingKey;
             if (!keyToUse && formData.provider !== 'vertexai') {
-                this.showStatus('請先用 🔑 保存至少一個 API Key，或在此欄貼上 Key', 'error');
+                this.showStatus('请先用 🔑 保存至少一个 API Key，或在此栏贴上 Key', 'error');
                 return;
             }
             if (formData.provider === 'vertexai') {

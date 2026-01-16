@@ -21,6 +21,9 @@ export class DebugPanel {
         this.smokeRunId = 0;
         this.memoryModeBtn = null;
         this.memoryInspectBtn = null;
+        this.filterInput = null;
+        this.filterClearBtn = null;
+        this.filterText = '';
         this.memoryInspectorOverlay = null;
         this.memoryInspectorPanel = null;
         this.memoryInspectorMeta = null;
@@ -114,6 +117,58 @@ export class DebugPanel {
         this.memoryModeBtn = memoryModeBtn;
         this.controls.appendChild(memoryModeBtn);
 
+        const filterWrap = document.createElement('div');
+        filterWrap.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+        `;
+        const filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.placeholder = '筛选日志...';
+        filterInput.style.cssText = `
+            width: 120px;
+            padding: 2px 6px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            border-radius: 4px;
+            font-size: 10px;
+            font-family: monospace;
+            outline: none;
+        `;
+        const filterClearBtn = document.createElement('button');
+        filterClearBtn.type = 'button';
+        filterClearBtn.textContent = '×';
+        filterClearBtn.style.cssText = `
+            padding: 2px 6px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            border: 1px solid #00ff00;
+            border-radius: 4px;
+            font-size: 10px;
+            font-family: monospace;
+            cursor: pointer;
+            opacity: 0.8;
+        `;
+        filterInput.addEventListener('input', (e) => {
+            const val = String(e?.target?.value || '');
+            this.filterText = val;
+            this.render();
+        });
+        filterClearBtn.onclick = () => {
+            this.filterText = '';
+            filterInput.value = '';
+            this.render();
+            filterInput.focus();
+        };
+        filterWrap.appendChild(filterInput);
+        filterWrap.appendChild(filterClearBtn);
+        this.controls.appendChild(filterWrap);
+        this.filterInput = filterInput;
+        this.filterClearBtn = filterClearBtn;
+
         this.logContainer = document.createElement('div');
         this.logContainer.style.cssText = `
             flex: 1;
@@ -205,7 +260,7 @@ export class DebugPanel {
     }
 
     getMemoryMode() {
-        const mode = String(appSettings.get().memoryStorageMode || 'summary').toLowerCase();
+        const mode = String(appSettings.get().memoryStorageMode || 'table').toLowerCase();
         return mode === 'table' ? 'table' : 'summary';
     }
 
@@ -254,7 +309,12 @@ export class DebugPanel {
     render() {
         if (!this.logContainer) return;
 
-        this.logContainer.innerHTML = this.logs.map(log =>
+        const term = String(this.filterText || '').trim().toLowerCase();
+        const list = term
+            ? this.logs.filter(log => String(log.message || '').toLowerCase().includes(term))
+            : this.logs;
+
+        this.logContainer.innerHTML = list.map(log =>
             `<div style="color: ${log.color}; margin-bottom: 2px;">${log.prefix} [${log.timestamp}] ${log.message}</div>`
         ).join('');
 

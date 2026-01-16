@@ -1,5 +1,5 @@
 /**
- * 簡易會話/消息存儲（前端），可擴展到 Tauri FS
+ * 简易会话/消息存储（前端），可扩展到 Tauri FS
  */
 
 import { logger } from '../utils/logger.js';
@@ -289,13 +289,31 @@ const sanitizeSessionForPersist = (session, options = {}) => {
 };
 
 const sanitizeStateForPersist = (state, options = {}) => {
-  const src = state && typeof state === 'object' ? state : { sessions: {}, currentId: 'default' };
+  const src = state && typeof state === 'object' ? state : { sessions: {}, currentId: '' };
   const sessions = src.sessions && typeof src.sessions === 'object' ? src.sessions : {};
   const nextSessions = {};
   for (const [sid, session] of Object.entries(sessions)) {
     nextSessions[sid] = sanitizeSessionForPersist(session, options);
   }
   return { ...src, sessions: nextSessions };
+};
+
+const resolveCurrentId = (state) => {
+  const sessions = state?.sessions && typeof state.sessions === 'object' ? state.sessions : {};
+  const raw = String(state?.currentId || '').trim();
+  if (raw && Object.prototype.hasOwnProperty.call(sessions, raw)) return raw;
+  const ids = Object.keys(sessions);
+  return ids.length ? ids[0] : '';
+};
+
+const isScopedDataMatch = (data, scopeId) => {
+  try {
+    const stored = String(data?.scopeId ?? '').trim();
+    if (!stored) return true; // legacy data without scope marker
+    return stored === String(scopeId || '').trim();
+  } catch {
+    return true;
+  }
 };
 
 const isQuotaError = err => {
@@ -789,13 +807,30 @@ const ensureId = msg => {
 };
 
 const BASE_STORE_KEY = 'chat_store_v1';
+const LEGACY_MIGRATION_KEY = `${BASE_STORE_KEY}__scoped_migrated`;
+
+const isLegacyMigrated = () => {
+  try {
+    return localStorage.getItem(LEGACY_MIGRATION_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markLegacyMigrated = () => {
+  try {
+    localStorage.setItem(LEGACY_MIGRATION_KEY, '1');
+  } catch {}
+};
 
 export class ChatStore {
   constructor({ scopeId = '' } = {}) {
     this.scopeId = normalizeScopeId(scopeId);
     this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+    this._scopeToken = 0;
     this.state = sanitizeStateForPersist(this._load());
-    this.currentId = this.state.currentId || 'default';
+    this.currentId = resolveCurrentId(this.state);
+    this.state.currentId = this.currentId;
     this.ready = this._hydrateFromDisk();
     this._skipMessagePersist = false;
     this._useV2 = false;
@@ -807,10 +842,16 @@ export class ChatStore {
     this._hydrateRetryCount = 0;
   }
 
+  _isScopeStale(token, scopeId) {
+    return token !== this._scopeToken || scopeId !== this.scopeId;
+  }
+
   _ensureSession(id) {
-    if (!this.state.sessions[id]) {
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    if (!this.state.sessions[sid]) {
       const defaults = getGlobalChatColorDefaults();
-      this.state.sessions[id] = {
+      this.state.sessions[sid] = {
         messages: [],
         draft: '',
         pending: [],
@@ -826,9 +867,10 @@ export class ChatStore {
         lastReadAt: 0,
         unreadCount: 0,
       };
-      return;
+      logger.info(`[Persona_test] chatStore.sessionCreated sid=${sid} scope=${this.scopeId || 'default'} key=${this.storeKey}`);
+      return this.state.sessions[sid];
     }
-    const s = this.state.sessions[id];
+    const s = this.state.sessions[sid];
     if (!s.messages) s.messages = [];
     if (typeof s.draft !== 'string') s.draft = '';
     if (!Array.isArray(s.pending)) s.pending = [];
@@ -853,37 +895,56 @@ export class ChatStore {
         })
         .filter(Boolean);
     } catch {}
+    return s;
   }
 
   _load() {
     const data = readLocalState(this.storeKey);
-    if (data) return data;
-    if (this.scopeId) {
-      const legacy = readLocalState(BASE_STORE_KEY);
-      if (legacy) return legacy;
+    if (data && isScopedDataMatch(data, this.scopeId)) {
+      if (this.scopeId) markLegacyMigrated();
+      return data;
     }
-    return { sessions: {}, currentId: 'default' };
+    if (this.scopeId && !isLegacyMigrated()) {
+      const legacy = readLocalState(BASE_STORE_KEY);
+      if (legacy) {
+        markLegacyMigrated();
+        return legacy;
+      }
+    }
+    return { sessions: {}, currentId: '' };
   }
 
   async _hydrateFromDisk() {
+    const token = this._scopeToken;
+    const storeKey = this.storeKey;
+    const scopeId = this.scopeId;
     try {
-      let kv = await safeInvoke('load_kv', { name: this.storeKey });
-      if (!kv && this.scopeId) {
+      let kv = await safeInvoke('load_kv', { name: storeKey });
+      if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+      if (kv && !isScopedDataMatch(kv, scopeId)) {
+        kv = null;
+      }
+      if (!kv && this.scopeId && !isLegacyMigrated()) {
         const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+        if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
         if (legacy && legacy.sessions) {
           kv = legacy;
+          markLegacyMigrated();
           try {
-            await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+            await safeInvoke('save_kv', { name: storeKey, data: legacy });
           } catch (err) {
             logger.debug('chat store legacy migrate failed (可能非 Tauri)', err);
           }
         }
       }
       if (kv && kv.sessions) {
+        if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
         this.state = sanitizeStateForPersist(kv);
-        this.currentId = kv.currentId || 'default';
+        this.currentId = resolveCurrentId(this.state);
+        this.state.currentId = this.currentId;
+        if (this.scopeId) markLegacyMigrated();
         try {
-          localStorage.setItem(this.storeKey, JSON.stringify(this.state));
+          localStorage.setItem(storeKey, JSON.stringify({ ...this.state, scopeId }));
         } catch (err) {
           if (isQuotaError(err)) {
             this._lsDisabled = true;
@@ -902,6 +963,11 @@ export class ChatStore {
           }
         }
         logger.info('chat store hydrated from disk');
+        logger.info(
+          `[Persona_test] chatStore.hydrated scope=${scopeId || 'default'} key=${storeKey} sessions=${
+            Object.keys(this.state.sessions || {}).length
+          } current=${this.currentId || ''}`,
+        );
         try {
           window.dispatchEvent(new CustomEvent('store-hydrated', { detail: { store: 'chat' } }));
         } catch {}
@@ -913,7 +979,7 @@ export class ChatStore {
         const g = typeof globalThis !== 'undefined' ? globalThis : window;
         const msg = String(err?.message || '');
         const canRetry = Boolean(g?.__TAURI__) && msg.includes('invoke not available');
-        if (canRetry && this._hydrateRetryCount < 3) {
+        if (token === this._scopeToken && canRetry && this._hydrateRetryCount < 3) {
           const attempt = ++this._hydrateRetryCount;
           logger.warn(`chat store hydrate retry scheduled (${attempt}/3)`);
           setTimeout(() => {
@@ -943,11 +1009,15 @@ export class ChatStore {
   }
 
   async _hydrateV2FromDisk() {
+    const token = this._scopeToken;
+    const scopeId = this.scopeId;
     try {
       await this.ready;
     } catch {}
+    if (token !== this._scopeToken || scopeId !== this.scopeId) return false;
     const ok = await this._v2.init();
     if (!ok) return false;
+    if (token !== this._scopeToken || scopeId !== this.scopeId) return false;
     this._useV2 = true;
     this._skipMessagePersist = true;
     try {
@@ -957,15 +1027,17 @@ export class ChatStore {
       }
     } catch {}
     try {
-      await this._maybeMigrateToV2();
+      await this._maybeMigrateToV2(token, scopeId);
     } catch (err) {
       logger.warn('chat store v2 migrate failed', err);
     }
     try {
+      if (this._isScopeStale(token, scopeId)) return false;
       const current = String(this.getCurrent() || '').trim();
       if (current) {
-        await this._loadRecentMessages(current);
+        await this._loadRecentMessages(current, '', { token, scopeId });
       }
+      if (this._isScopeStale(token, scopeId)) return false;
       for (const sid of Object.keys(this.state.sessions || {})) {
         if (sid !== current) {
           this.state.sessions[sid].messages = [];
@@ -980,12 +1052,14 @@ export class ChatStore {
     return true;
   }
 
-  async _maybeMigrateToV2() {
+  async _maybeMigrateToV2(token = this._scopeToken, scopeId = this.scopeId) {
     if (!this._useV2) return false;
+    if (this._isScopeStale(token, scopeId)) return false;
     const existing = this._v2.index?.sessions || {};
     const sessions = this.state.sessions || {};
     let migrated = false;
     for (const [sid, session] of Object.entries(sessions)) {
+      if (this._isScopeStale(token, scopeId)) return false;
       if (existing && Object.prototype.hasOwnProperty.call(existing, sid)) continue;
       const hasMessages = (() => {
         if (Array.isArray(session?.messages) && session.messages.length) return true;
@@ -993,18 +1067,20 @@ export class ChatStore {
         return arcs.some(a => Array.isArray(a?.messages) && a.messages.length);
       })();
       if (!hasMessages) continue;
-      await this._migrateSessionToV2(sid, session);
+      await this._migrateSessionToV2(sid, session, { token, scopeId });
       migrated = true;
     }
+    if (this._isScopeStale(token, scopeId)) return false;
     if (migrated) {
       await this._v2.writeIndex();
     }
     return migrated;
   }
 
-  async _migrateSessionToV2(sessionId, session) {
+  async _migrateSessionToV2(sessionId, session, { token = this._scopeToken, scopeId = this.scopeId } = {}) {
     const sid = String(sessionId || '').trim();
     if (!sid || !session) return;
+    if (this._isScopeStale(token, scopeId)) return;
     this._v2.ensureSession(sid);
     const currentArchiveId = String(session.currentArchiveId || '').trim();
     const archives = Array.isArray(session.archives) ? session.archives : [];
@@ -1025,6 +1101,7 @@ export class ChatStore {
     if (!currentArchiveId || !hasCurrentArchive) {
       const raw = Array.isArray(session.messages) ? session.messages : [];
       const messages = raw.map(sanitizeMessageForPersist);
+      if (this._isScopeStale(token, scopeId)) return;
       await this._v2.replaceThreadMessages(sid, '', messages);
     }
     for (const arc of archives) {
@@ -1035,6 +1112,7 @@ export class ChatStore {
       const source = useCurrent ? session.messages : arc.messages;
       const raw = Array.isArray(source) ? source : [];
       const messages = raw.map(sanitizeMessageForPersist);
+      if (this._isScopeStale(token, scopeId)) return;
       await this._v2.replaceThreadMessages(sid, aid, messages);
       arc.messageCount = messages.length;
       if (useCurrent && currentArchiveId) {
@@ -1055,10 +1133,15 @@ export class ChatStore {
     }
   }
 
-  async _loadRecentMessages(id = this.currentId, archiveId = '', { partCount = V2_RECENT_PARTS } = {}) {
+  async _loadRecentMessages(
+    id = this.currentId,
+    archiveId = '',
+    { partCount = V2_RECENT_PARTS, token = this._scopeToken, scopeId = this.scopeId } = {},
+  ) {
     if (!this._useV2) return this.getMessages(id);
     const sid = String(id || '').trim();
     if (!sid) return [];
+    if (this._isScopeStale(token, scopeId)) return [];
     this._ensureSession(sid);
     const aid = String(archiveId || '').trim();
     const entry = this._v2.ensureSession(sid);
@@ -1074,6 +1157,7 @@ export class ChatStore {
     const merged = [];
     for (const partId of ids) {
       const existing = await this._v2.readPart(entry, thread, partId);
+      if (this._isScopeStale(token, scopeId)) return [];
       const list = Array.isArray(existing) ? existing : [];
       for (const msg of list) {
         const mid = String(msg?.id || '');
@@ -1088,14 +1172,17 @@ export class ChatStore {
   }
 
   async ensureRecentMessagesLoaded(id = this.currentId, archiveId = '') {
+    const token = this._scopeToken;
+    const scopeId = this.scopeId;
     const sid = String(id || '').trim();
     if (!sid) return [];
+    if (this._isScopeStale(token, scopeId)) return [];
     this._ensureSession(sid);
     const aid = String(archiveId || this.state.sessions[sid]?.currentArchiveId || '').trim();
     const threadKey = this._getThreadKey(sid, aid);
     if (!this._useV2) return this.getMessages(sid);
     if (this.state.sessions[sid]._loadedThreadKey === threadKey) return this.getMessages(sid);
-    return this._loadRecentMessages(sid, aid);
+    return this._loadRecentMessages(sid, aid, { token, scopeId });
   }
 
   hasOlderMessages(id = this.currentId, archiveId = '') {
@@ -1118,6 +1205,9 @@ export class ChatStore {
     if (!this._useV2) return [];
     const sid = String(id || '').trim();
     if (!sid) return [];
+    const token = this._scopeToken;
+    const scopeId = this.scopeId;
+    if (this._isScopeStale(token, scopeId)) return [];
     this._ensureSession(sid);
     const aid = String(archiveId || this.state.sessions[sid]?.currentArchiveId || '').trim();
     const entry = this._v2.ensureSession(sid);
@@ -1135,6 +1225,7 @@ export class ChatStore {
     const older = [];
     for (const partId of pick) {
       const existing = await this._v2.readPart(entry, thread, partId);
+      if (this._isScopeStale(token, scopeId)) return [];
       const list = Array.isArray(existing) ? existing : [];
       for (const msg of list) {
         const mid = String(msg?.id || '');
@@ -1150,13 +1241,19 @@ export class ChatStore {
   }
 
   _persist() {
-    const persistable = () => sanitizeStateForPersist(this.state, { skipMessages: this._skipMessagePersist });
+    const token = this._scopeToken;
+    const storeKey = this.storeKey;
+    const persistable = () => ({
+      ...sanitizeStateForPersist(this.state, { skipMessages: this._skipMessagePersist }),
+      scopeId: this.scopeId,
+    });
     // 1. Fast path: Schedule localStorage shortly (50ms debounce) to skip current frame
     if (this._lsTimer) clearTimeout(this._lsTimer);
     this._lsTimer = setTimeout(() => {
+      if (token !== this._scopeToken || storeKey !== this.storeKey) return;
       if (this._lsDisabled) return;
       try {
-        localStorage.setItem(this.storeKey, JSON.stringify(persistable()));
+        localStorage.setItem(storeKey, JSON.stringify(persistable()));
       } catch (err) {
         if (isQuotaError(err)) {
           this._lsDisabled = true;
@@ -1168,7 +1265,7 @@ export class ChatStore {
             );
           }
           try {
-            localStorage.removeItem(this.storeKey);
+            localStorage.removeItem(storeKey);
           } catch {}
         } else {
           logger.warn('chat store persist -> localStorage failed', err);
@@ -1179,14 +1276,18 @@ export class ChatStore {
     // 2. Slow path: Schedule disk save (2000ms debounce) to avoid frequent fsync on Android
     if (this._diskTimer) clearTimeout(this._diskTimer);
     this._diskTimer = setTimeout(() => {
-      safeInvoke('save_kv', { name: this.storeKey, data: persistable() }).catch(err => {
+      if (token !== this._scopeToken || storeKey !== this.storeKey) return;
+      safeInvoke('save_kv', { name: storeKey, data: persistable() }).catch(err => {
         logger.debug('chat store save_kv failed (可能非 Tauri)', err);
       });
     }, 2000);
   }
 
   async flush() {
-    const data = sanitizeStateForPersist(this.state, { skipMessages: this._skipMessagePersist });
+    const data = {
+      ...sanitizeStateForPersist(this.state, { skipMessages: this._skipMessagePersist }),
+      scopeId: this.scopeId,
+    };
     try {
       if (!this._lsDisabled) {
         localStorage.setItem(this.storeKey, JSON.stringify(data));
@@ -1225,6 +1326,12 @@ export class ChatStore {
   async setScope(scopeId = '') {
     const nextScope = normalizeScopeId(scopeId);
     if (nextScope === this.scopeId) return this.ready;
+    const prevScope = this.scopeId;
+    const prevKey = this.storeKey;
+    logger.info(
+      `[Persona_test] chatStore.setScope begin scope=${prevScope || 'default'} key=${prevKey} -> ${nextScope || 'default'}`,
+    );
+    this._scopeToken += 1;
     try {
       await this.flush();
     } catch {}
@@ -1243,9 +1350,23 @@ export class ChatStore {
     this._lsQuotaWarned = false;
     this._hydrateRetryCount = 0;
     this.state = sanitizeStateForPersist(this._load());
-    this.currentId = this.state.currentId || 'default';
+    this.currentId = resolveCurrentId(this.state);
+    this.state.currentId = this.currentId;
     this.ready = this._hydrateFromDisk();
-    return this.ready;
+    const ready = this.ready;
+    ready
+      .then(() => {
+        logger.info(
+          `[Persona_test] chatStore.setScope ready scope=${this.scopeId || 'default'} key=${
+            this.storeKey
+          } sessions=${Object.keys(this.state.sessions || {}).length} current=${this.currentId || ''}`,
+        );
+      })
+      .catch(err => {
+        const msg = String(err?.message || err || '');
+        logger.warn(`[Persona_test] chatStore.setScope hydrate failed scope=${nextScope || 'default'} err=${msg}`);
+      });
+    return ready;
   }
 
   _ensureRawOriginalRef(msg, sessionId) {
@@ -1358,8 +1479,9 @@ export class ChatStore {
   }
 
   setCurrent(id) {
-    this.currentId = id;
-    this.state.currentId = id;
+    const sid = String(id || '').trim();
+    this.currentId = sid;
+    this.state.currentId = sid;
     this._persist();
   }
 
@@ -1368,14 +1490,17 @@ export class ChatStore {
   }
 
   getMessages(id = this.currentId) {
-    return this.state.sessions[id]?.messages || [];
+    const sid = String(id || '').trim();
+    if (!sid) return [];
+    return this.state.sessions[sid]?.messages || [];
   }
 
   getLastMessage(id = this.currentId) {
-    const msgs = this.getMessages(id);
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    const msgs = this.getMessages(sid);
     if (msgs.length) return msgs[msgs.length - 1];
     if (this._useV2) {
-      const sid = String(id || '').trim();
       const curAid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
       const thread = this._v2.getThread(sid, curAid);
       const snap = thread?.lastMessage || this._v2.getLastMessageSnapshot(sid);
@@ -1385,20 +1510,25 @@ export class ChatStore {
   }
 
   appendMessage(message, id = this.currentId) {
-    this._ensureSession(id);
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    this._ensureSession(sid);
     const msg = ensureId({ ...message });
-    this._persistRawOriginal(msg, id);
-    this.state.sessions[id].messages.push(msg);
+    this._persistRawOriginal(msg, sid);
+    this.state.sessions[sid].messages.push(msg);
     if (msg?.role === 'assistant') {
-      this.state.sessions[id].unreadCount = Number(this.state.sessions[id].unreadCount || 0) + 1;
+      this.state.sessions[sid].unreadCount = Number(this.state.sessions[sid].unreadCount || 0) + 1;
     }
     if (this._useV2) {
-      const sid = String(id || '').trim();
       const aid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
       const threadKey = this._getThreadKey(sid, aid);
       const sanitized = sanitizeMessageForPersist(msg);
-      this._v2.enqueue(async () => {
-        const res = await this._v2.appendMessage(sid, aid, sanitized);
+      const v2 = this._v2;
+      const token = this._scopeToken;
+      const scopeId = this.scopeId;
+      v2.enqueue(async () => {
+        const res = await v2.appendMessage(sid, aid, sanitized);
+        if (this._isScopeStale(token, scopeId)) return;
         if (this.state.sessions[sid]?._loadedThreadKey === threadKey && res?.partId) {
           const threadState = this._getThreadState(threadKey);
           if (res.createdNewPart && !threadState.loadedParts.includes(res.partId)) {
@@ -1413,9 +1543,9 @@ export class ChatStore {
   }
 
   markRead(id = this.currentId, messageId = '') {
-    this._ensureSession(id);
     const sid = String(id || '').trim();
     if (!sid) return;
+    this._ensureSession(sid);
     const nextId = String(messageId || '').trim();
     if (nextId) {
       this.state.sessions[sid].lastReadMessageId = nextId;
@@ -1443,20 +1573,24 @@ export class ChatStore {
   }
 
   getLastReadMessageId(id = this.currentId) {
-    this._ensureSession(id);
-    return String(this.state.sessions[id]?.lastReadMessageId || '');
+    const sid = String(id || '').trim();
+    if (!sid) return '';
+    this._ensureSession(sid);
+    return String(this.state.sessions[sid]?.lastReadMessageId || '');
   }
 
   getFirstUnreadMessageId(id = this.currentId) {
-    this._ensureSession(id);
-    const msgs = this.getMessages(id) || [];
-    const lastRead = this.getLastReadMessageId(id);
+    const sid = String(id || '').trim();
+    if (!sid) return '';
+    this._ensureSession(sid);
+    const msgs = this.getMessages(sid) || [];
+    const lastRead = this.getLastReadMessageId(sid);
     const startIdx = lastRead ? msgs.findIndex(m => String(m?.id || '') === lastRead) : -1;
     if (this._useV2) {
-      const unread = Number(this.state.sessions[id]?.unreadCount || 0);
+      const unread = Number(this.state.sessions[sid]?.unreadCount || 0);
       if (startIdx === -1 && unread <= 0) return '';
       if (startIdx === -1) {
-        const lastReadAt = Number(this.state.sessions[id]?.lastReadAt || 0);
+        const lastReadAt = Number(this.state.sessions[sid]?.lastReadAt || 0);
         if (lastReadAt > 0) {
           for (let i = 0; i < msgs.length; i++) {
             const m = msgs[i];
@@ -1487,12 +1621,14 @@ export class ChatStore {
   }
 
   getUnreadCount(id = this.currentId) {
-    this._ensureSession(id);
-    if (this._useV2 && Number.isFinite(this.state.sessions[id]?.unreadCount)) {
-      return Number(this.state.sessions[id].unreadCount || 0);
+    const sid = String(id || '').trim();
+    if (!sid) return 0;
+    this._ensureSession(sid);
+    if (this._useV2 && Number.isFinite(this.state.sessions[sid]?.unreadCount)) {
+      return Number(this.state.sessions[sid].unreadCount || 0);
     }
-    const msgs = this.getMessages(id) || [];
-    const lastRead = this.getLastReadMessageId(id);
+    const msgs = this.getMessages(sid) || [];
+    const lastRead = this.getLastReadMessageId(sid);
     const startIdx = lastRead ? msgs.findIndex(m => String(m?.id || '') === lastRead) : -1;
     const from = startIdx >= 0 ? startIdx + 1 : 0;
     let n = 0;
@@ -1519,33 +1655,45 @@ export class ChatStore {
   }
 
   setDraft(text, id = this.currentId) {
-    this._ensureSession(id);
-    this.state.sessions[id].draft = text;
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this._ensureSession(sid);
+    this.state.sessions[sid].draft = text;
     this._persist();
+    return true;
   }
 
   getVariable(key, id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return undefined;
+    const session = this.state.sessions[sid];
     return session?.variables?.[key];
   }
 
   setVariable(key, value, id = this.currentId) {
-    this._ensureSession(id);
-    this.state.sessions[id].variables[key] = value;
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this._ensureSession(sid);
+    this.state.sessions[sid].variables[key] = value;
     this._persist();
+    return true;
   }
 
   listVariables(id = this.currentId) {
-    this._ensureSession(id);
-    const vars = this.state.sessions[id].variables || {};
+    const sid = String(id || '').trim();
+    if (!sid) return {};
+    this._ensureSession(sid);
+    const vars = this.state.sessions[sid].variables || {};
     return { ...vars };
   }
 
   deleteVariable(key, id = this.currentId) {
     const k = String(key || '').trim();
     if (!k) return false;
-    this._ensureSession(id);
-    const vars = this.state.sessions[id].variables || {};
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this._ensureSession(sid);
+    const vars = this.state.sessions[sid].variables || {};
     if (!Object.prototype.hasOwnProperty.call(vars, k)) return false;
     delete vars[k];
     this._persist();
@@ -1553,30 +1701,36 @@ export class ChatStore {
   }
 
   clearVariables(id = this.currentId) {
-    this._ensureSession(id);
-    this.state.sessions[id].variables = {};
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this._ensureSession(sid);
+    this.state.sessions[sid].variables = {};
     this._persist();
     return true;
   }
 
   getDraft(id = this.currentId) {
-    return this.state.sessions[id]?.draft || '';
+    const sid = String(id || '').trim();
+    if (!sid) return '';
+    return this.state.sessions[sid]?.draft || '';
   }
 
   clear(id = this.currentId) {
-    if (this.state.sessions[id]) {
-      this.state.sessions[id].messages = [];
-      this.state.sessions[id].draft = '';
-      this.state.sessions[id].lastRawResponse = '';
-      this.state.sessions[id].lastRawAt = 0;
-      this.state.sessions[id].unreadCount = 0;
+    const sid = String(id || '').trim();
+    if (!sid) return;
+    if (this.state.sessions[sid]) {
+      this.state.sessions[sid].messages = [];
+      this.state.sessions[sid].draft = '';
+      this.state.sessions[sid].lastRawResponse = '';
+      this.state.sessions[sid].lastRawAt = 0;
+      this.state.sessions[sid].unreadCount = 0;
       if (this._useV2) {
-        const sid = String(id || '').trim();
         const aid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
         const threadKey = this._getThreadKey(sid, aid);
         this._clearThreadState(threadKey);
-        this._v2.enqueue(async () => {
-          await this._v2.resetThread(sid, aid);
+        const v2 = this._v2;
+        v2.enqueue(async () => {
+          await v2.resetThread(sid, aid);
         });
       }
       this._persist();
@@ -1585,60 +1739,76 @@ export class ChatStore {
 
   delete(id) {
     const sid = String(id || '').trim();
-    delete this.state.sessions[id];
-    if (this.currentId === id) {
-      this.currentId = 'default';
-      this.state.currentId = 'default';
+    if (!sid) return;
+    const wasCurrent = String(this.currentId || '').trim() === sid;
+    delete this.state.sessions[sid];
+    if (wasCurrent) {
+      const remaining = this.listSessions();
+      const nextId = remaining.length ? remaining[0] : '';
+      this.currentId = nextId;
+      this.state.currentId = nextId;
     }
     if (this._useV2 && sid) {
       for (const key of this._v2ThreadState.keys()) {
         if (key.startsWith(`${sid}::`)) this._v2ThreadState.delete(key);
       }
-      this._v2.enqueue(async () => {
-        await this._v2.deleteSession(sid);
+      const v2 = this._v2;
+      v2.enqueue(async () => {
+        await v2.deleteSession(sid);
       });
     }
     this._persist();
   }
 
   rename(oldId, newId) {
-    if (!this.state.sessions[oldId]) return;
-    if (this.state.sessions[newId]) return; // prevent overwrite
-    this.state.sessions[newId] = this.state.sessions[oldId];
-    delete this.state.sessions[oldId];
-    if (this.currentId === oldId) {
-      this.currentId = newId;
-      this.state.currentId = newId;
+    const from = String(oldId || '').trim();
+    const to = String(newId || '').trim();
+    if (!from || !to) return;
+    if (!this.state.sessions[from]) return;
+    if (this.state.sessions[to]) return; // prevent overwrite
+    this.state.sessions[to] = this.state.sessions[from];
+    delete this.state.sessions[from];
+    if (this.currentId === from) {
+      this.currentId = to;
+      this.state.currentId = to;
     }
     if (this._useV2) {
-      this._v2.enqueue(async () => {
-        await this._v2.renameSession(oldId, newId);
+      const v2 = this._v2;
+      v2.enqueue(async () => {
+        await v2.renameSession(from, to);
       });
     }
     this._persist();
   }
 
   getSessionSettings(id = this.currentId) {
-    return this.state.sessions[id]?.settings || null;
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    return this.state.sessions[sid]?.settings || null;
   }
 
   setSessionSettings(id = this.currentId, settings) {
-    this._ensureSession(id);
-    this.state.sessions[id].settings = settings;
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this._ensureSession(sid);
+    this.state.sessions[sid].settings = settings;
     this._persist();
+    return true;
   }
 
   clearMessages(id = this.currentId) {
-    if (this.state.sessions[id]) {
-      this.state.sessions[id].messages = [];
-      this.state.sessions[id].unreadCount = 0;
+    const sid = String(id || '').trim();
+    if (!sid) return;
+    if (this.state.sessions[sid]) {
+      this.state.sessions[sid].messages = [];
+      this.state.sessions[sid].unreadCount = 0;
       if (this._useV2) {
-        const sid = String(id || '').trim();
         const aid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
         const threadKey = this._getThreadKey(sid, aid);
         this._clearThreadState(threadKey);
-        this._v2.enqueue(async () => {
-          await this._v2.resetThread(sid, aid);
+        const v2 = this._v2;
+        v2.enqueue(async () => {
+          await v2.resetThread(sid, aid);
         });
       }
       this._persist();
@@ -1646,7 +1816,9 @@ export class ChatStore {
   }
 
   deleteMessage(msgId, id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const session = this.state.sessions[sid];
     if (!session || !session.messages) return false;
     const targetId = String(msgId || '').trim();
     if (!targetId) return false;
@@ -1662,18 +1834,18 @@ export class ChatStore {
     const changed = session.messages.length !== before;
     if (!changed) return false;
 
-    this._deleteRawOriginal(target, id);
+    this._deleteRawOriginal(target, sid);
     if (target?.role === 'assistant' && Number(session.unreadCount || 0) > 0) {
       session.unreadCount = Math.max(0, Number(session.unreadCount || 0) - 1);
     }
     if (this._useV2) {
-      const sid = String(id || '').trim();
       const aid = String(session.currentArchiveId || '').trim();
       const threadKey = this._getThreadKey(sid, aid);
       const threadState = this._getThreadState(threadKey);
       const partId = threadState.messagePartMap.get(targetId);
-      this._v2.enqueue(async () => {
-        await this._v2.deleteMessage(sid, aid, targetId, partId || '');
+      const v2 = this._v2;
+      v2.enqueue(async () => {
+        await v2.deleteMessage(sid, aid, targetId, partId || '');
       });
       threadState.messagePartMap.delete(targetId);
     }
@@ -1703,24 +1875,26 @@ export class ChatStore {
   }
 
   updateMessage(msgId, updater, id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    const session = this.state.sessions[sid];
     if (!session || !session.messages) return null;
     const idx = session.messages.findIndex(m => m.id === msgId);
     if (idx === -1) return null;
     const updated = ensureId({ ...session.messages[idx], ...updater });
     session.messages[idx] = updated;
     if (typeof updater?.rawOriginal === 'string') {
-      this._persistRawOriginal(updated, id);
+      this._persistRawOriginal(updated, sid);
     }
     if (this._useV2) {
-      const sid = String(id || '').trim();
       const aid = String(session.currentArchiveId || '').trim();
       const threadKey = this._getThreadKey(sid, aid);
       const threadState = this._getThreadState(threadKey);
       const partId = threadState.messagePartMap.get(String(msgId || ''));
       const sanitized = sanitizeMessageForPersist(updated);
-      this._v2.enqueue(async () => {
-        await this._v2.updateMessage(sid, aid, msgId, sanitized, partId || '');
+      const v2 = this._v2;
+      v2.enqueue(async () => {
+        await v2.updateMessage(sid, aid, msgId, sanitized, partId || '');
       });
     }
     this._persist();
@@ -1728,29 +1902,39 @@ export class ChatStore {
   }
 
   findMessage(msgId, id = this.currentId) {
-    return this.state.sessions[id]?.messages?.find(m => m.id === msgId) || null;
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    return this.state.sessions[sid]?.messages?.find(m => m.id === msgId) || null;
   }
 
   switchSession(id) {
-    this.setCurrent(id);
-    this._ensureSession(id);
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this.setCurrent(sid);
+    this._ensureSession(sid);
     this._persist();
+    return true;
   }
 
   setLastRawResponse(text, id = this.currentId) {
-    this._ensureSession(id);
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    this._ensureSession(sid);
     const raw = String(text ?? '');
     // keep bounded to reduce quota risks
     const maxLen = 220_000;
     const trimmed = raw.length > maxLen ? raw.slice(-maxLen) : raw;
-    this.state.sessions[id].lastRawResponse = trimmed;
-    this.state.sessions[id].lastRawAt = Date.now();
+    this.state.sessions[sid].lastRawResponse = trimmed;
+    this.state.sessions[sid].lastRawAt = Date.now();
     this._persist();
+    return true;
   }
 
   getPersonaLock(id = this.currentId) {
     try {
-      const s = this.state.sessions[id];
+      const sid = String(id || '').trim();
+      if (!sid) return '';
+      const s = this.state.sessions[sid];
       const pid = s?.settings?.personaLockId;
       return pid ? String(pid) : '';
     } catch {
@@ -1779,11 +1963,15 @@ export class ChatStore {
   }
 
   getLastRawResponse(id = this.currentId) {
-    return String(this.state.sessions[id]?.lastRawResponse || '');
+    const sid = String(id || '').trim();
+    if (!sid) return '';
+    return String(this.state.sessions[sid]?.lastRawResponse || '');
   }
 
   getLastRawAt(id = this.currentId) {
-    return Number(this.state.sessions[id]?.lastRawAt || 0) || 0;
+    const sid = String(id || '').trim();
+    if (!sid) return 0;
+    return Number(this.state.sessions[sid]?.lastRawAt || 0) || 0;
   }
 
   _tsSuffix() {
@@ -1795,12 +1983,13 @@ export class ChatStore {
   }
 
   archiveCurrentMessages(id = this.currentId, name = '', forceCreate = false, options = {}) {
-    if (!this.state.sessions[id]) return null;
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid || !this.state.sessions[sid]) return null;
+    const session = this.state.sessions[sid];
     const messages = session.messages || [];
     const currentArchiveId = session.currentArchiveId;
     const totalMessages = this._useV2
-      ? this._v2.getThreadTotal(id, currentArchiveId)
+      ? this._v2.getThreadTotal(sid, currentArchiveId)
       : messages.length;
     if (!totalMessages) return null;
 
@@ -1846,7 +2035,7 @@ export class ChatStore {
 
     const getCurrentSummariesSnapshot = () => {
       try {
-        const session = this.state.sessions[id];
+        const session = this.state.sessions[sid];
         const curAid = session.currentArchiveId;
         if (curAid && Array.isArray(session.archives)) {
           const arc = session.archives.find(a => a.id === curAid);
@@ -1883,7 +2072,7 @@ export class ChatStore {
     };
     const getCurrentCompactedSummarySnapshot = () => {
       try {
-        const session = this.state.sessions[id];
+        const session = this.state.sessions[sid];
         const curAid = session.currentArchiveId;
         if (curAid && Array.isArray(session.archives)) {
           const arc = session.archives.find(a => a.id === curAid);
@@ -1921,8 +2110,9 @@ export class ChatStore {
       const sid = String(id || '').trim();
       const threadKey = this._getThreadKey(sid, '');
       this._getThreadState(threadKey, { reset: true });
-      this._v2.enqueue(async () => {
-        await this._v2.cloneCurrentToArchive(sid, archiveId);
+      const v2 = this._v2;
+      v2.enqueue(async () => {
+        await v2.cloneCurrentToArchive(sid, archiveId);
       });
     }
 
@@ -1931,16 +2121,18 @@ export class ChatStore {
   }
 
   startNewChat(id = this.currentId, archiveName = '', options = {}) {
-    const session = this.state.sessions[id];
-    if (!session) return;
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    const session = this.state.sessions[sid];
+    if (!session) return null;
 
     let archiveId = null;
     const totalMessages = this._useV2
-      ? this._v2.getThreadTotal(id, session.currentArchiveId)
+      ? this._v2.getThreadTotal(sid, session.currentArchiveId)
       : (session.messages || []).length;
     if (totalMessages > 0) {
       // Force create a snapshot of current state before clearing
-      archiveId = this.archiveCurrentMessages(id, archiveName, true, options);
+      archiveId = this.archiveCurrentMessages(sid, archiveName, true, options);
     }
 
     session.messages = [];
@@ -1951,7 +2143,7 @@ export class ChatStore {
     session.lastRawResponse = '';
     session.unreadCount = 0;
     if (this._useV2) {
-      const threadKey = this._getThreadKey(String(id || '').trim(), '');
+      const threadKey = this._getThreadKey(sid, '');
       this._getThreadState(threadKey, { reset: true });
     }
     this._persist();
@@ -1973,7 +2165,11 @@ export class ChatStore {
   }
 
   async loadArchivedMessages(archiveId, id = this.currentId, options = {}) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const token = this._scopeToken;
+    const scopeId = this.scopeId;
+    const session = this.state.sessions[sid];
     if (!session || !session.archives) return false;
 
     const archive = session.archives.find(a => a.id === archiveId);
@@ -1981,37 +2177,40 @@ export class ChatStore {
 
     // Save current state before switching
     const totalMessages = this._useV2
-      ? this._v2.getThreadTotal(id, session.currentArchiveId)
+      ? this._v2.getThreadTotal(sid, session.currentArchiveId)
       : (session.messages || []).length;
     if (totalMessages > 0) {
       const isDetached = !session.currentArchiveId;
       const autoName = isDetached ? '自动存档' : '';
-      this.archiveCurrentMessages(id, autoName, false, options);
+      this.archiveCurrentMessages(sid, autoName, false, options);
     }
 
     session.currentArchiveId = archiveId;
     if (this._useV2) {
-      await this._loadRecentMessages(id, archiveId);
+      await this._loadRecentMessages(sid, archiveId, { token, scopeId });
     } else {
       session.messages = Array.isArray(archive.messages) ? [...archive.messages] : [];
     }
+    if (this._isScopeStale(token, scopeId)) return false;
     this._persist();
     return true;
   }
 
   deleteArchive(archiveId, id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const session = this.state.sessions[sid];
     if (!session || !session.archives) return false;
     session.archives = session.archives.filter(a => a.id !== archiveId);
     if (session.currentArchiveId === archiveId) {
       session.currentArchiveId = null;
     }
     if (this._useV2) {
-      const sid = String(id || '').trim();
       const aid = String(archiveId || '').trim();
       this._clearThreadState(this._getThreadKey(sid, aid));
-      this._v2.enqueue(async () => {
-        await this._v2.deleteArchive(sid, aid);
+      const v2 = this._v2;
+      v2.enqueue(async () => {
+        await v2.deleteArchive(sid, aid);
       });
     }
     this._persist();
@@ -2322,9 +2521,11 @@ export class ChatStore {
    * Add a pending message to the queue (cached, not sent to AI yet)
    */
   addPendingMessage(message, id = this.currentId) {
-    this._ensureSession(id);
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    this._ensureSession(sid);
     const msg = ensureId({ ...message, status: 'pending' });
-    this.state.sessions[id].pending.push(msg);
+    this.state.sessions[sid].pending.push(msg);
     this._persist();
     return msg;
   }
@@ -2333,15 +2534,19 @@ export class ChatStore {
    * Get all pending messages for a session
    */
   getPendingMessages(id = this.currentId) {
-    this._ensureSession(id);
-    return this.state.sessions[id].pending || [];
+    const sid = String(id || '').trim();
+    if (!sid) return [];
+    this._ensureSession(sid);
+    return this.state.sessions[sid].pending || [];
   }
 
   /**
    * Remove a specific pending message
    */
   removePendingMessage(msgId, id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const session = this.state.sessions[sid];
     if (!session || !Array.isArray(session.pending)) return false;
     const targetId = String(msgId || '').trim();
     if (!targetId) return false;
@@ -2356,7 +2561,9 @@ export class ChatStore {
    * Update a pending message's content
    */
   updatePendingMessage(msgId, newContent, id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return null;
+    const session = this.state.sessions[sid];
     if (!session || !Array.isArray(session.pending)) return null;
     const idx = session.pending.findIndex(m => String(m?.id || '') === String(msgId));
     if (idx === -1) return null;
@@ -2369,7 +2576,9 @@ export class ChatStore {
    * Clear all pending messages for a session
    */
   clearPendingMessages(id = this.currentId) {
-    const session = this.state.sessions[id];
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const session = this.state.sessions[sid];
     if (!session) return false;
     session.pending = [];
     this._persist();

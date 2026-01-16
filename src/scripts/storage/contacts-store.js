@@ -44,6 +44,7 @@ const safeInvoke = async (cmd, args) => {
 };
 
 const BASE_STORE_KEY = 'contacts_store_v1';
+const LEGACY_MIGRATION_KEY = `${BASE_STORE_KEY}__scoped_migrated`;
 
 const readLocalState = (key) => {
     try {
@@ -51,6 +52,30 @@ const readLocalState = (key) => {
         return raw ? JSON.parse(raw) : null;
     } catch {
         return null;
+    }
+};
+
+const isLegacyMigrated = () => {
+    try {
+        return localStorage.getItem(LEGACY_MIGRATION_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const markLegacyMigrated = () => {
+    try {
+        localStorage.setItem(LEGACY_MIGRATION_KEY, '1');
+    } catch {}
+};
+
+const isScopedDataMatch = (data, scopeId) => {
+    try {
+        const stored = String(data?.scopeId ?? '').trim();
+        if (!stored) return true; // legacy data without scope marker
+        return stored === String(scopeId || '').trim();
+    } catch {
+        return true;
     }
 };
 
@@ -64,6 +89,7 @@ export class ContactsStore {
     constructor({ scopeId = '' } = {}) {
         this.scopeId = normalizeScopeId(scopeId);
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this._scopeToken = 0;
         this.state = this._load();
         this.ready = this._hydrateFromDisk();
         this._lsDisabled = false;
@@ -73,32 +99,49 @@ export class ContactsStore {
 
     _load() {
         const data = readLocalState(this.storeKey);
-        if (data) return data;
-        if (this.scopeId) {
+        if (data && isScopedDataMatch(data, this.scopeId)) {
+            if (this.scopeId) markLegacyMigrated();
+            return data;
+        }
+        if (this.scopeId && !isLegacyMigrated()) {
             const legacy = readLocalState(BASE_STORE_KEY);
-            if (legacy) return legacy;
+            if (legacy) {
+                markLegacyMigrated();
+                return legacy;
+            }
         }
         return { contacts: {} };
     }
 
     async _hydrateFromDisk() {
+        const token = this._scopeToken;
+        const storeKey = this.storeKey;
+        const scopeId = this.scopeId;
         try {
-            let kv = await safeInvoke('load_kv', { name: this.storeKey });
-            if (!kv && this.scopeId) {
+            let kv = await safeInvoke('load_kv', { name: storeKey });
+            if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+            if (kv && !isScopedDataMatch(kv, scopeId)) {
+                kv = null;
+            }
+            if (!kv && this.scopeId && !isLegacyMigrated()) {
                 const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
                 if (legacy && legacy.contacts) {
                     kv = legacy;
+                    markLegacyMigrated();
                     try {
-                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                        await safeInvoke('save_kv', { name: storeKey, data: legacy });
                     } catch (err) {
                         logger.debug('contacts store legacy migrate failed (可能非 Tauri)', err);
                     }
                 }
             }
             if (kv && kv.contacts) {
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
                 this.state = kv;
+                if (this.scopeId) markLegacyMigrated();
                 try {
-                    localStorage.setItem(this.storeKey, JSON.stringify(this.state));
+                    localStorage.setItem(storeKey, JSON.stringify({ ...this.state, scopeId }));
                 } catch (err) {
                     if (isQuotaError(err)) {
                         this._lsDisabled = true;
@@ -112,6 +155,11 @@ export class ContactsStore {
                     }
                 }
                 logger.info('contacts store hydrated from disk');
+                logger.info(
+                    `[Persona_test] contactsStore.hydrated scope=${scopeId || 'default'} key=${storeKey} contacts=${
+                        Object.keys(this.state.contacts || {}).length
+                    }`
+                );
                 try {
                     window.dispatchEvent(new CustomEvent('store-hydrated', { detail: { store: 'contacts' } }));
                 } catch {}
@@ -122,7 +170,7 @@ export class ContactsStore {
                 const g = typeof globalThis !== 'undefined' ? globalThis : window;
                 const msg = String(err?.message || '');
                 const canRetry = Boolean(g?.__TAURI__) && msg.includes('invoke not available');
-                if (canRetry && this._hydrateRetryCount < 3) {
+                if (token === this._scopeToken && canRetry && this._hydrateRetryCount < 3) {
                     const attempt = ++this._hydrateRetryCount;
                     logger.warn(`contacts store hydrate retry scheduled (${attempt}/3)`);
                     setTimeout(() => { this._hydrateFromDisk(); }, 800 * attempt);
@@ -133,12 +181,13 @@ export class ContactsStore {
 
     _persist() {
         // Always try disk first; localStorage is best-effort (may exceed quota due to base64 avatars)
-        safeInvoke('save_kv', { name: this.storeKey, data: this.state }).catch((err) => {
+        const payload = { ...this.state, scopeId: this.scopeId };
+        safeInvoke('save_kv', { name: this.storeKey, data: payload }).catch((err) => {
             logger.debug('contacts store save_kv failed (可能非 Tauri)', err);
         });
         if (this._lsDisabled) return;
         try {
-            localStorage.setItem(this.storeKey, JSON.stringify(this.state));
+            localStorage.setItem(this.storeKey, JSON.stringify(payload));
         } catch (err) {
             if (isQuotaError(err)) {
                 this._lsDisabled = true;
@@ -156,6 +205,12 @@ export class ContactsStore {
     async setScope(scopeId = '') {
         const nextScope = normalizeScopeId(scopeId);
         if (nextScope === this.scopeId) return this.ready;
+        const prevScope = this.scopeId;
+        const prevKey = this.storeKey;
+        logger.info(
+            `[Persona_test] contactsStore.setScope begin scope=${prevScope || 'default'} key=${prevKey} -> ${nextScope || 'default'}`
+        );
+        this._scopeToken += 1;
         this.scopeId = nextScope;
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this._lsDisabled = false;
@@ -163,7 +218,20 @@ export class ContactsStore {
         this._hydrateRetryCount = 0;
         this.state = this._load();
         this.ready = this._hydrateFromDisk();
-        return this.ready;
+        const ready = this.ready;
+        ready
+            .then(() => {
+                logger.info(
+                    `[Persona_test] contactsStore.setScope ready scope=${this.scopeId || 'default'} key=${this.storeKey} contacts=${
+                        Object.keys(this.state.contacts || {}).length
+                    }`
+                );
+            })
+            .catch((err) => {
+                const msg = String(err?.message || err || '');
+                logger.warn(`[Persona_test] contactsStore.setScope hydrate failed scope=${nextScope || 'default'} err=${msg}`);
+            });
+        return ready;
     }
 
     listContacts() {
@@ -212,6 +280,7 @@ export class ContactsStore {
      */
     ensureFromSessions(sessionIds = [], { defaultAvatar = '' } = {}) {
         let changed = false;
+        const added = [];
         sessionIds.forEach((sid) => {
             const id = normalizeId(sid);
             if (!id) return;
@@ -226,10 +295,18 @@ export class ContactsStore {
                     description: '',
                     updatedAt: Date.now(),
                 };
+                added.push(id);
                 changed = true;
             }
         });
-        if (changed) this._persist();
+        if (changed) {
+            const preview = added.slice(0, 6).join(', ');
+            const suffix = added.length > 6 ? '...' : '';
+            logger.info(
+                `[Persona_test] contactsStore.ensureFromSessions added=${added.length} scope=${this.scopeId || 'default'} ids=${preview}${suffix}`
+            );
+            this._persist();
+        }
     }
 
     listGroups() {

@@ -6,74 +6,74 @@ import { logger } from '../utils/logger.js';
 
 const COMMANDS = {
   '/clear': {
-    desc: '清空當前會話',
+    desc: '清空当前会话',
     run: async ({ chatStore, ui }) => {
       const id = chatStore.getCurrent();
       chatStore.clear(id);
       ui.clearMessages();
       ui.setInputText('');
-      window.toastr?.success(`已清空會話：${id}`);
+      window.toastr?.success(`已清空会话：${id}`);
     }
   },
   '/session': {
-    desc: '顯示會話面板',
+    desc: '显示会话面板',
     run: async ({ sessionPanel }) => sessionPanel.show()
   },
   '/world': {
-    desc: '顯示世界書面板',
+    desc: '显示世界书面板',
     run: async ({ worldPanel }) => worldPanel.show()
   },
   '/worldset': {
-    desc: '/worldset <id> 設置當前會話的世界書',
+    desc: '/worldset <id> 设置当前会话的世界书',
     run: async ({ appBridge }, args) => {
       const id = args[1];
       if (!id) {
-        window.toastr?.warning('請提供世界書 ID');
+        window.toastr?.warning('请提供世界书 ID');
         return;
       }
       appBridge.setCurrentWorld(id);
-      window.toastr?.success(`已切換世界書：${id}`);
+      window.toastr?.success(`已切换世界书：${id}`);
     }
   },
   '/worldlist': {
-    desc: '列出已存世界書 ID',
+    desc: '列出已存世界书 ID',
     run: async ({ appBridge }) => {
       const names = appBridge.listWorlds();
       if (!names || !names.length) {
-        window.toastr?.info('暫無世界書');
+        window.toastr?.info('暂无世界书');
         return;
       }
-      alert('世界書列表:\n' + names.join('\n'));
+      alert('世界书列表:\n' + names.join('\n'));
     }
   },
   '/exportworld': {
-    desc: '導出當前世界書 JSON 到剪貼簿',
+    desc: '导出当前世界书 JSON 到剪贴簿',
     run: async ({ appBridge }) => {
       const id = appBridge.currentWorldId;
       if (!id) {
-        window.toastr?.warning('尚未選擇世界書');
+        window.toastr?.warning('尚未选择世界书');
         return;
       }
       const data = await appBridge.getWorldInfo(id);
       await navigator.clipboard?.writeText(JSON.stringify(data || {}, null, 2));
-      window.toastr?.success(`已複製世界書：${id}`);
+      window.toastr?.success(`已复制世界书：${id}`);
     }
   },
   '/export': {
-    desc: '導出當前會話 JSON 到剪貼簿',
+    desc: '导出当前会话 JSON 到剪贴簿',
     run: async ({ chatStore }) => {
       const id = chatStore.getCurrent();
       const data = chatStore.getMessages(id);
       await navigator.clipboard?.writeText(JSON.stringify(data, null, 2));
-      window.toastr?.success('已複製當前會話 JSON');
+      window.toastr?.success('已复制当前会话 JSON');
     }
   },
   '/rename': {
-    desc: '/rename 新ID 重命名當前會話',
+    desc: '/rename 新ID 重命名当前会话',
     run: async ({ chatStore, ui }, args) => {
       const newId = args[1];
       if (!newId) {
-        window.toastr?.warning('請提供新 ID，例如 /rename mychat');
+        window.toastr?.warning('请提供新 ID，例如 /rename mychat');
         return;
       }
       const old = chatStore.getCurrent();
@@ -84,7 +84,7 @@ const COMMANDS = {
       chatStore.rename(old, newId);
       ui.setSessionLabel(newId);
       window.dispatchEvent(new CustomEvent('session-changed', { detail: { id: newId } }));
-      window.toastr?.success(`會話已重命名為 ${newId}`);
+      window.toastr?.success(`会话已重命名为 ${newId}`);
     }
   },
   '/help': {
@@ -106,8 +106,8 @@ export function runCommand(input, ctx) {
   try {
     handler.run(ctx, parts);
   } catch (err) {
-    logger.error('命令執行失敗', err);
-    window.toastr?.error('命令執行失敗');
+    logger.error('命令执行失败', err);
+    window.toastr?.error('命令执行失败');
   }
   return true;
 }

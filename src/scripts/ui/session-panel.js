@@ -47,7 +47,7 @@ export class SessionPanel {
     const currentId = this.store.getCurrent();
     if (!contacts.length) {
       const li = document.createElement('li');
-      li.textContent = '（暫無好友/群組）';
+      li.textContent = '（暂无好友/群组）';
       li.style.color = '#888';
       this.listEl.appendChild(li);
       return;
@@ -67,7 +67,7 @@ export class SessionPanel {
 
       const name = document.createElement('span');
       const last = this.store.getLastMessage(id);
-      const snippet = last ? (last.content || '').slice(0, 32) : '新會話';
+      const snippet = last ? (last.content || '').slice(0, 32) : '新会话';
       const time = last && last.timestamp ? this.formatTime(last.timestamp) : '';
       const isGroup = Boolean(c.isGroup) || id.startsWith('group:');
       const membersCount = isGroup && Array.isArray(c.members) ? c.members.length : 0;
@@ -80,7 +80,7 @@ export class SessionPanel {
         ? `<span style="padding:2px 6px; border-radius:8px; background:#e0f2fe; color:#0369a1; font-size:11px; margin-left:4px;">群</span>`
         : '';
       const currentTag =
-        id === currentId ? `<span style="color:#059669; font-size:11px; margin-left:6px;">當前</span>` : '';
+        id === currentId ? `<span style="color:#059669; font-size:11px; margin-left:6px;">当前</span>` : '';
       const baseName = c.name || id;
       const displayName = isGroup ? `${baseName}(${membersCount})` : baseName;
       name.innerHTML = `<strong>${displayName}${unreadBadge}${badge}${currentTag}</strong><br><span style="color:#888;font-size:12px;">${snippet}</span> ${
@@ -91,7 +91,7 @@ export class SessionPanel {
       }
 
       const btn = document.createElement('button');
-      btn.textContent = id === currentId ? '當前' : '切換';
+      btn.textContent = id === currentId ? '当前' : '切换';
       btn.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
       btn.onclick = () => this.switchTo(id);
 
@@ -106,7 +106,7 @@ export class SessionPanel {
       renameBtn.onclick = () => this.rename(id);
 
       const delBtn = document.createElement('button');
-      delBtn.textContent = '刪除';
+      delBtn.textContent = '删除';
       delBtn.style.cssText =
         'padding:4px 8px;border:1px solid #fca5a5;border-radius:6px;background:#fee2e2;color:#b91c1c;cursor:pointer;';
       delBtn.onclick = () => this.remove(id);
@@ -129,16 +129,16 @@ export class SessionPanel {
 
   rename(id) {
     const currentName = this.contactsStore?.getContact?.(id)?.name || id;
-    const next = prompt('輸入新好友名稱（同時作為聊天室 ID）', currentName);
+    const next = prompt('输入新好友名称（同时作为聊天室 ID）', currentName);
     if (!next || next === id) return;
     const nextId = next.trim();
     if (!nextId) return;
     if (nextId.startsWith('group:')) {
-      window.toastr?.warning('好友名稱不可使用 group: 前綴');
+      window.toastr?.warning('好友名称不可使用 group: 前綴');
       return;
     }
     if (this.contactsStore?.getContact?.(nextId) || this.store.listSessions().includes(nextId)) {
-      window.toastr?.warning('名稱已存在，請換一個');
+      window.toastr?.warning('名称已存在，请换一个');
       return;
     }
 
@@ -167,7 +167,7 @@ export class SessionPanel {
 
   remove(id) {
     const name = this.contactsStore?.getContact?.(id)?.name || id;
-    if (!confirm(`確認刪除：${name}？此操作會刪除聊天室與好友記錄（不可恢復）。`)) return;
+    if (!confirm(`確認删除：${name}？此操作会删除聊天室与好友记录（不可恢复）。`)) return;
 
     try {
       const settings = this.store?.getSessionSettings?.(id) || null;
@@ -217,7 +217,7 @@ export class SessionPanel {
                 <button id="session-avatar-btn" type="button" title="设置好友头像" style="width:64px; height:44px; border-radius:12px; border:1px solid #e2e8f0; background:#fff; padding:0; overflow:hidden; cursor:pointer;">
                     <img id="session-avatar-preview" alt="" style="width:100%; height:100%; object-fit:cover; display:block;" src="./assets/external/feather-default.png">
                 </button>
-                <input id="session-name" placeholder="新好友名稱" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;">
+                <input id="session-name" placeholder="新好友名称" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;">
                 <button id="session-add" style="padding:8px 12px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">添加</button>
                 <button id="session-clear" style="padding:8px 12px; border:1px solid #fca5a5; border-radius:8px; background:#fee2e2; color:#b91c1c;">清空聊天</button>
             </div>
@@ -259,12 +259,12 @@ export class SessionPanel {
   addSession() {
     const name = (this.nameInput.value || '').trim();
     if (!name) {
-      window.toastr?.warning('請輸入好友名稱');
+      window.toastr?.warning('请输入好友名称');
       return;
     }
 
     if (name.startsWith('group:')) {
-      window.toastr?.warning('好友名稱不可使用 group: 前綴');
+      window.toastr?.warning('好友名称不可使用 group: 前綴');
       return;
     }
 
@@ -295,7 +295,7 @@ export class SessionPanel {
 
   clearCurrent() {
     const id = this.store.getCurrent();
-    if (!confirm(`清空當前會話：${id}？此操作不可恢復。`)) return;
+    if (!confirm(`清空当前会话：${id}？此操作不可恢复。`)) return;
     this.store.clear(id);
     this.switchTo(id);
     this.refresh();

@@ -196,8 +196,8 @@ export class ChatUI {
         const loaded = applyImageFallback(img, resolved, {
           onFail: () => {
             img.classList.add('broken');
-            img.alt = '表情包加載失敗';
-            toastOnce('表情包加載失敗');
+            img.alt = '表情包加载失败';
+            toastOnce('表情包加载失败');
           },
         });
         if (loaded) {
@@ -302,11 +302,11 @@ export class ChatUI {
     const updateStatus = () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         this.setSendEnabled(false);
-        this.showErrorBanner('網絡不可用，請檢查連接');
+        this.showErrorBanner('网络不可用，请检查连接');
       } else {
         this.setSendEnabled(true);
         if (this.errorBanner) this.errorBanner.style.display = 'none';
-        window.toastr?.info?.('網絡已連接');
+        window.toastr?.info?.('网络已连接');
       }
     };
     window.addEventListener('online', updateStatus);
@@ -584,8 +584,8 @@ export class ChatUI {
         imgEl.addEventListener('click', () => this.openLightbox(imgSrc));
         imgEl.onerror = () => {
           imgEl.classList.add('broken');
-          imgEl.alt = '圖片加載失敗';
-          toastOnce('圖片加載失敗，請檢查連結或網絡');
+          imgEl.alt = '图片加载失败';
+          toastOnce('图片加载失败，请检查链接或网络');
         };
         break;
       }
@@ -600,7 +600,7 @@ export class ChatUI {
                     </div>`;
         const audioEl = bubble.querySelector('audio');
         audioEl.onerror = () => {
-          toastOnce('語音加載失敗');
+          toastOnce('语音加载失败');
         };
         break;
       }
@@ -627,7 +627,7 @@ export class ChatUI {
         const rawUrl = message.meta?.url || '';
         const resolved = resolveMediaAsset('audio', rawUrl);
         const url = resolved?.url || rawUrl;
-        const statusText = url ? '待播放' : '無音頻地址';
+        const statusText = url ? '待播放' : '无音频地址';
         bubble.innerHTML = `
                     <div class="card music-card">
                         <div class="card-title">🎵 ${message.content || '音乐'}</div>
@@ -651,8 +651,8 @@ export class ChatUI {
           audio.onerror = () => {
             playing = false;
             playBtn.textContent = '播放';
-            if (statusEl) statusEl.textContent = '播放錯誤';
-            window.toastr?.error('音頻加載/播放失敗');
+            if (statusEl) statusEl.textContent = '播放错误';
+            window.toastr?.error('音频加载/播放失败');
           };
         }
 
@@ -687,7 +687,7 @@ export class ChatUI {
 
         playBtn.onclick = () => {
           if (!audio) {
-            window.toastr?.warning('無音頻地址，播放失敗');
+            window.toastr?.warning('无音频地址，播放失败');
             return;
           }
           audio
@@ -698,13 +698,13 @@ export class ChatUI {
               if (statusEl) statusEl.textContent = '播放中';
               updateProgress();
             })
-            .catch(() => window.toastr?.warning('播放失敗'));
+            .catch(() => window.toastr?.warning('播放失败'));
         };
         pauseBtn.onclick = () => {
           audio?.pause();
           if (playing) {
             playBtn.textContent = '播放';
-            if (statusEl) statusEl.textContent = '已暫停';
+            if (statusEl) statusEl.textContent = '已暂停';
             playing = false;
           }
         };
@@ -743,8 +743,8 @@ export class ChatUI {
           const loaded = applyImageFallback(stickerImg, stickerResolved, {
             onFail: () => {
               stickerImg.classList.add('broken');
-              stickerImg.alt = '表情包加載失敗';
-              toastOnce('表情包加載失敗');
+              stickerImg.alt = '表情包加载失败';
+              toastOnce('表情包加载失败');
             },
           });
           if (loaded) {
@@ -1407,7 +1407,7 @@ export class ChatUI {
             `;
       const title = document.createElement('div');
       title.style.cssText = 'font-size:14px; font-weight:700; color:#111827;';
-      title.textContent = '原回覆';
+      title.textContent = '原回复';
 
       const hint = document.createElement('div');
       hint.style.cssText =
@@ -1596,7 +1596,7 @@ export class ChatUI {
             text = msg?.rawSource ?? msg?.raw_source ?? msg?.rawOriginal ?? msg?.raw ?? msg?.content ?? '';
           }
           this.copyToClipboard(text).then(ok =>
-            ok ? window.toastr?.success?.('已複製') : window.toastr?.warning?.('複製失敗'),
+            ok ? window.toastr?.success?.('已复制') : window.toastr?.warning?.('复制失败'),
           );
           return;
         }
@@ -1723,7 +1723,7 @@ export class ChatUI {
 
     if (action && typeof action.handler === 'function') {
       const btn = document.createElement('button');
-      btn.textContent = action.label || '重試';
+      btn.textContent = action.label || '重试';
       btn.style.cssText =
         'margin-left:8px; padding:4px 10px; border:1px solid #ef4444; background:#fff; color:#b91c1c; border-radius:6px; cursor:pointer;';
       btn.onclick = () => action.handler();

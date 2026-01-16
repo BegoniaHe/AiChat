@@ -1,7 +1,7 @@
 export class VariablePanel {
     constructor({ chatStore, getSessionId }) {
         this.chatStore = chatStore;
-        this.getSessionId = typeof getSessionId === 'function' ? getSessionId : () => 'default';
+        this.getSessionId = typeof getSessionId === 'function' ? getSessionId : () => '';
         this.overlay = null;
         this.panel = null;
         this.term = '';
@@ -96,9 +96,9 @@ export class VariablePanel {
 
     show() {
         this.ensureUI();
-        const sid = String(this.getSessionId() || '').trim() || 'default';
+        const sid = String(this.getSessionId() || '').trim();
         const meta = this.panel?.querySelector?.('#var-meta');
-        if (meta) meta.textContent = `会话：${sid}`;
+        if (meta) meta.textContent = sid ? `会话：${sid}` : '未选择会话';
         this.term = '';
         const searchEl = this.panel?.querySelector?.('#var-search');
         if (searchEl) searchEl.value = '';
@@ -112,8 +112,8 @@ export class VariablePanel {
     }
 
     getVars() {
-        const sid = String(this.getSessionId() || '').trim() || 'default';
-        const vars = this.chatStore?.listVariables?.(sid) || {};
+        const sid = String(this.getSessionId() || '').trim();
+        const vars = sid ? (this.chatStore?.listVariables?.(sid) || {}) : {};
         return { sid, vars };
     }
 
@@ -134,7 +134,7 @@ export class VariablePanel {
         if (!entries.length) {
             const empty = document.createElement('div');
             empty.style.cssText = 'padding:18px 10px; color:#94a3b8; text-align:center;';
-            empty.textContent = '暂无变量';
+            empty.textContent = this.getVars().sid ? '暂无变量' : '未选择会话';
             listEl.appendChild(empty);
             return;
         }
@@ -172,6 +172,10 @@ export class VariablePanel {
         if (!key) return;
         const value = prompt('变量值（value）', '') ?? '';
         const { sid } = this.getVars();
+        if (!sid) {
+            window.toastr?.warning?.('请先进入聊天室');
+            return;
+        }
         this.chatStore?.setVariable?.(String(key).trim(), String(value), sid);
         this.renderList();
     }
@@ -180,6 +184,10 @@ export class VariablePanel {
         const next = prompt(`编辑变量：${key}`, String(curValue ?? ''));
         if (next === null) return;
         const { sid } = this.getVars();
+        if (!sid) {
+            window.toastr?.warning?.('请先进入聊天室');
+            return;
+        }
         this.chatStore?.setVariable?.(String(key).trim(), String(next), sid);
         this.renderList();
     }
@@ -187,6 +195,10 @@ export class VariablePanel {
     deleteKey(key) {
         if (!confirm(`删除变量 "${key}"？`)) return;
         const { sid } = this.getVars();
+        if (!sid) {
+            window.toastr?.warning?.('请先进入聊天室');
+            return;
+        }
         this.chatStore?.deleteVariable?.(String(key).trim(), sid);
         this.renderList();
     }
@@ -194,8 +206,11 @@ export class VariablePanel {
     clearAll() {
         if (!confirm('清空当前会话的所有变量？')) return;
         const { sid } = this.getVars();
+        if (!sid) {
+            window.toastr?.warning?.('请先进入聊天室');
+            return;
+        }
         this.chatStore?.clearVariables?.(sid);
         this.renderList();
     }
 }
-

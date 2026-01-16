@@ -3,8 +3,8 @@
  */
 
 const DEFAULT_STICKERS = [
-  '摸摸頭', '比心', '跳舞', '哭哭', '生氣', '睡覺', '愛心', '讚',
-  '害羞', '擁抱', '喝奶茶', 'OK', '嘟嘴'
+  '摸摸头', '比心', '跳舞', '哭哭', '生气', '睡觉', '爱心', '赞',
+  '害羞', '拥抱', '喝奶茶', 'OK', '嘟嘴'
 ];
 
 const RECENT_KEY = 'sticker_recents';
@@ -67,7 +67,7 @@ export class StickerPicker {
     if (this.recent.length) {
       this.recent.forEach((s) => renderBtn(gridRecent, s));
     } else {
-      gridRecent.innerHTML = '<span style="color:#94a3b8;font-size:12px;">無最近使用</span>';
+      gridRecent.innerHTML = '<span style="color:#94a3b8;font-size:12px;">无最近使用</span>';
     }
 
     DEFAULT_STICKERS.forEach((s) => renderBtn(gridAll, s));

@@ -1,7 +1,7 @@
 /**
- * 世界書存取與格式轉換
- * - 本地存儲：localStorage（後續可加 Tauri FS）
- * - 提供 ST JSON -> 簡化格式的轉換
+ * 世界书存取与格式转换
+ * - 本地存储：localStorage（后续可加 Tauri FS）
+ * - 提供 ST JSON -> 简化格式的转换
  */
 
 import { logger } from '../utils/logger.js';
@@ -17,14 +17,14 @@ export class WorldInfoStore {
 
     async _loadCache() {
         try {
-            // 優先從 Tauri 持久化讀取
+            // 优先从 Tauri 持久化读取
             const kv = await safeInvoke('load_kv', { name: STORAGE_KEY });
             if (kv && typeof kv === 'object' && Object.keys(kv).length) {
                 this.cache = kv;
                 return kv;
             }
         } catch (err) {
-            logger.warn('世界書持久化讀取失敗，嘗試 localStorage', err);
+            logger.warn('世界书持久化读取失败，尝试 localStorage', err);
         }
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
@@ -33,7 +33,7 @@ export class WorldInfoStore {
                 return this.cache;
             }
         } catch (err) {
-            logger.warn('世界書緩存讀取失敗，重置為空', err);
+            logger.warn('世界书缓存读取失败，重置为空', err);
         }
         this.cache = {};
         return this.cache;
@@ -53,7 +53,7 @@ export class WorldInfoStore {
         try {
             await safeInvoke('save_kv', { name: STORAGE_KEY, data: this.cache });
         } catch (err) {
-            logger.warn('持久化世界書失敗（繼續用 cache）', err);
+            logger.warn('持久化世界书失败（继续用 cache）', err);
         }
     }
 
@@ -63,7 +63,7 @@ export class WorldInfoStore {
         try {
             await safeInvoke('save_kv', { name: STORAGE_KEY, data: this.cache });
         } catch (err) {
-            logger.warn('持久化世界書失敗（繼續用 cache）', err);
+            logger.warn('持久化世界书失败（继续用 cache）', err);
         }
     }
 
@@ -73,15 +73,15 @@ export class WorldInfoStore {
         try {
             await safeInvoke('save_kv', { name: STORAGE_KEY, data: this.cache });
         } catch (err) {
-            logger.warn('持久化世界書失敗（繼續用 cache）', err);
+            logger.warn('持久化世界书失败（继续用 cache）', err);
         }
     }
 }
 
 /**
- * 將 ST 世界書 JSON 轉為簡化格式
+ * 将 ST 世界书 JSON 转为简化格式
  * @param {object} stJson - SillyTavern world JSON
- * @param {string} name - 名稱
+ * @param {string} name - 名称
  * @returns {object} simplified worldinfo
  */
 export function convertSTWorld(stJson = {}, name = 'imported') {

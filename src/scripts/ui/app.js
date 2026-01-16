@@ -65,7 +65,7 @@ const initApp = async () => {
   };
   applyCreativeWideSetting();
   const getMemoryStorageMode = () => {
-    const mode = String(appSettings.get().memoryStorageMode || 'summary').toLowerCase();
+    const mode = String(appSettings.get().memoryStorageMode || 'table').toLowerCase();
     return mode === 'table' ? 'table' : 'summary';
   };
   const isSummaryMemoryEnabled = () => getMemoryStorageMode() === 'summary';
@@ -352,6 +352,8 @@ const initApp = async () => {
   const applyPersonaScope = async ({ personaId = null, force = false } = {}) => {
     const nextKey = getPersonaScopeKey(personaId);
     if (!force && nextKey === activePersonaScopeKey) return false;
+    const pid = personaId || personaStore.getActive?.()?.id || 'default';
+    logger.info(`[Persona_test] applyPersonaScope start persona=${pid} scope=${nextKey || 'default'}`);
     activePersonaScopeKey = nextKey;
     await Promise.all([
       chatStore.setScope?.(nextKey),
@@ -381,6 +383,11 @@ const initApp = async () => {
     try {
       if (activePage === 'moments') momentsPanel.render({ preserveScroll: false });
     } catch {}
+    logger.info(
+      `[Persona_test] applyPersonaScope done scope=${nextKey || 'default'} sessions=${
+        chatStore.listSessions?.().length || 0
+      } contacts=${contactsStore.listContacts?.().length || 0}`,
+    );
     return true;
   };
 
@@ -482,14 +489,14 @@ const initApp = async () => {
       if (!id || !userComment) return;
 
       if (!window.appBridge.isConfigured()) {
-        ui.showErrorBanner('未配置 API，請先填寫 Base URL / Key / 模型');
+        ui.showErrorBanner('未配置 API，请先填写 Base URL / Key / 模型');
         window.toastr?.warning('请先配置 API 信息', '未配置');
         configPanel.show();
         return;
       }
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        ui.showErrorBanner('當前離線，請連接網絡後再試');
-        window.toastr?.warning('離線狀態，無法發送');
+        ui.showErrorBanner('当前离线，请连接网络后再试');
+        window.toastr?.warning('离线状态，无法发送');
         return;
       }
 
@@ -580,7 +587,7 @@ const initApp = async () => {
       })();
 
       const userLine = isReplyToComment
-        ? `{{user}}回覆了${replyTo.author}：{{lastUserMessage}}`
+        ? `{{user}}回复了${replyTo.author}：{{lastUserMessage}}`
         : `{{user}}：{{lastUserMessage}}`;
 
       // 场景 C：动态评论（提示词规则由「预设 → 聊天提示词 → 动态评论回复提示词」注入；评论数据作为 system 注入，用户内容通过 {{lastUserMessage}} 填入）
@@ -1896,6 +1903,14 @@ ${listPart || '-（无）'}
   };
 
   const refreshChatAndContactsNow = () => {
+    if (chatStore.scopeId !== contactsStore.scopeId) {
+      logger.info(
+        `[Persona_test] refreshChatAndContacts skip scope mismatch chat=${chatStore.scopeId || 'default'} contacts=${
+          contactsStore.scopeId || 'default'
+        }`,
+      );
+      return;
+    }
     contactsStore.ensureFromSessions(chatStore.listSessions(), { defaultAvatar: avatars.assistant });
     renderChatList();
     renderGroupsList();
@@ -2751,7 +2766,7 @@ ${listPart || '-（无）'}
     Object.entries(pages).forEach(([k, el]) => {
       if (el) el.classList.toggle('active', k === name);
     });
-    // 返回聊天列表視圖（非聊天室）以貼合原始切換邏輯
+    // 返回聊天列表视图（非聊天室）以贴合原始切换逻辑
     if (name !== 'chat') {
       chatRoom?.classList.add('hidden');
       chatList?.classList.remove('hidden');
@@ -3015,10 +3030,10 @@ ${listPart || '-（无）'}
     return { show, hide };
   })();
 
-  /* ---------------- 頭像設置菜單 ---------------- */
+  /* ---------------- 头像设置菜单 ---------------- */
   const settingsMenu = document.getElementById('settings-menu');
   const quickMenu = document.getElementById('quick-menu');
-  // 頂部頭像/＋按鈕在「消息」與「聯係人」頁共用同樣外觀
+  // 顶部头像/＋按钮在「消息」与「联系人」页共用同样外观
   const avatarBtns = document.querySelectorAll('.qq-message-topbar .user-avatar-btn');
   const plusBtns = document.querySelectorAll('.qq-message-topbar .icon-button');
   const chatMenuBtn = document.getElementById('chat-menu-btn');
@@ -3114,7 +3129,7 @@ ${listPart || '-（无）'}
     const sameAnchor = lastAnchor === anchorEl;
     hideMenus();
     positionSheet(menuEl, anchorEl, 0, 4, alignRight);
-    // 若是同一個錨點且當前已顯示，則視為 toggle 關閉；否則打開並重定位
+    // 若是同一个锚点且当前已显示，则视为 toggle 关闭；否则打开并重定位
     if (!isVisible || !sameAnchor) {
       menuEl.classList.remove('hidden');
     } else {
@@ -3224,7 +3239,7 @@ ${listPart || '-（无）'}
         const raw = chatStore.getLastRawResponse(sid);
         const at = chatStore.getLastRawAt(sid);
         if (!raw) {
-          window.toastr?.warning?.('暂无原始回复记录（请先让 AI 回覆一次）');
+          window.toastr?.warning?.('暂无原始回复记录（请先让 AI 回复一次）');
         } else {
           const meta = `${name}${at ? ` · ${new Date(at).toLocaleString()}` : ''}`;
           rawReplyModal.show(raw, meta);
@@ -3645,20 +3660,20 @@ ${listPart || '-（无）'}
   // Quick action buttons
   const actionHandlers = {
     image: async () => {
-      const useFile = confirm('使用本地圖片文件嗎？點擊「取消」改用 URL。');
+      const useFile = confirm('使用本地图片文件吗？点击「取消」改用 URL。');
       if (useFile) {
         await mediaPicker.pickFile('image');
       } else {
-        await mediaPicker.pickUrl('輸入圖片地址（可貼 https:// 或本地 file://）', avatars.user);
+        await mediaPicker.pickUrl('输入图片地址（可贴 https:// 或本地 file://）', avatars.user);
       }
     },
     music: async () => {
-      const useFile = confirm('使用本地音頻文件嗎？點擊「取消」改用 URL。');
+      const useFile = confirm('使用本地音频文件吗？点击「取消」改用 URL。');
       if (useFile) {
         await mediaPicker.pickFile('audio');
       } else {
-        const title = prompt('輸入歌名', '未命名');
-        const artist = prompt('輸入歌手', '');
+        const title = prompt('输入歌名', '未命名');
+        const artist = prompt('输入歌手', '');
         const audioUrl = prompt('音源 URL（可留空）', '');
         if (!title) return;
         const msg = {
@@ -3675,7 +3690,7 @@ ${listPart || '-（无）'}
       }
     },
     transfer: async () => {
-      const amount = prompt('輸入金額（示例：520元）', '520元');
+      const amount = prompt('输入金額（示例：520元）', '520元');
       if (!amount) return;
       const msg = {
         role: 'user',
@@ -5909,14 +5924,14 @@ ${listPart || '-（无）'}
     }
 
     if (!window.appBridge.isConfigured()) {
-      ui.showErrorBanner('未配置 API，請先填寫 Base URL / Key / 模型');
+      ui.showErrorBanner('未配置 API，请先填写 Base URL / Key / 模型');
       window.toastr?.warning('请先配置 API 信息', '未配置');
       configPanel.show();
       return false;
     }
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      ui.showErrorBanner('當前離線，請連接網絡後再試');
-      window.toastr?.warning('離線狀態，無法發送');
+      ui.showErrorBanner('当前离线，请连接网络后再试');
+      window.toastr?.warning('离线状态，无法发送');
       return false;
     }
 
@@ -6143,7 +6158,7 @@ ${listPart || '-（无）'}
                 if (isSessionActive(sessionId)) ui.hideTyping();
                 const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
                 if (!targetGroupId) {
-                  window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
+                  window.toastr?.warning?.('对话回复格式错误：群聊标签未匹配任何已存在群组，已丢弃');
                   continue;
                 }
                 summarySessionIds.add(targetGroupId);
@@ -6192,7 +6207,7 @@ ${listPart || '-（无）'}
               // 默认路由到当前 session；若标签指向其他私聊，则创建/写入对应会话（后续群聊/动态会扩展）
               const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
               if (!targetSessionId) {
-                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
+                window.toastr?.warning?.('对话回复格式错误：私聊标签未匹配当前联系人，已丢弃');
                 continue;
               }
               summarySessionIds.add(targetSessionId);
@@ -6623,7 +6638,7 @@ ${listPart || '-（无）'}
             if (ev?.type === 'group_chat') {
               const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
               if (!targetGroupId) {
-                window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
+                window.toastr?.warning?.('对话回复格式错误：群聊标签未匹配任何已存在群组，已丢弃');
                 return;
               }
               summarySessionIds.add(targetGroupId);
@@ -6668,7 +6683,7 @@ ${listPart || '-（无）'}
             if (ev?.type === 'private_chat') {
               const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
               if (!targetSessionId) {
-                window.toastr?.warning?.('对话回覆格式错误：私聊标签未匹配当前联系人，已丢弃');
+                window.toastr?.warning?.('对话回复格式错误：私聊标签未匹配当前联系人，已丢弃');
                 return;
               }
               summarySessionIds.add(targetSessionId);
@@ -6964,8 +6979,8 @@ ${listPart || '-（无）'}
       }
       if (suppressErrorUI) return;
       logger.error('发送失败', error, { status: error?.status, response: error?.response });
-      ui.showErrorBanner(error.message || '发送失败，請檢查網絡或 API 設置', {
-        label: '重試',
+      ui.showErrorBanner(error.message || '发送失败，请检查网络或 API 设置', {
+        label: '重试',
         handler: () => handleSend(),
       });
       window.toastr?.error(error.message || '发送失败', '错误');
@@ -7119,7 +7134,7 @@ ${listPart || '-（无）'}
           '';
       }
       const ok = await ui.copyToClipboard(text);
-      ok ? window.toastr?.success?.('已複製') : window.toastr?.warning?.('複製失敗');
+      ok ? window.toastr?.success?.('已复制') : window.toastr?.warning?.('复制失败');
       return true;
     }
 
@@ -7207,7 +7222,7 @@ ${listPart || '-（无）'}
       return;
     }
     if (action === 'edit' && message.role === 'user') {
-      // 已由 UI 層接管 startInlineEdit，此處保留舊邏輯備份或直接移除
+      // 已由 UI 层接管 startInlineEdit，此处保留旧逻辑备份或直接移除
       return;
     }
     if (action === 'regenerate' && message.role === 'assistant') {
@@ -7223,7 +7238,7 @@ ${listPart || '-（无）'}
         }
       }
       if (prevUserIdx === -1) {
-        window.toastr?.warning('未找到對應的用戶消息，無法重生成');
+        window.toastr?.warning('未找到对应的用户消息，无法重生成');
         return;
       }
       let nextUserIdx = -1;
@@ -7234,13 +7249,13 @@ ${listPart || '-（无）'}
         }
       }
       if (nextUserIdx !== -1) {
-        window.toastr?.warning('只能重生成最新一輪回覆');
+        window.toastr?.warning('只能重生成最新一轮回复');
         return;
       }
       const roundMessages = msgs.slice(prevUserIdx + 1, nextUserIdx === -1 ? msgs.length : nextUserIdx);
       const regenMessages = roundMessages.filter(m => m?.role === 'assistant' || isSyntheticUser(m));
       if (!regenMessages.length) {
-        window.toastr?.warning('未找到可重生成的 AI 回覆');
+        window.toastr?.warning('未找到可重生成的 AI 回复');
         return;
       }
       regenMessages.forEach(m => {
@@ -7251,7 +7266,7 @@ ${listPart || '-（无）'}
       refreshChatAndContacts();
 
       const settings = appSettings.get();
-      const memoryMode = String(settings.memoryStorageMode || 'summary').toLowerCase();
+      const memoryMode = String(settings.memoryStorageMode || 'table').toLowerCase();
       if (memoryMode === 'table') {
         try {
           logger.debug('memory rollback: start', { sessionId, messageId: message.id });
@@ -7270,7 +7285,7 @@ ${listPart || '-（无）'}
       const prevUser = msgs[prevUserIdx];
       const resendText = getMessageSendText(prevUser);
       if (!String(resendText || '').trim()) {
-        window.toastr?.warning('未找到對應的用戶消息內容');
+        window.toastr?.warning('未找到对应的用户消息内容');
         return;
       }
       await handleSend(null, {
@@ -7482,7 +7497,7 @@ ${listPart || '-（无）'}
     });
   }
 
-  function handleMusicFile(dataUrl, name = '本地音頻') {
+  function handleMusicFile(dataUrl, name = '本地音频') {
     const sessionId = chatStore.getCurrent();
     const msg = {
       role: 'user',
@@ -7500,7 +7515,7 @@ ${listPart || '-（无）'}
   function updateWorldIndicator() {
     const globalId = window.appBridge?.globalWorldId || '';
     const currentId = window.appBridge?.currentWorldId || '';
-    const label = globalId && currentId ? `全局:${globalId} / 会话:${currentId}` : globalId || currentId || '未啟用';
+    const label = globalId && currentId ? `全局:${globalId} / 会话:${currentId}` : globalId || currentId || '未启用';
     worldIndicator.setName(label);
   }
 

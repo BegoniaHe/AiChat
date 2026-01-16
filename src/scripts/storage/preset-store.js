@@ -87,11 +87,11 @@ const DEFAULT_MOMENT_CREATION_RULES = `
 - 如果决定不发布，则**不要输出任何与动态相关的内容**。
 `.trim();
 
-// 动态评论回复提示词：用于“动态评论”场景（仅输出评论回覆规则）
+// 动态评论回复提示词：用于“动态评论”场景（仅输出评论回复规则）
 const LEGACY_DEFAULT_MOMENT_COMMENT_RULES = `
 你正在处理 QQ空间「动态评论回复」任务。
 
-（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回覆规则。）
+（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回复规则。）
 
 【输入中会提供】
 - moment_id、发布者、动态内容、用户评论、可用联系人名单
@@ -115,7 +115,7 @@ const LEGACY_DEFAULT_MOMENT_COMMENT_RULES = `
 const DEFAULT_MOMENT_COMMENT_RULES = `
 你正在处理 QQ空间「动态评论回复」任务。
 
-（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回覆规则。）
+（注：具体输出协议（如 <content> 等）建议由“预设-自定义”区块统一管理；此处只保留评论回复规则。）
 
 【输入中会提供】
 - moment_id、发布者、动态内容
@@ -147,7 +147,7 @@ const DEFAULT_MOMENT_COMMENT_RULES = `
 - 本场景不要输出私聊/群聊标签块（只输出评论回复）。
 `.trim();
 
-// 摘要提示词：每次回覆末尾输出 <details><summary>摘要</summary>...</details>（纯中文）
+// 摘要提示词：每次回复末尾输出 <details><summary>摘要</summary>...</details>（纯中文）
 const DEFAULT_SUMMARY_RULES = [
     '每次输出结束后，**紧跟着**以一句话概括本次互动的摘要，确保<details><summary>摘要</summary>',
     '<内容>',

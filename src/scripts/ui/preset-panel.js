@@ -946,7 +946,7 @@ export class PresetPanel {
         }));
         list.appendChild(makePromptBlock({
             idPrefix: 'moment-comment',
-            title: '动态评论回覆提示词',
+            title: '动态评论回复提示词',
             subtitle: '仅用于“动态评论”场景：输出 moment_reply_start/moment_reply_end（不输出私聊/群聊）',
             enabledKey: 'moment_comment_enabled',
             positionKey: 'moment_comment_position',
@@ -955,7 +955,7 @@ export class PresetPanel {
             rulesKey: 'moment_comment_rules',
             defaultDepth: 0,
             enabledLabel: '启用',
-            placeholder: '动态评论回覆规则（<content> + moment_reply_*）',
+            placeholder: '动态评论回复规则（<content> + moment_reply_*）',
         }));
         list.appendChild(makePromptBlock({
             idPrefix: 'group',
@@ -979,7 +979,7 @@ export class PresetPanel {
         list.appendChild(makePromptBlock({
             idPrefix: 'summary',
             title: '摘要提示词',
-            subtitle: '固定注入到系统深度=1（位于聊天提示词下方）；用于要求模型在回覆末尾输出 <details><summary>摘要</summary>...</details>',
+            subtitle: '固定注入到系统深度=1（位于聊天提示词下方）；用于要求模型在回复末尾输出 <details><summary>摘要</summary>...</details>',
             enabledKey: 'summary_enabled',
             positionKey: 'summary_position',
             depthKey: 'summary_depth',

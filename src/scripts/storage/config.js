@@ -40,7 +40,7 @@ const isLikelyPlainApiKey = (val) => {
     if (s.length < 8 || s.length > 512) return false;
     for (let i = 0; i < s.length; i++) {
         const c = s.charCodeAt(i);
-        // API key 通常為可打印 ASCII；若出現控制字元，極可能是 AES 密文 bytes 被誤當成字串
+        // API key 通常为可打印 ASCII；若出現控制字元，極可能是 AES 密文 bytes 被误当成字串
         if (c < 0x20 || c > 0x7e) return false;
     }
     return true;
@@ -150,7 +150,7 @@ export class ConfigManager {
     }
 
     /**
-     * 更新當前配置緩存（不持久化）
+     * 更新当前配置缓存（不持久化）
      */
     set(config) {
         this.config = config;
@@ -544,7 +544,7 @@ export class ConfigManager {
             return new TextDecoder().decode(pt);
         }
 
-        // 舊資料遷移：先嘗試 AES-GCM，再嘗試 base64 明文（可打印判斷）
+        // 旧资料迁移：先尝试 AES-GCM，再尝试 base64 明文（可打印判断）
         if (this.cryptoKey && crypto?.subtle?.decrypt) {
             try {
                 const bytes = decodeB64(record.enc);

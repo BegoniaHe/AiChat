@@ -17,6 +17,21 @@ const safeInvoke = async (cmd, args) => {
 };
 
 const BASE_STORE_KEY = 'contact_groups_v1';
+const LEGACY_MIGRATION_KEY = `${BASE_STORE_KEY}__scoped_migrated`;
+
+const isLegacyMigrated = () => {
+    try {
+        return localStorage.getItem(LEGACY_MIGRATION_KEY) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const markLegacyMigrated = () => {
+    try {
+        localStorage.setItem(LEGACY_MIGRATION_KEY, '1');
+    } catch {}
+};
 
 const readLocalState = (key) => {
     try {
@@ -31,38 +46,53 @@ export class GroupStore {
     constructor({ scopeId = '' } = {}) {
         this.scopeId = normalizeScopeId(scopeId);
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+        this._scopeToken = 0;
         this.state = this._load();
         this.ready = this._hydrateFromDisk();
     }
 
     _load() {
         const data = readLocalState(this.storeKey);
-        if (data) return data;
-        if (this.scopeId) {
+        if (data) {
+            if (this.scopeId) markLegacyMigrated();
+            return data;
+        }
+        if (this.scopeId && !isLegacyMigrated()) {
             const legacy = readLocalState(BASE_STORE_KEY);
-            if (legacy) return legacy;
+            if (legacy) {
+                markLegacyMigrated();
+                return legacy;
+            }
         }
         return { groups: [] };
     }
 
     async _hydrateFromDisk() {
+        const token = this._scopeToken;
+        const storeKey = this.storeKey;
+        const scopeId = this.scopeId;
         try {
-            let kv = await safeInvoke('load_kv', { name: this.storeKey });
-            if (!kv && this.scopeId) {
+            let kv = await safeInvoke('load_kv', { name: storeKey });
+            if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+            if (!kv && this.scopeId && !isLegacyMigrated()) {
                 const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
                 if (legacy && Array.isArray(legacy.groups)) {
                     kv = legacy;
+                    markLegacyMigrated();
                     try {
-                        await safeInvoke('save_kv', { name: this.storeKey, data: legacy });
+                        await safeInvoke('save_kv', { name: storeKey, data: legacy });
                     } catch (err) {
                         logger.debug('group store legacy migrate failed (可能非 Tauri)', err);
                     }
                 }
             }
             if (kv && Array.isArray(kv.groups)) {
+                if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
                 this.state = kv;
+                if (this.scopeId) markLegacyMigrated();
                 try {
-                    localStorage.setItem(this.storeKey, JSON.stringify(this.state));
+                    localStorage.setItem(storeKey, JSON.stringify(this.state));
                 } catch (err) {
                     logger.warn('group store hydrate -> localStorage failed', err);
                 }
@@ -87,6 +117,7 @@ export class GroupStore {
     async setScope(scopeId = '') {
         const nextScope = normalizeScopeId(scopeId);
         if (nextScope === this.scopeId) return this.ready;
+        this._scopeToken += 1;
         this.scopeId = nextScope;
         this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
         this.state = this._load();

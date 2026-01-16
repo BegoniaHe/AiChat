@@ -50,7 +50,7 @@ body[data-typing-dots="off"] [data-typing-placeholder="1"] {
   display: none !important;
 }
 
-/* 背景占位（若需要使用已下載外部背景） */
+/* 背景占位（若需要使用已下载外部背景） */
 .bg-legacy {
   background-image: url('../external/sharkpan.xyz-f-eWhZ-00017-2763077315.png');
   background-size: cover;
@@ -233,7 +233,7 @@ body[data-typing-dots="off"] [data-typing-placeholder="1"] {
   -webkit-overflow-scrolling: touch;
 }
 
-/* 覆蓋 qq-legacy 的 .popup-overlay 層級，避免被世界書列表彈窗壓住 */
+/* 覆盖 qq-legacy 的 .popup-overlay 层级，避免被世界书列表弹窗压住 */
 #world-editor-overlay {
   /* Must sit above WorldPanel overlay (20000) */
   z-index: 23000;
@@ -527,21 +527,21 @@ body[data-typing-dots="off"] [data-typing-placeholder="1"] {
 body,
 #app {
   min-height: 100vh;
-  /* 不添加 padding，讓內容從0開始，狀態欄透明顯示 */
+  /* 不添加 padding，让内容从0开始，状态栏透明显示 */
   padding-top: 0;
   padding-bottom: env(safe-area-inset-bottom, 12px);
   box-sizing: border-box;
-  background: transparent; /* 透明背景，不遮擋狀態欄 */
+  background: transparent; /* 透明背景，不遮挡状态栏 */
 }
 
 .topbar {
   position: sticky;
   top: 0;
   z-index: 12000;
-  /* 為狀態欄留出空間，但頂欄本身緊貼狀態欄下方 */
+  /* 为状态栏留出空间，但顶栏本身紧贴状态栏下方 */
   padding-top: env(safe-area-inset-top, 0px);
   margin-top: 0;
-  /* 半透明背景，安全區域單獨覆蓋 */
+  /* 半透明背景，安全区域单独覆盖 */
   background: rgba(255, 255, 255, 0.95) !important;
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
   overflow: hidden;

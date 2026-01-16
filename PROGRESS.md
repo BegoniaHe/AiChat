@@ -1,5 +1,53 @@
 # 開發進度追蹤（必更新）(必须使用当下时间记录)
 
+## 2026-01-17 02:12
+- Persona 调试日志：调试面板新增日志筛选输入；Persona 切换与 Chat/Contacts store 加入范围日志与 session/联系人新增日志。
+- ChatStore v2 队列：异步写入改用捕获的 v2 实例，避免 Persona 切换时写入跨 scope。
+- 修改：
+  - `src/scripts/ui/debug-panel.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/storage/contacts-store.js`
+
+## 2026-01-17 01:33
+- Persona 切换时防止旧会话异步加载写入新 scope：聊天存储增加 scope 校验并在延迟持久化中锁定 storeKey。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+
+## 2026-01-17 01:47
+- 修复 Persona 联系人/会话混入：持久化数据写入 scopeId 标记，加载时校验不匹配则忽略。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/storage/contacts-store.js`
+
+## 2026-01-17 01:23
+- Persona 切换时防止异步 hydrate 覆盖新 scope：为联系人/会话/分组/动态/动态摘要 store 增加 scope token 校验。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/storage/contacts-store.js`
+  - `src/scripts/storage/group-store.js`
+  - `src/scripts/storage/moments-store.js`
+  - `src/scripts/storage/moment-summary-store.js`
+
+## 2026-01-17 01:07
+- 新 Persona 不再自动生成 default 聊天室：空会话时 currentId 为空、相关方法对空会话直接返回；变量面板无会话时不再回落 default。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/ui/variable-panel.js`
+
+## 2026-01-17 00:53
+- 修复 default 聊天室删除后仍会回来的问题：删除当前会话时自动切到其它会话（若存在）。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+
+## 2026-01-17 00:43
+- Persona 切换：避免新 Persona 继续继承旧数据（联系人/会话/动态摘要等），修复新建 Persona 出现旧联系人无头像问题。
+- 修改：
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/storage/group-store.js`
+  - `src/scripts/storage/moments-store.js`
+  - `src/scripts/storage/moment-summary-store.js`
+
 ## 2026-01-15 21:35
 - 未分组联系人区域常驻显示；为空时显示占位并支持拖拽回未分组。
 - 修改：

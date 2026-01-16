@@ -87,7 +87,7 @@
   flex-direction: column;
   width: 100%;
   height: 100vh;
-  height: 100dvh; /* 鍵盤彈出時跟隨視口變化 */
+  height: 100dvh; /* 键盘彈出时跟隨视口变化 */
   position: fixed; /* 固定定位，避免溢出 */
   top: 0;
   left: 0;
@@ -102,7 +102,7 @@
   padding-top: 0;
 
   /* 滚动 */
-  overflow: hidden; /* 僅消息列表滾動，避免鍵盤引發整頁滾動把頂欄推出 */
+  overflow: hidden; /* 仅消息列表滚动，避免键盘引发整页滚动把顶栏推出 */
 
   /* 隐藏滚动条 */
   scrollbar-width: none;
@@ -181,7 +181,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  /* 避免部分 WebView 對 env()/clamp() 計算異常導致頂欄高度不穩定 */
+  /* 避免部分 WebView 对 env()/clamp() 计算异常导致顶栏高度不稳定 */
   background: rgba(230, 230, 230, 0.92);
   /* backdrop-filter: blur(10px); */
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
@@ -258,7 +258,7 @@
   /* 间距 */
   padding-left: 8px;
   padding-right: 8px;
-  padding-top: 14px; /* 首條消息與頂欄留出間距 */
+  padding-top: 14px; /* 首條消息与顶栏留出间距 */
   padding-bottom: calc(var(--qq-size-input-bar) - 48px); /* 为输入框预留空间 */
   margin-bottom: 0;
 
@@ -364,7 +364,7 @@ body[data-creative-wide='on'] .QQ_chat_charmsg[data-creative='1'] .QQ_chat_msgdi
   word-wrap: break-word;
   word-break: break-word;
 
-  /* 長按以菜單為主，避免系統文字選取/呼叫選單干擾 */
+  /* 长按以菜单为主，避免系统文字选取/调用菜单干扰 */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;

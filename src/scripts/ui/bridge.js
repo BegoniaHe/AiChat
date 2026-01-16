@@ -877,7 +877,7 @@ class AppBridge {
       const raw = localStorage.getItem(this.getWorldSessionMapKey());
       return raw ? JSON.parse(raw) : {};
     } catch (err) {
-      logger.warn('world-session map 讀取失敗，重置', err);
+      logger.warn('world-session map 读取失败，重置', err);
       return {};
     }
   }
@@ -888,7 +888,7 @@ class AppBridge {
       if (kv && typeof kv === 'object' && Object.keys(kv).length) {
         this.worldSessionMap = kv;
         localStorage.setItem(this.getWorldSessionMapKey(), JSON.stringify(kv));
-        // 切換當前 session 的世界書
+        // 切换当前 session 的世界书
         if (this.activeSessionId && kv[this.activeSessionId]) {
           this.currentWorldId = kv[this.activeSessionId];
           window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: this.currentWorldId } }));
@@ -896,7 +896,7 @@ class AppBridge {
         logger.info('world-session map hydrated from disk');
       }
     } catch (err) {
-      logger.debug('world-session map 磁碟加載失敗（可能非 Tauri）', err);
+      logger.debug('world-session map 磁盘加载失败（可能非 Tauri）', err);
     }
   }
 
@@ -910,7 +910,7 @@ class AppBridge {
         } catch {}
       }
     } catch (err) {
-      logger.debug('global world id 磁碟加載失敗（可能非 Tauri）', err);
+      logger.debug('global world id 磁盘加载失败（可能非 Tauri）', err);
     }
   }
 
@@ -970,7 +970,7 @@ class AppBridge {
   }
 
   /**
-   * 切換當前會話（影響世界書選中）
+   * 切换当前会话（影响世界书选中）
    */
   setActiveSession(sessionId = 'default') {
     this.activeSessionId = sessionId;
@@ -1141,7 +1141,7 @@ class AppBridge {
     }
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      throw new Error('當前離線，請連接網絡後再試');
+      throw new Error('当前离线，请连接网络后再试');
     }
 
     if (this.isGenerating) {
@@ -1266,7 +1266,7 @@ class AppBridge {
       throw new Error('请先配置 API 信息');
     }
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      throw new Error('當前離線，請連接網絡後再試');
+      throw new Error('当前离线，请连接网络后再试');
     }
     const msgs = Array.isArray(messages) ? messages : [];
     if (!msgs.length) throw new Error('messages 不能为空');
@@ -2928,12 +2928,12 @@ class AppBridge {
       const local = this.worldStore.load(id);
       if (local) return local;
 
-      // 後端佔位（若已實作）
+      // 后端佔位（若已實作）
       try {
         const res = await safeInvoke('get_world_info', { characterId: id });
         return res;
       } catch (err) {
-        logger.debug('後端世界書命令不可用，使用空白', err);
+        logger.debug('后端世界书命令不可用，使用空白', err);
       }
       return null;
     } catch (error) {
@@ -2950,7 +2950,7 @@ class AppBridge {
       const id = characterId || this.currentCharacterId;
       await this.worldStore.save(id, data);
 
-      // 如果後端支持可同步保存（忽略失敗）
+      // 如果后端支持可同步保存（忽略失败）
       safeInvoke('save_world_info', { characterId: id, data }).catch(() => {});
 
       logger.debug('世界书已保存', id);
@@ -3251,7 +3251,7 @@ class AppBridge {
   }
 
   /**
-   * 生成當前世界書的提示串
+   * 生成当前世界书的提示串
    */
   getActiveWorldPrompt() {
     const builtinPart = this.formatWorldPrompt(BUILTIN_PHONE_FORMAT_WORLDBOOK_ID, { matchText: '' });
@@ -3286,7 +3286,7 @@ window.saveWorldInfo = async data => {
   await window.appBridge.saveWorldInfo(window.appBridge.currentCharacterId, data);
 };
 
-// 兼容：從 ST world JSON 導入（期望前端讀取後調用）
+// 兼容：从 ST world JSON 导入（期望前端读取后调用）
 window.importSTWorld = async (jsonObj, name = 'imported') => {
   const simplified = convertSTWorld(jsonObj, name);
   await window.appBridge.saveWorldInfo(name, simplified);

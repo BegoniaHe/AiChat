@@ -1,5 +1,5 @@
 /**
- * 世界書指示器：顯示當前啟用的世界書名稱
+ * 世界书指示器：显示当前启用的世界书名称
  */
 
 export class WorldInfoIndicator {
@@ -7,7 +7,7 @@ export class WorldInfoIndicator {
         this.el = document.createElement('span');
         this.el.className = 'badge';
         this.el.style.marginLeft = '4px';
-        this.setName('未啟用');
+        this.setName('未启用');
     }
 
     mount(target) {
@@ -15,6 +15,6 @@ export class WorldInfoIndicator {
     }
 
     setName(name) {
-        this.el.textContent = `世界書: ${name}`;
+        this.el.textContent = `人物设定: ${name}`;
     }
 }

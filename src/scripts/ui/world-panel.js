@@ -1,7 +1,7 @@
 /**
- * 世界书管理面板（簡易版）
- * - 查看已保存的世界書列表（localStorage）
- * - 從 ST JSON 文本導入並保存為簡化格式
+ * 世界书管理面板（简易版）
+ * - 查看已保存的世界书列表（localStorage）
+ * - 从 ST JSON 文本导入并保存为简化格式
  */
 
 import { convertSTWorld } from '../storage/worldinfo.js';
@@ -14,8 +14,9 @@ export class WorldPanel {
         this.overlay = null;
         this.panel = null;
         this.listEl = null;
-        this.importTextarea = null;
         this.fileInput = null;
+        this.fileBtn = null;
+        this.fileNameEl = null;
         this.scope = 'session'; // session | global
         this.contactsStore = contactsStore;
         this.getSessionId = typeof getSessionId === 'function' ? getSessionId : null;
@@ -55,14 +56,14 @@ export class WorldPanel {
             const indicator = this.panel?.querySelector('#world-current');
             if (indicator) {
                 indicator.textContent = this.scope === 'global'
-                    ? `全局當前：${currentId || '未啟用'}`
-                    : (isGroupSession ? `群聊 ${contact?.name || sessionId}：按成员绑定世界书` : `會話 ${sessionId} 當前：${currentId || '未啟用'}`);
+                    ? `全局当前：${currentId || '未启用'}`
+                    : (isGroupSession ? `群聊 ${contact?.name || sessionId}：按成员绑定世界书` : `会话 ${sessionId} 当前：${currentId || '未启用'}`);
             }
             const names = await window.appBridge.listWorlds?.();
             const visibleNames = (names || []).filter((name) => name !== BUILTIN_PHONE_FORMAT_WORLDBOOK_ID);
             if (!visibleNames.length) {
                 const li = document.createElement('li');
-                li.textContent = '（暫無世界書）';
+                li.textContent = '（暂无世界书）';
                 li.style.color = '#888';
                 this.listEl.appendChild(li);
                 return;
@@ -163,7 +164,7 @@ export class WorldPanel {
                 li.style.padding = '6px 8px';
                 li.style.borderBottom = '1px solid #f0f0f0';
                 li.style.cursor = 'pointer';
-                li.title = '雙擊編輯世界書';
+                li.title = '双击编辑世界书';
                 if (name === currentId) {
                     li.style.background = '#f8fafc';
                     li.style.border = '1px solid #e2e8f0';
@@ -194,7 +195,7 @@ export class WorldPanel {
                     activate.disabled = true;
                     activate.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:not-allowed;opacity:0.7;';
                 } else {
-                    activate.textContent = name === currentId ? '當前' : '啟用';
+                    activate.textContent = name === currentId ? '当前' : '启用';
                     activate.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
                     if (name === currentId) {
                         activate.disabled = true;
@@ -208,7 +209,7 @@ export class WorldPanel {
                         }
                         const data = await window.appBridge.getWorldInfo(name);
                         logger.info('Activated world', name, data);
-                        window.toastr?.success(`已啟用世界書：${name}`);
+                        window.toastr?.success(`已启用世界书：${name}`);
                         window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: name } }));
                         await this.refreshList();
                     };
@@ -230,7 +231,7 @@ export class WorldPanel {
                     } else {
                         window.appBridge?.bindWorldToSession?.(sessionId, '', { silent: false });
                     }
-                    window.toastr?.success('已停用世界書');
+                    window.toastr?.success('已停用世界书');
                     await this.refreshList();
                 };
 
@@ -245,16 +246,16 @@ export class WorldPanel {
                 };
 
                 const exportBtn = document.createElement('button');
-                exportBtn.textContent = '導出';
+                exportBtn.textContent = '导出';
                 exportBtn.style.cssText = 'padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f5f5f5;cursor:pointer;';
                 exportBtn.onclick = async () => {
                     const data = await window.appBridge.getWorldInfo(name);
                     const text = JSON.stringify(data || {}, null, 2);
                     if (navigator.clipboard?.writeText) {
                         await navigator.clipboard.writeText(text);
-                        window.toastr?.success('已複製到剪貼簿');
+                        window.toastr?.success('已复制到剪贴板');
                     } else {
-                        // 退化：下載文件
+                        // 退化：下载文件
                         const blob = new Blob([text], { type: 'application/json' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
@@ -262,7 +263,7 @@ export class WorldPanel {
                         a.download = `${name}.json`;
                         a.click();
                         URL.revokeObjectURL(url);
-                        window.toastr?.success('已觸發下載');
+                        window.toastr?.success('已触发下载');
                     }
                 };
 
@@ -275,7 +276,7 @@ export class WorldPanel {
                 this.listEl.appendChild(li);
             });
         } catch (err) {
-            logger.error('刷新世界書列表失敗', err);
+            logger.error('刷新世界书列表失败', err);
         }
     }
 
@@ -284,19 +285,19 @@ export class WorldPanel {
             const data = await window.appBridge.getWorldInfo(name);
             await this.editor.show(name, data);
         } catch (err) {
-            logger.error('打開世界書編輯器失敗', err);
-            window.toastr?.error('打開編輯器失敗');
+            logger.error('打开世界书编辑器失败', err);
+            window.toastr?.error('打开编辑器失败');
         }
     }
 
     async onNewWorld() {
         try {
-            const raw = prompt('新建世界書名稱', '新世界書');
+            const raw = prompt('新建世界书名称', '新世界书');
             const name = String(raw || '').trim();
             if (!name) return;
             const existing = await window.appBridge.listWorlds?.();
             if (Array.isArray(existing) && existing.includes(name)) {
-                window.toastr?.warning('名稱已存在，請換一個');
+                window.toastr?.warning('名称已存在，请换一个');
                 return;
             }
 
@@ -309,15 +310,15 @@ export class WorldPanel {
                 await window.appBridge.setCurrentWorld(name);
             }
 
-            window.toastr?.success(`已新建並啟用：${name}`);
+            window.toastr?.success(`已新建并启用：${name}`);
             window.dispatchEvent(new CustomEvent('worldinfo-changed', { detail: { worldId: name } }));
             await this.refreshList();
 
             // Open editor immediately for convenience
             await this.openEditor(name);
         } catch (err) {
-            logger.error('新建世界書失敗', err);
-            window.toastr?.error('新建世界書失敗');
+            logger.error('新建世界书失败', err);
+            window.toastr?.error('新建世界书失败');
         }
     }
 
@@ -353,48 +354,61 @@ export class WorldPanel {
         this.panel.onclick = (e) => e.stopPropagation();
 
         this.panel.innerHTML = `
-            <h3 style="margin: 0 0 12px; color: #0f172a;">世界書管理</h3>
-            <div id="world-current" style="margin: -4px 0 12px; color:#475569; font-size:13px;">當前：未啟用</div>
+            <h3 style="margin: 0 0 12px; color: #0f172a;">世界书管理</h3>
+            <div id="world-current" style="margin: -4px 0 12px; color:#475569; font-size:13px;">当前：未启用</div>
             <div style="display:flex; gap:12px; flex-wrap: wrap;">
                 <div style="flex:1 1 45%; min-width: 200px;">
                     <div style="font-weight:700; margin-bottom:6px;">已保存</div>
                     <ul id="world-list" style="list-style:none; padding:8px; border:1px solid #eee; border-radius:8px; max-height:220px; overflow:auto; margin:0;"></ul>
                     <div style="display:flex; gap:8px; margin-top:8px;">
                         <button id="world-new" style="flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#019aff; color:#fff; font-weight:700;">新增</button>
-                        <button id="world-export-current" style="flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">導出當前</button>
+                        <button id="world-export-current" style="flex:1; padding:8px 10px; border:1px solid #ddd; border-radius:8px; background:#f5f5f5;">导出当前</button>
                     </div>
                 </div>
                 <div style="flex:1 1 45%; min-width: 200px;">
-                    <div style="font-weight:700; margin-bottom:6px;">導入 ST JSON</div>
-                    <input id="world-file" type="file" accept=".json,application/json" style="width:100%; margin-bottom:8px;">
-                    <textarea id="world-json" placeholder="可選：貼上 ST 世界書 JSON 內容" style="width:100%; height:160px; padding:8px; border:1px solid #ddd; border-radius:8px; resize:vertical;"></textarea>
-                    <div style="color:#94a3b8; font-size:12px; margin:6px 0;">名稱將取自 JSON 的 name 或文件名（無需手動填寫）</div>
+                    <div style="font-weight:700; margin-bottom:6px;">导入 ST JSON</div>
+                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                        <button id="world-file-btn" type="button" style="padding:6px 10px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5; cursor:pointer;">选择文件</button>
+                        <span id="world-file-name" style="font-size:12px; color:#64748b;">未选择文件</span>
+                    </div>
+                    <input id="world-file" type="file" accept=".json,application/json" style="display:none;">
+                    <div style="color:#94a3b8; font-size:12px; margin:6px 0;">名称将取自 JSON 的 name 或文件名（无需手动填写）</div>
                     <div style="display:flex; gap:8px; margin-top:8px; justify-content:flex-end;">
-                        <button id="world-import" style="padding:8px 14px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5;">導入</button>
-                        <button id="world-close" style="padding:8px 14px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5;">關閉</button>
+                        <button id="world-import" style="padding:8px 14px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5;">导入</button>
+                        <button id="world-close" style="padding:8px 14px; border-radius:8px; border:1px solid #ddd; background:#f5f5f5;">关闭</button>
                     </div>
                 </div>
             </div>
         `;
 
         this.listEl = this.panel.querySelector('#world-list');
-        this.importTextarea = this.panel.querySelector('#world-json');
         this.fileInput = this.panel.querySelector('#world-file');
+        this.fileBtn = this.panel.querySelector('#world-file-btn');
+        this.fileNameEl = this.panel.querySelector('#world-file-name');
 
         this.panel.querySelector('#world-close').onclick = () => this.hide();
         this.panel.querySelector('#world-import').onclick = () => this.onImport();
         this.panel.querySelector('#world-new').onclick = () => this.onNewWorld();
         this.panel.querySelector('#world-export-current').onclick = () => this.onExportCurrent();
+        if (this.fileBtn && this.fileInput) {
+            this.fileBtn.onclick = () => this.fileInput?.click();
+        }
+        if (this.fileInput) {
+            this.fileInput.onchange = () => {
+                const name = this.fileInput?.files?.[0]?.name || '';
+                if (this.fileNameEl) this.fileNameEl.textContent = name || '未选择文件';
+            };
+        }
+        if (this.fileNameEl) this.fileNameEl.textContent = '未选择文件';
 
         document.body.appendChild(this.overlay);
         document.body.appendChild(this.panel);
     }
 
     async onImport() {
-        let jsonText = this.importTextarea.value.trim();
+        let jsonText = '';
         let nameHint = '';
 
-        // 文件优先
         const file = this.fileInput?.files?.[0];
         if (file) {
             nameHint = file.name.replace(/\\.json$/i, '');
@@ -402,7 +416,7 @@ export class WorldPanel {
         }
 
         if (!jsonText) {
-            window.toastr?.warning('請選擇 ST JSON 文件或貼上內容');
+            window.toastr?.warning('请选择 ST JSON 文件');
             return;
         }
 
@@ -420,9 +434,9 @@ export class WorldPanel {
                     const ok = confirm(`检测到世界书包含绑定的正规表达式（${boundSets.length} 组）。是否一并导入并绑定？\n取消：仅导入世界书，不导入正则。`);
                     if (!ok) {
                         await this.refreshList();
-                        window.toastr?.success(`導入成功：${name}`);
+                        window.toastr?.success(`导入成功：${name}`);
                         if (this.fileInput) this.fileInput.value = '';
-                        this.importTextarea.value = '';
+                        if (this.fileNameEl) this.fileNameEl.textContent = '未选择文件';
                         return;
                     }
 
@@ -489,22 +503,22 @@ export class WorldPanel {
             }
 
             await this.refreshList();
-            window.toastr?.success(`導入成功：${name}`);
+            window.toastr?.success(`导入成功：${name}`);
             if (this.fileInput) this.fileInput.value = '';
-            this.importTextarea.value = '';
+            if (this.fileNameEl) this.fileNameEl.textContent = '未选择文件';
         } catch (err) {
-            logger.error('導入世界書失敗', err);
-            window.toastr?.error('導入失敗，請檢查 JSON', '錯誤');
+            logger.error('导入世界书失败', err);
+            window.toastr?.error('导入失败，请检查 JSON', '错误');
         }
     }
 
     async onExportCurrent() {
         const current = this.scope === 'global'
-            ? (window.appBridge.globalWorldId || '未啟用')
-            : (window.appBridge.currentWorldId || '未啟用');
+            ? (window.appBridge.globalWorldId || '未启用')
+            : (window.appBridge.currentWorldId || '未启用');
         const data = await window.appBridge.getWorldInfo(current);
         if (!data) {
-            window.toastr?.warning('沒有可導出的世界書');
+            window.toastr?.warning('没有可导出的世界书');
             return;
         }
         const payload = { ...(data || {}), name: current };
@@ -521,7 +535,7 @@ export class WorldPanel {
         const text = JSON.stringify(payload, null, 2);
         if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(text);
-            window.toastr?.success(`已複製：${current}`);
+            window.toastr?.success(`已复制：${current}`);
         } else {
             const blob = new Blob([text], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -530,7 +544,7 @@ export class WorldPanel {
             a.download = `${current}.json`;
             a.click();
             URL.revokeObjectURL(url);
-            window.toastr?.success(`已觸發下載：${current}.json`);
+            window.toastr?.success(`已触发下载：${current}.json`);
         }
     }
 
