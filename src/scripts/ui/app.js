@@ -3453,6 +3453,12 @@ ${listPart || '-（无）'}
       chatStore.markRead(sid, messageId);
     } catch {}
   };
+  const isSessionActive = (sessionId) => {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return false;
+    if (!isChatRoomVisible()) return false;
+    return String(chatStore.getCurrent() || '').trim() === sid;
+  };
 
   const enterChatRoom = async (sessionId, sessionName, originPage = activePage) => {
     chatOriginPage = originPage || 'chat';
@@ -6007,7 +6013,7 @@ ${listPart || '-（无）'}
 
         if (creativeMode) {
           // 创意写作模式：完整长文输出，不解析线上格式
-          ui.showTyping(assistantAvatar);
+          if (isSessionActive(sessionId)) ui.showTyping(assistantAvatar);
           const stream = await window.appBridge.generate(text, llmContext(text));
           let full = '';
           streamCtrl = null;
@@ -6015,21 +6021,23 @@ ${listPart || '-（无）'}
             if (activeGeneration?.cancelled) break;
             full += chunk;
             if (!streamCtrl) {
-              ui.hideTyping();
-              streamCtrl = ui.startAssistantStream({
-                avatar: assistantAvatar,
-                name: '助手',
-                time: formatNowTime(),
-                typing: false,
-              });
-              if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
+              if (isSessionActive(sessionId)) {
+                ui.hideTyping();
+                streamCtrl = ui.startAssistantStream({
+                  avatar: assistantAvatar,
+                  name: '助手',
+                  time: formatNowTime(),
+                  typing: false,
+                });
+                if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
+              }
             }
             const streamText = isMemoryAutoExtractInline() ? stripTableEditBlocks(full) : full;
-            streamCtrl.update(streamText);
+            if (streamCtrl) streamCtrl.update(streamText);
           }
           if (activeGeneration?.cancelled) return;
-          ui.hideTyping();
-          if (!streamCtrl) {
+          if (isSessionActive(sessionId)) ui.hideTyping();
+          if (!streamCtrl && isSessionActive(sessionId)) {
             streamCtrl = ui.startAssistantStream({
               avatar: assistantAvatar,
               name: '助手',
@@ -6065,7 +6073,7 @@ ${listPart || '-（无）'}
           try {
             stored = normalizeCreativeLineBreaks(window.appBridge.applyOutputStoredRegex(finalSource, { depth: 0 }));
             display = normalizeCreativeLineBreaks(window.appBridge.applyOutputDisplayRegex(stored, { depth: 0 }));
-            streamCtrl.update(display);
+            if (streamCtrl) streamCtrl.update(display);
           } catch {}
           const meta = { renderRich: true };
           if (summary) meta.summary = summary;
@@ -6086,7 +6094,11 @@ ${listPart || '-（无）'}
             content: display,
             meta,
           };
-          streamCtrl.finish(parsed);
+          if (streamCtrl) {
+            streamCtrl.finish(parsed);
+          } else if (isSessionActive(sessionId)) {
+            ui.addMessage(parsed);
+          }
           {
             const saved = chatStore.appendMessage(parsed, sessionId);
             autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
@@ -6095,7 +6107,7 @@ ${listPart || '-（无）'}
           sendSucceeded = true;
         } else if (protocolEnabled) {
           // 对话模式（流式）：不逐字显示 AI 原文；只在捕获到完整的“有效标签”后输出解析结果
-          ui.showTyping(assistantAvatar);
+          if (isSessionActive(sessionId)) ui.showTyping(assistantAvatar);
           const parser = createDialogueParser();
           const stream = await window.appBridge.generate(text, llmContext(text));
           let fullRaw = '';
@@ -6128,7 +6140,7 @@ ${listPart || '-（无）'}
                 continue;
               }
               if (ev.type === 'group_chat') {
-                ui.hideTyping();
+                if (isSessionActive(sessionId)) ui.hideTyping();
                 const targetGroupId = resolveGroupChatTargetSessionId(ev.groupName);
                 if (!targetGroupId) {
                   window.toastr?.warning?.('对话回覆格式错误：群聊标签未匹配任何已存在群组，已丢弃');
@@ -6146,7 +6158,7 @@ ${listPart || '-（无）'}
                       name: '系统',
                       time: m?.time || formatNowTime(),
                     };
-                    if (targetGroupId === sessionId) ui.addMessage(parsed);
+                    if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                     chatStore.appendMessage(parsed, targetGroupId);
                     maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                     return;
@@ -6165,17 +6177,17 @@ ${listPart || '-（无）'}
                         depth: 0,
                       })
                     : buildUserMessageFromAI(content, m?.time || formatNowTime());
-                  if (targetGroupId === sessionId) ui.addMessage(parsed);
+                  if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                   const saved = chatStore.appendMessage(parsed, targetGroupId);
                   if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                 });
                 didAnything = true;
                 refreshChatAndContacts();
-                ui.showTyping(assistantAvatar);
+                if (isSessionActive(sessionId)) ui.showTyping(assistantAvatar);
                 continue;
               }
               if (ev.type !== 'private_chat') continue;
-              ui.hideTyping();
+              if (isSessionActive(sessionId)) ui.hideTyping();
 
               // 默认路由到当前 session；若标签指向其他私聊，则创建/写入对应会话（后续群聊/动态会扩展）
               const targetSessionId = resolvePrivateChatTargetSessionId(ev.otherName || characterName);
@@ -6197,7 +6209,7 @@ ${listPart || '-（无）'}
                       time: time || formatNowTime(),
                       depth: 0,
                     });
-                if (targetSessionId === sessionId) {
+                if (isSessionActive(targetSessionId)) {
                   ui.addMessage(parsed);
                 }
                 const saved = chatStore.appendMessage(parsed, targetSessionId);
@@ -6207,11 +6219,11 @@ ${listPart || '-（无）'}
               refreshChatAndContacts();
 
               // Continue waiting animation until stream ends / next tag arrives
-              ui.showTyping(assistantAvatar);
+              if (isSessionActive(sessionId)) ui.showTyping(assistantAvatar);
             }
           }
           if (activeGeneration?.cancelled) return;
-          ui.hideTyping();
+          if (isSessionActive(sessionId)) ui.hideTyping();
           chatStore.setLastRawResponse(fullRaw, sessionId);
           if (isSummaryMemoryEnabled()) {
             const { summary: protocolSummary } = extractSummaryBlock(fullRaw);
@@ -6275,7 +6287,7 @@ ${listPart || '-（无）'}
                           name: '系统',
                           time: m?.time || formatNowTime(),
                         };
-                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+                        if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                         chatStore.appendMessage(parsed, targetGroupId);
                         maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                         return;
@@ -6294,7 +6306,7 @@ ${listPart || '-（无）'}
                             depth: 0,
                           })
                         : buildUserMessageFromAI(content, m?.time || formatNowTime());
-                      if (targetGroupId === sessionId) ui.addMessage(parsed);
+                      if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetGroupId);
                       if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                     });
@@ -6318,7 +6330,7 @@ ${listPart || '-（无）'}
                             time: time || formatNowTime(),
                             depth: 0,
                           });
-                      if (targetSessionId === sessionId) ui.addMessage(parsed);
+                      if (isSessionActive(targetSessionId)) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetSessionId);
                       if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                     });
@@ -6378,7 +6390,7 @@ ${listPart || '-（无）'}
                             name: '系统',
                             time: m?.time || formatNowTime(),
                           };
-                          if (targetGroupId === sessionId) ui.addMessage(parsed);
+                          if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                           chatStore.appendMessage(parsed, targetGroupId);
                           maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                           return;
@@ -6397,7 +6409,7 @@ ${listPart || '-（无）'}
                               depth: 0,
                             })
                           : buildUserMessageFromAI(content, m?.time || formatNowTime());
-                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+                        if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                         const saved = chatStore.appendMessage(parsed, targetGroupId);
                         if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                       });
@@ -6421,7 +6433,7 @@ ${listPart || '-（无）'}
                               time: time || formatNowTime(),
                               depth: 0,
                             });
-                        if (targetSessionId === sessionId) ui.addMessage(parsed);
+                        if (isSessionActive(targetSessionId)) ui.addMessage(parsed);
                         const saved = chatStore.appendMessage(parsed, targetSessionId);
                         if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                       });
@@ -6445,20 +6457,24 @@ ${listPart || '-（无）'}
           sendSucceeded = true;
         } else {
           // 兼容旧逻辑（流式逐字）
-          streamCtrl = ui.startAssistantStream({
-            avatar: assistantAvatar,
-            name: '助手',
-            time: formatNowTime(),
-            typing: true,
-          });
-          if (activeGeneration && activeGeneration.sessionId === sessionId) activeGeneration.streamCtrl = streamCtrl;
+          streamCtrl = isSessionActive(sessionId)
+            ? ui.startAssistantStream({
+                avatar: assistantAvatar,
+                name: '助手',
+                time: formatNowTime(),
+                typing: true,
+              })
+            : null;
+          if (streamCtrl && activeGeneration && activeGeneration.sessionId === sessionId) {
+            activeGeneration.streamCtrl = streamCtrl;
+          }
           const stream = await window.appBridge.generate(text, llmContext(text));
           let full = '';
           for await (const chunk of stream) {
             if (activeGeneration?.cancelled) break;
             full += chunk;
             const streamText = isMemoryAutoExtractInline() ? stripTableEditBlocks(full) : full;
-            streamCtrl.update(streamText);
+            if (streamCtrl) streamCtrl.update(streamText);
           }
           if (activeGeneration?.cancelled) return;
           chatStore.setLastRawResponse(full, sessionId);
@@ -6499,7 +6515,11 @@ ${listPart || '-（无）'}
             ...parseSpecialMessage(display),
             meta: Object.keys(meta).length ? meta : undefined,
           };
-          streamCtrl.finish(parsed);
+          if (streamCtrl) {
+            streamCtrl.finish(parsed);
+          } else if (isSessionActive(sessionId)) {
+            ui.addMessage(parsed);
+          }
           {
             const saved = chatStore.appendMessage(parsed, sessionId);
             autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
@@ -6518,10 +6538,10 @@ ${listPart || '-（无）'}
         // Always include summary request prompt; summary (if present) will be extracted from raw response.
         disableSummaryForThis = !isSummaryMemoryEnabled();
 
-        ui.showTyping(assistantAvatar);
+        if (isSessionActive(sessionId)) ui.showTyping(assistantAvatar);
         const resultRaw = await window.appBridge.generate(text, llmContext(text));
         sendSucceeded = true;
-        ui.hideTyping();
+        if (isSessionActive(sessionId)) ui.hideTyping();
         chatStore.setLastRawResponse(resultRaw, sessionId);
         let stripped = resultRaw;
         if (!protocolEnabled) {
@@ -6571,7 +6591,7 @@ ${listPart || '-（无）'}
             content: display,
             meta,
           };
-          ui.addMessage(parsed);
+          if (isSessionActive(sessionId)) ui.addMessage(parsed);
           {
             const saved = chatStore.appendMessage(parsed, sessionId);
             autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
@@ -6618,7 +6638,7 @@ ${listPart || '-（无）'}
                     name: '系统',
                     time: m?.time || formatNowTime(),
                   };
-                  if (targetGroupId === sessionId) ui.addMessage(parsed);
+                  if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                   chatStore.appendMessage(parsed, targetGroupId);
                   maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                   didAnything = true;
@@ -6638,7 +6658,7 @@ ${listPart || '-（无）'}
                       depth: 0,
                     })
                   : buildUserMessageFromAI(content, m?.time || formatNowTime());
-                if (targetGroupId === sessionId) ui.addMessage(parsed);
+                if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                 const saved = chatStore.appendMessage(parsed, targetGroupId);
                 if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                 didAnything = true;
@@ -6664,7 +6684,7 @@ ${listPart || '-（无）'}
                       time: time || formatNowTime(),
                       depth: 0,
                     });
-                if (targetSessionId === sessionId) ui.addMessage(parsed);
+                if (isSessionActive(targetSessionId)) ui.addMessage(parsed);
                 const saved = chatStore.appendMessage(parsed, targetSessionId);
                 if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                 didAnything = true;
@@ -6725,7 +6745,7 @@ ${listPart || '-（无）'}
                         name: '系统',
                         time: m?.time || formatNowTime(),
                       };
-                      if (targetGroupId === sessionId) ui.addMessage(parsed);
+                      if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                       chatStore.appendMessage(parsed, targetGroupId);
                       maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                       didAnything = true;
@@ -6745,7 +6765,7 @@ ${listPart || '-（无）'}
                           depth: 0,
                         })
                         : buildUserMessageFromAI(content, m?.time || formatNowTime());
-                    if (targetGroupId === sessionId) ui.addMessage(parsed);
+                    if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                     const saved = chatStore.appendMessage(parsed, targetGroupId);
                     if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                     didAnything = true;
@@ -6768,7 +6788,7 @@ ${listPart || '-（无）'}
                           time: time || formatNowTime(),
                           depth: 0,
                         });
-                    if (targetSessionId === sessionId) ui.addMessage(parsed);
+                    if (isSessionActive(targetSessionId)) ui.addMessage(parsed);
                     const saved = chatStore.appendMessage(parsed, targetSessionId);
                     if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                     didAnything = true;
@@ -6815,7 +6835,7 @@ ${listPart || '-（无）'}
                           name: '系统',
                           time: m?.time || formatNowTime(),
                         };
-                        if (targetGroupId === sessionId) ui.addMessage(parsed);
+                        if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                         chatStore.appendMessage(parsed, targetGroupId);
                         maybeApplyGroupSystemOps(parsed.content, targetGroupId);
                         didAnything = true;
@@ -6835,7 +6855,7 @@ ${listPart || '-（无）'}
                             depth: 0,
                           })
                         : buildUserMessageFromAI(content, m?.time || formatNowTime());
-                      if (targetGroupId === sessionId) ui.addMessage(parsed);
+                      if (isSessionActive(targetGroupId)) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetGroupId);
                       if (role === 'assistant') autoMarkReadIfActive(targetGroupId, saved?.id || parsed?.id || '');
                       didAnything = true;
@@ -6858,7 +6878,7 @@ ${listPart || '-（无）'}
                             time: time || formatNowTime(),
                             depth: 0,
                           });
-                      if (targetSessionId === sessionId) ui.addMessage(parsed);
+                      if (isSessionActive(targetSessionId)) ui.addMessage(parsed);
                       const saved = chatStore.appendMessage(parsed, targetSessionId);
                       if (!isMe) autoMarkReadIfActive(targetSessionId, saved?.id || parsed?.id || '');
                       didAnything = true;
@@ -6928,7 +6948,7 @@ ${listPart || '-（无）'}
           ...parseSpecialMessage(display),
           meta: Object.keys(meta).length ? meta : undefined,
         };
-        ui.addMessage(parsed);
+        if (isSessionActive(sessionId)) ui.addMessage(parsed);
         {
           const saved = chatStore.appendMessage(parsed, sessionId);
           autoMarkReadIfActive(sessionId, saved?.id || parsed?.id || '');
@@ -6938,7 +6958,7 @@ ${listPart || '-（无）'}
       }
     } catch (error) {
       streamCtrl?.cancel?.();
-      ui.hideTyping();
+      if (isSessionActive(sessionId)) ui.hideTyping();
       if (error?.cancelled || (activeGeneration?.cancelled && String(error?.name || '') === 'AbortError')) {
         suppressErrorUI = true;
       }
