@@ -2748,7 +2748,7 @@ ${listPart || '-（无）'}
         ui.setInputText(draft || '');
         ui.setSessionLabel(sid);
       }
-      if (inChatRoom && sid) {
+      if (inChatRoom && sid && sidKnown) {
         const c = contactsStore.getContact(sid);
         enterChatRoom(sid, c?.name || sid, page || 'chat');
       }
