@@ -51,6 +51,68 @@ fn sanitize_segment(input: &str) -> String {
     cleaned
 }
 
+fn validate_safe_key(raw: &str, label: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} empty"));
+    }
+    const MAX_LEN: usize = 120;
+    if trimmed.len() > MAX_LEN {
+        return Err(format!("{label} too long"));
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("{label} contains invalid characters"));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn chat_store_v2_base(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_dir = get_data_dir(app)?;
+    Ok(data_dir.join("chat_store_v2"))
+}
+
+fn chat_store_v2_scope_dir(app: &AppHandle, scope: &str) -> Result<PathBuf, String> {
+    let scope_key = if scope.trim().is_empty() {
+        "default".to_string()
+    } else {
+        validate_safe_key(scope, "scope")?
+    };
+    let base = chat_store_v2_base(app)?;
+    Ok(base.join(format!("scope_{scope_key}")))
+}
+
+fn chat_store_v2_thread_dir(
+    app: &AppHandle,
+    scope: &str,
+    session_dir: &str,
+    thread_dir: &str,
+) -> Result<PathBuf, String> {
+    let scope_dir = chat_store_v2_scope_dir(app, scope)?;
+    let session_key = validate_safe_key(session_dir, "session_dir")?;
+    let thread_key = validate_safe_key(thread_dir, "thread_dir")?;
+    Ok(scope_dir.join(format!("session_{session_key}")).join(format!("thread_{thread_key}")))
+}
+
+fn write_json_file(path: &Path, data: &Value) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, json).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "android")]
+    {
+        if let Ok(f) = fs::File::open(path) {
+            unsafe {
+                libc::fsync(f.as_raw_fd());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn decode_data_url(data_url: &str) -> Result<(Vec<u8>, Option<String>), String> {
     let raw = data_url.trim();
     if !raw.starts_with("data:") {
@@ -1101,6 +1163,114 @@ pub async fn load_kv(app: AppHandle, name: String) -> Result<Value, String> {
     }
 
     Ok(data)
+}
+
+/// 读取分片聊天索引
+#[tauri::command]
+pub async fn chat_store_v2_read_index(app: AppHandle, scope: String) -> Result<Value, String> {
+    let dir = chat_store_v2_scope_dir(&app, &scope)?;
+    let file = dir.join("index.json");
+    if !file.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let json = fs::read_to_string(&file).map_err(|e| e.to_string())?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+/// 写入分片聊天索引
+#[tauri::command]
+pub async fn chat_store_v2_write_index(
+    app: AppHandle,
+    scope: String,
+    data: Value,
+) -> Result<(), String> {
+    let dir = chat_store_v2_scope_dir(&app, &scope)?;
+    let file = dir.join("index.json");
+    write_json_file(&file, &data)
+}
+
+/// 读取分片文件
+#[tauri::command]
+pub async fn chat_store_v2_read_part(
+    app: AppHandle,
+    scope: String,
+    session_dir: String,
+    thread_dir: String,
+    part_id: String,
+) -> Result<Value, String> {
+    let dir = chat_store_v2_thread_dir(&app, &scope, &session_dir, &thread_dir)?;
+    let part = validate_safe_key(&part_id, "part_id")?;
+    let file = dir.join(format!("{part}.json"));
+    if !file.exists() {
+        return Ok(serde_json::json!([]));
+    }
+    let json = fs::read_to_string(&file).map_err(|e| e.to_string())?;
+    serde_json::from_str(&json).map_err(|e| e.to_string())
+}
+
+/// 写入分片文件
+#[tauri::command]
+pub async fn chat_store_v2_write_part(
+    app: AppHandle,
+    scope: String,
+    session_dir: String,
+    thread_dir: String,
+    part_id: String,
+    data: Value,
+) -> Result<(), String> {
+    let dir = chat_store_v2_thread_dir(&app, &scope, &session_dir, &thread_dir)?;
+    let part = validate_safe_key(&part_id, "part_id")?;
+    let file = dir.join(format!("{part}.json"));
+    write_json_file(&file, &data)
+}
+
+/// 删除分片文件
+#[tauri::command]
+pub async fn chat_store_v2_delete_part(
+    app: AppHandle,
+    scope: String,
+    session_dir: String,
+    thread_dir: String,
+    part_id: String,
+) -> Result<(), String> {
+    let dir = chat_store_v2_thread_dir(&app, &scope, &session_dir, &thread_dir)?;
+    let part = validate_safe_key(&part_id, "part_id")?;
+    let file = dir.join(format!("{part}.json"));
+    if file.exists() {
+        fs::remove_file(file).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 删除会话内的某个线程（当前/存档）
+#[tauri::command]
+pub async fn chat_store_v2_delete_thread(
+    app: AppHandle,
+    scope: String,
+    session_dir: String,
+    thread_dir: String,
+) -> Result<(), String> {
+    let dir = chat_store_v2_thread_dir(&app, &scope, &session_dir, &thread_dir)?;
+    if dir.exists() {
+        fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 删除会话目录（含全部分片/存档）
+#[tauri::command]
+pub async fn chat_store_v2_delete_session(
+    app: AppHandle,
+    scope: String,
+    session_dir: String,
+) -> Result<(), String> {
+    let scope_dir = chat_store_v2_scope_dir(&app, &scope)?;
+    let session_key = validate_safe_key(&session_dir, "session_dir")?;
+    let dir = scope_dir.join(format!("session_{session_key}"));
+    if dir.exists() {
+        fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// 保存原始回复（用于富文本/创意写作回溯）

@@ -171,14 +171,14 @@ const initApp = async () => {
     contactsStore,
     chatStore,
     getSessionId: () => chatStore.getCurrent(),
-    onSaved: ({ forceRefresh } = {}) => {
+    onSaved: async ({ forceRefresh } = {}) => {
       refreshChatAndContacts();
       const id = chatStore.getCurrent();
       const c = contactsStore.getContact(id);
       const titleEl = document.getElementById('current-chat-title');
       if (titleEl) titleEl.textContent = formatSessionName(id, c);
       if (forceRefresh) {
-        const msgs = chatStore.getMessages(id);
+        const msgs = await chatStore.ensureRecentMessagesLoaded(id);
         ui.clearMessages();
         ui.preloadHistory(decorateMessagesForDisplay(msgs, { sessionId: id }));
       }
@@ -233,7 +233,7 @@ const initApp = async () => {
   const groupSettingsPanel = new GroupSettingsPanel({
     contactsStore,
     chatStore,
-    onSaved: ({ id, forceRefresh } = {}) => {
+    onSaved: async ({ id, forceRefresh } = {}) => {
       try {
         refreshChatAndContacts();
       } catch {}
@@ -241,7 +241,7 @@ const initApp = async () => {
       const cur = chatStore.getCurrent();
       if (cur === id && currentChatTitle) currentChatTitle.textContent = formatSessionName(id, c) || c?.name || id;
       if (forceRefresh && cur === id) {
-        const msgs = chatStore.getMessages(id);
+        const msgs = await chatStore.ensureRecentMessagesLoaded(id);
         ui.clearMessages();
         ui.preloadHistory(decorateMessagesForDisplay(msgs, { sessionId: id }));
       }
@@ -1361,6 +1361,8 @@ ${listPart || '-（无）'}
     for (let i = msgs.length - 1; i >= 0; i--) {
       if (isConversationMessage(msgs[i])) return msgs[i];
     }
+    const fallback = chatStore.getLastMessage?.(sessionId) || null;
+    if (fallback) return fallback;
     return null;
   };
 
@@ -1741,7 +1743,7 @@ ${listPart || '-（无）'}
     if (!el) return;
     const ids = chatStore
       .listSessions()
-      .filter(id => (chatStore.getMessages(id) || []).some(isConversationMessage))
+      .filter(id => chatStore.hasMessages?.(id) || (chatStore.getMessages(id) || []).some(isConversationMessage))
       .slice(0, 50);
     el.innerHTML = '';
     if (!ids.length) {
@@ -2719,7 +2721,7 @@ ${listPart || '-（无）'}
         chatStore.switchSession(sid);
         window.appBridge.setActiveSession(sid);
         syncUserPersonaUI(sid);
-        const msgs = chatStore.getMessages(sid);
+        const msgs = await chatStore.ensureRecentMessagesLoaded(sid);
         const draft = chatStore.getDraft(sid);
         ui.clearMessages();
         {
@@ -3452,7 +3454,7 @@ ${listPart || '-（无）'}
     } catch {}
   };
 
-  const enterChatRoom = (sessionId, sessionName, originPage = activePage) => {
+  const enterChatRoom = async (sessionId, sessionName, originPage = activePage) => {
     chatOriginPage = originPage || 'chat';
     chatList?.classList.add('hidden');
     chatRoom?.classList.remove('hidden');
@@ -3476,7 +3478,6 @@ ${listPart || '-（无）'}
     const contact = contactsStore.getContact(sessionId);
     if (currentChatTitle)
       currentChatTitle.textContent = formatSessionName(sessionId, contact) || sessionName || sessionId;
-    const firstUnreadId = chatStore.getFirstUnreadMessageId(sessionId);
     // 切换会话
     chatStore.switchSession(sessionId);
     window.appBridge.setActiveSession(sessionId);
@@ -3492,7 +3493,8 @@ ${listPart || '-（无）'}
       pendingChatSettingsSessionId = sessionId;
     }
     // 加载历史
-    const history = chatStore.getMessages(sessionId);
+    const history = await chatStore.ensureRecentMessagesLoaded(sessionId);
+    const firstUnreadId = chatStore.getFirstUnreadMessageId(sessionId);
     const PAGE = 90;
     let start = Math.max(0, history.length - PAGE);
     if (firstUnreadId) {
@@ -3731,7 +3733,7 @@ ${listPart || '-（无）'}
   try {
     const sessions = chatStore.listSessions();
     const currentId = chatStore.getCurrent();
-    const history = chatStore.getMessages(currentId);
+    const history = await chatStore.ensureRecentMessagesLoaded(currentId);
     ui.setSessionLabel(currentId);
     if (history && history.length) {
       const PAGE = 90;
@@ -3755,25 +3757,34 @@ ${listPart || '-（无）'}
     if (!ui?.scrollEl || ui.__chatappLazyBound) return;
     ui.__chatappLazyBound = true;
     let loading = false;
-    ui.scrollEl.addEventListener('scroll', () => {
+    ui.scrollEl.addEventListener('scroll', async () => {
       if (loading) return;
       if (ui.scrollEl.scrollTop > 18) return;
       const sid = String(chatStore.getCurrent() || '').trim();
       if (!sid) return;
       const st = chatRenderState.get(sid);
-      if (!st || !Number.isFinite(st.start) || st.start <= 0) return;
+      if (!st || !Number.isFinite(st.start)) return;
       loading = true;
       try {
         const all = chatStore.getMessages(sid) || [];
         const PAGE = 90;
-        const nextStart = Math.max(0, st.start - PAGE);
-        const chunk = all.slice(nextStart, st.start);
-        if (chunk.length) {
-          ui.prependHistory(decorateMessagesForDisplay(chunk, { sessionId: sid }));
-          chatRenderState.set(sid, { start: nextStart });
-          chatStore.prefetchRawOriginalsForMessages?.(chunk, sid).catch(() => {});
-        } else {
+        if (st.start > 0) {
+          const nextStart = Math.max(0, st.start - PAGE);
+          const chunk = all.slice(nextStart, st.start);
+          if (chunk.length) {
+            ui.prependHistory(decorateMessagesForDisplay(chunk, { sessionId: sid }));
+            chatRenderState.set(sid, { start: nextStart });
+            chatStore.prefetchRawOriginalsForMessages?.(chunk, sid).catch(() => {});
+            return;
+          }
           chatRenderState.set(sid, { start: 0 });
+        }
+        if (!chatStore.hasOlderMessages?.(sid)) return;
+        const older = await chatStore.loadOlderMessages(sid, { partCount: 1 });
+        if (older.length) {
+          ui.prependHistory(decorateMessagesForDisplay(older, { sessionId: sid }));
+          chatRenderState.set(sid, { start: 0 });
+          chatStore.prefetchRawOriginalsForMessages?.(older, sid).catch(() => {});
         }
       } finally {
         setTimeout(() => { loading = false; }, 0);
@@ -7253,10 +7264,10 @@ ${listPart || '-（无）'}
       return;
     }
   });
-  const rerenderCurrentSession = () => {
+  const rerenderCurrentSession = async () => {
     try {
       const id = chatStore.getCurrent();
-      const msgs = chatStore.getMessages(id);
+      const msgs = await chatStore.ensureRecentMessagesLoaded(id);
       ui.clearMessages();
       const PAGE = 90;
       const start = Math.max(0, msgs.length - PAGE);
@@ -7300,14 +7311,14 @@ ${listPart || '-（无）'}
   window.addEventListener('regex-changed', () => {
     rerenderCurrentSession();
   });
-  window.addEventListener('session-changed', e => {
+  window.addEventListener('session-changed', async e => {
     const id = e.detail?.id;
     if (id) {
       window.appBridge.setActiveSession(id);
       const c = contactsStore.getContact(id);
       if (currentChatTitle) currentChatTitle.textContent = c?.name || id;
       syncUserPersonaUI(id);
-      const msgs = chatStore.getMessages(id);
+      const msgs = await chatStore.ensureRecentMessagesLoaded(id);
       const draft = chatStore.getDraft(id);
       ui.clearMessages();
       {

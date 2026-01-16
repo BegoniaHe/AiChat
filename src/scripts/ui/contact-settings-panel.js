@@ -807,7 +807,7 @@ export class ContactSettingsPanel {
 
         archives.forEach(arc => {
             const dateStr = new Date(arc.timestamp).toLocaleString();
-            const msgCount = Array.isArray(arc.messages) ? arc.messages.length : 0;
+            const msgCount = Number(arc.messageCount || (Array.isArray(arc.messages) ? arc.messages.length : 0)) || 0;
             const isCurrent = arc.id === currentId;
             const row = document.createElement('div');
             row.style.cssText = `display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; background:${isCurrent ? '#eff6ff' : '#fff'}; border-left:${isCurrent ? '3px solid #019aff' : 'none'};`;
@@ -827,7 +827,7 @@ export class ContactSettingsPanel {
                         currentSnapshot = await buildMemoryTableSnapshot({ sessionId: sid, isGroup: false });
                     }
                     const targetSnapshot = arc?.memoryTableSnapshot;
-                    const loaded = this.chatStore.loadArchivedMessages(arc.id, sid, { memoryTableSnapshot: currentSnapshot });
+                    const loaded = await this.chatStore.loadArchivedMessages(arc.id, sid, { memoryTableSnapshot: currentSnapshot });
                     if (loaded && memoryTableOn && targetSnapshot) {
                         try {
                             await applyMemoryTableSnapshot({ sessionId: sid, isGroup: false, snapshot: targetSnapshot });

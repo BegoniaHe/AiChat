@@ -2133,3 +2133,15 @@
   - `src/scripts/utils/media-assets.js`
   - `src-tauri/src/commands.rs`
   - `src-tauri/src/lib.rs`
+
+## 2026-01-16
+- 分片聊天存储（chat_store_v2）：新增索引/分片读写与会话清理指令，前端写入/更新/删除与按需加载逻辑落地。
+- ChatStore v2 迁移：旧 v1 会话迁移成分片，归档改为记录 messageCount，加载最近分片并支持滚动拉取更早消息。
+- UI 接入：进入会话/恢复状态时异步加载最近分片，滚动到顶加载更早分片，存档加载改为 await。
+- 修改：
+  - `src-tauri/src/commands.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/scripts/storage/chat-store.js`
+  - `src/scripts/ui/app.js`
+  - `src/scripts/ui/contact-settings-panel.js`
+  - `src/scripts/ui/group-chat-panels.js`

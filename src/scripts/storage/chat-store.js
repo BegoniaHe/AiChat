@@ -14,6 +14,13 @@ const MAX_PERSIST_STRING_CHARS = 180_000;
 const MAX_PERSIST_RAW_SOURCE_CHARS = 600_000;
 const MAX_PERSIST_DATA_URL_CHARS = 4096;
 const MAX_RAW_ORIGINAL_AUTOLOAD = 5;
+const CHAT_STORE_V2_VERSION = 1;
+const V2_PART_MESSAGE_LIMIT = 160;
+const V2_PART_CHAR_LIMIT = 320_000;
+const V2_RECENT_PARTS = 2;
+
+const isConversationMessage = msg =>
+  msg && (msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system');
 
 const isDataUrl = s => typeof s === 'string' && s.startsWith('data:') && s.length > MAX_PERSIST_DATA_URL_CHARS;
 const isCreativeAssistant = msg => msg?.role === 'assistant' && msg?.meta?.renderRich;
@@ -25,6 +32,44 @@ const getGlobalChatColorDefaults = () => {
   const bubble = String(settings.chatDefaultBubbleColor || '').trim() || DEFAULT_CHAT_BUBBLE_COLOR;
   const text = String(settings.chatDefaultTextColor || '').trim() || DEFAULT_CHAT_TEXT_COLOR;
   return { bubbleColor: bubble, textColor: text };
+};
+
+const makeShardKey = (prefix = 't') => {
+  const base = `${Date.now().toString(36)}_${Math.random().toString(16).slice(2, 8)}`;
+  return `${prefix}_${base}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+};
+
+const estimateMessageChars = msg => {
+  if (!msg || typeof msg !== 'object') return 0;
+  let total = 0;
+  const pick = ['content', 'raw', 'rawSource', 'raw_source'];
+  for (const key of pick) {
+    if (typeof msg[key] === 'string') total += msg[key].length;
+  }
+  try {
+    const meta = msg.meta;
+    if (meta && typeof meta === 'object') {
+      for (const key of Object.keys(meta)) {
+        if (typeof meta[key] === 'string') total += meta[key].length;
+      }
+    }
+  } catch {}
+  return total;
+};
+
+const snapshotMessage = msg => {
+  if (!msg || typeof msg !== 'object') return null;
+  const content = typeof msg.content === 'string' ? msg.content.slice(0, 4000) : '';
+  return {
+    id: msg.id || '',
+    role: msg.role || '',
+    content,
+    timestamp: Number(msg.timestamp || 0) || Date.now(),
+    time: msg.time || '',
+    name: msg.name || '',
+    type: msg.type || '',
+    status: msg.status || '',
+  };
 };
 
 const clampString = (value, max = MAX_PERSIST_STRING_CHARS) => {
@@ -89,34 +134,40 @@ const sliceTailWithinChars = (arr, getText, { maxItems, maxChars } = {}) => {
 
 const MAX_WALLPAPER_DATA_URL_CHARS = 200000;
 
-const sanitizeSessionForPersist = session => {
+const sanitizeSessionForPersist = (session, options = {}) => {
   if (!session || typeof session !== 'object') return session;
   const out = { ...session };
+  delete out._loadedThreadKey;
+  const skipMessages = Boolean(options?.skipMessages);
 
-  const messagesRaw = Array.isArray(out.messages) ? out.messages : [];
+  const messagesRaw = skipMessages ? [] : Array.isArray(out.messages) ? out.messages : [];
   const sanitizedMessages = messagesRaw.map(sanitizeMessageForPersist);
-  out.messages = sliceTailWithinChars(
-    sanitizedMessages,
-    m => {
-      if (!m || typeof m !== 'object') return '';
-      const a = typeof m.content === 'string' ? m.content : '';
-      const b = typeof m.raw === 'string' ? m.raw : '';
-      return a + b;
-    },
-    { maxItems: MAX_PERSIST_MESSAGES_PER_SESSION, maxChars: MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION },
-  );
+  out.messages = skipMessages
+    ? []
+    : sliceTailWithinChars(
+        sanitizedMessages,
+        m => {
+          if (!m || typeof m !== 'object') return '';
+          const a = typeof m.content === 'string' ? m.content : '';
+          const b = typeof m.raw === 'string' ? m.raw : '';
+          return a + b;
+        },
+        { maxItems: MAX_PERSIST_MESSAGES_PER_SESSION, maxChars: MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION },
+      );
 
   // If lastRead pointer points to a trimmed-away message, fall back to last existing message id.
-  try {
-    const lr = String(out.lastReadMessageId || '');
-    if (lr) {
-      const exists = out.messages.some(m => String(m?.id || '') === lr);
-      if (!exists) {
-        const last = out.messages.length ? out.messages[out.messages.length - 1] : null;
-        out.lastReadMessageId = last?.id ? String(last.id) : '';
+  if (!skipMessages) {
+    try {
+      const lr = String(out.lastReadMessageId || '');
+      if (lr) {
+        const exists = out.messages.some(m => String(m?.id || '') === lr);
+        if (!exists) {
+          const last = out.messages.length ? out.messages[out.messages.length - 1] : null;
+          out.lastReadMessageId = last?.id ? String(last.id) : '';
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   if (typeof out.draft === 'string') out.draft = clampString(out.draft, 20_000);
 
@@ -159,17 +210,23 @@ const sanitizeSessionForPersist = session => {
       .map(a => {
         if (!a || typeof a !== 'object') return null;
         const arc = { ...a };
-        const msgs = Array.isArray(arc.messages) ? arc.messages.map(sanitizeMessageForPersist) : [];
-        arc.messages = sliceTailWithinChars(
-          msgs,
-          m => {
-            if (!m || typeof m !== 'object') return '';
-            const a = typeof m.content === 'string' ? m.content : '';
-            const b = typeof m.raw === 'string' ? m.raw : '';
-            return a + b;
-          },
-          { maxItems: MAX_PERSIST_ARCHIVE_MESSAGES, maxChars: MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION },
-        );
+        const msgs = skipMessages
+          ? []
+          : Array.isArray(arc.messages)
+          ? arc.messages.map(sanitizeMessageForPersist)
+          : [];
+        arc.messages = skipMessages
+          ? []
+          : sliceTailWithinChars(
+              msgs,
+              m => {
+                if (!m || typeof m !== 'object') return '';
+                const a = typeof m.content === 'string' ? m.content : '';
+                const b = typeof m.raw === 'string' ? m.raw : '';
+                return a + b;
+              },
+              { maxItems: MAX_PERSIST_ARCHIVE_MESSAGES, maxChars: MAX_PERSIST_TOTAL_TEXT_CHARS_PER_SESSION },
+            );
         // Snapshot summaries in archive are optional; keep them small if present.
         if (Array.isArray(arc.summaries)) {
           arc.summaries = arc.summaries
@@ -231,12 +288,12 @@ const sanitizeSessionForPersist = session => {
   return out;
 };
 
-const sanitizeStateForPersist = state => {
+const sanitizeStateForPersist = (state, options = {}) => {
   const src = state && typeof state === 'object' ? state : { sessions: {}, currentId: 'default' };
   const sessions = src.sessions && typeof src.sessions === 'object' ? src.sessions : {};
   const nextSessions = {};
   for (const [sid, session] of Object.entries(sessions)) {
-    nextSessions[sid] = sanitizeSessionForPersist(session);
+    nextSessions[sid] = sanitizeSessionForPersist(session, options);
   }
   return { ...src, sessions: nextSessions };
 };
@@ -281,6 +338,436 @@ const safeInvoke = async (cmd, args) => {
   return invoker(cmd, args);
 };
 
+class ChatStoreV2 {
+  constructor({ scopeId = '' } = {}) {
+    this.scopeId = normalizeScopeId(scopeId);
+    this.index = { version: CHAT_STORE_V2_VERSION, sessions: {} };
+    this.available = false;
+    this._queue = Promise.resolve();
+  }
+
+  _normalizeIndex(raw) {
+    if (!raw || typeof raw !== 'object') return { version: CHAT_STORE_V2_VERSION, sessions: {} };
+    const sessions = raw.sessions && typeof raw.sessions === 'object' ? raw.sessions : {};
+    return { version: CHAT_STORE_V2_VERSION, sessions: { ...sessions } };
+  }
+
+  _makeThread() {
+    return {
+      threadDir: makeShardKey('t'),
+      parts: [],
+      total: 0,
+      lastMessageAt: 0,
+      lastMessage: null,
+      nextPart: 1,
+    };
+  }
+
+  async init() {
+    try {
+      const data = await safeInvoke('chat_store_v2_read_index', { scope: this.scopeId });
+      this.index = this._normalizeIndex(data);
+      this.available = true;
+      return true;
+    } catch (err) {
+      this.available = false;
+      this.index = { version: CHAT_STORE_V2_VERSION, sessions: {} };
+      logger.debug('chat store v2 init failed (可能非 Tauri)', err);
+      return false;
+    }
+  }
+
+  async setScope(scopeId = '') {
+    this.scopeId = normalizeScopeId(scopeId);
+    return this.init();
+  }
+
+  enqueue(task) {
+    this._queue = this._queue.then(task).catch(err => {
+      logger.warn('chat store v2 task failed', err);
+    });
+    return this._queue;
+  }
+
+  ensureSession(sessionId) {
+    const sid = String(sessionId || '').trim();
+    if (!sid) return null;
+    if (!this.index.sessions[sid]) {
+      this.index.sessions[sid] = { dir: makeShardKey('s'), current: this._makeThread(), archives: {} };
+    }
+    const entry = this.index.sessions[sid];
+    if (!entry.dir) entry.dir = makeShardKey('s');
+    if (!entry.current || typeof entry.current !== 'object') entry.current = this._makeThread();
+    if (!entry.archives || typeof entry.archives !== 'object') entry.archives = {};
+    return entry;
+  }
+
+  _ensureThread(entry, archiveId = '') {
+    if (!entry) return null;
+    const aid = String(archiveId || '').trim();
+    if (!aid) return entry.current;
+    if (!entry.archives[aid]) entry.archives[aid] = this._makeThread();
+    return entry.archives[aid];
+  }
+
+  getThread(sessionId, archiveId = '') {
+    const entry = this.index.sessions[String(sessionId || '').trim()] || null;
+    if (!entry) return null;
+    const aid = String(archiveId || '').trim();
+    return aid ? entry.archives?.[aid] || null : entry.current || null;
+  }
+
+  getThreadParts(sessionId, archiveId = '') {
+    const thread = this.getThread(sessionId, archiveId);
+    return Array.isArray(thread?.parts) ? thread.parts : [];
+  }
+
+  getThreadTotal(sessionId, archiveId = '') {
+    const thread = this.getThread(sessionId, archiveId);
+    return Number(thread?.total || 0) || 0;
+  }
+
+  getLastMessageSnapshot(sessionId) {
+    const entry = this.index.sessions[String(sessionId || '').trim()] || null;
+    return entry?.current?.lastMessage || null;
+  }
+
+  async writeIndex() {
+    if (!this.available) return false;
+    try {
+      await safeInvoke('chat_store_v2_write_index', { scope: this.scopeId, data: this.index });
+      return true;
+    } catch (err) {
+      logger.warn('chat store v2 write index failed', err);
+      return false;
+    }
+  }
+
+  async readPart(entry, thread, partId) {
+    if (!this.available || !entry || !thread || !partId) return [];
+    return safeInvoke('chat_store_v2_read_part', {
+      scope: this.scopeId,
+      sessionDir: entry.dir,
+      threadDir: thread.threadDir,
+      partId,
+    });
+  }
+
+  async writePart(entry, thread, partId, messages) {
+    if (!this.available || !entry || !thread || !partId) return false;
+    await safeInvoke('chat_store_v2_write_part', {
+      scope: this.scopeId,
+      sessionDir: entry.dir,
+      threadDir: thread.threadDir,
+      partId,
+      data: messages,
+    });
+    return true;
+  }
+
+  async deletePart(entry, thread, partId) {
+    if (!this.available || !entry || !thread || !partId) return false;
+    await safeInvoke('chat_store_v2_delete_part', {
+      scope: this.scopeId,
+      sessionDir: entry.dir,
+      threadDir: thread.threadDir,
+      partId,
+    });
+    return true;
+  }
+
+  async deleteThread(entry, thread) {
+    if (!this.available || !entry || !thread) return false;
+    await safeInvoke('chat_store_v2_delete_thread', {
+      scope: this.scopeId,
+      sessionDir: entry.dir,
+      threadDir: thread.threadDir,
+    });
+    return true;
+  }
+
+  async deleteSession(sessionId) {
+    if (!this.available) return false;
+    const sid = String(sessionId || '').trim();
+    const entry = this.index.sessions[sid];
+    if (!entry) return false;
+    await safeInvoke('chat_store_v2_delete_session', { scope: this.scopeId, sessionDir: entry.dir });
+    delete this.index.sessions[sid];
+    await this.writeIndex();
+    return true;
+  }
+
+  _nextPartId(thread) {
+    const next = Number(thread?.nextPart || thread?.parts?.length + 1 || 1);
+    if (thread) thread.nextPart = next + 1;
+    return `part_${String(next).padStart(4, '0')}`;
+  }
+
+  _normalizeThreadMeta(thread) {
+    if (!thread || typeof thread !== 'object') return null;
+    if (!Array.isArray(thread.parts)) thread.parts = [];
+    if (!Number.isFinite(thread.total)) thread.total = 0;
+    if (!Number.isFinite(thread.lastMessageAt)) thread.lastMessageAt = 0;
+    if (!Number.isFinite(thread.nextPart)) thread.nextPart = thread.parts.length + 1;
+    return thread;
+  }
+
+  async appendMessage(sessionId, archiveId, message) {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return null;
+    const thread = this._normalizeThreadMeta(this._ensureThread(entry, archiveId));
+    if (!thread) return null;
+    const msgChars = estimateMessageChars(message);
+    const parts = Array.isArray(thread.parts) ? thread.parts : [];
+    let part = parts.length ? parts[parts.length - 1] : null;
+    let createdNewPart = false;
+    const shouldRoll =
+      !part ||
+      (Number(part.count || 0) >= V2_PART_MESSAGE_LIMIT ||
+        (Number(part.chars || 0) + msgChars > V2_PART_CHAR_LIMIT && Number(part.count || 0) > 0));
+    if (shouldRoll) {
+      const partId = this._nextPartId(thread);
+      part = { id: partId, count: 0, chars: 0 };
+      parts.push(part);
+      thread.parts = parts;
+      createdNewPart = true;
+    }
+    const partId = part.id;
+    const existing = await this.readPart(entry, thread, partId);
+    const list = Array.isArray(existing) ? existing : [];
+    list.push(message);
+    await this.writePart(entry, thread, partId, list);
+    part.count = Number(part.count || 0) + 1;
+    part.chars = Number(part.chars || 0) + msgChars;
+    thread.total = Number(thread.total || 0) + 1;
+    const snap = snapshotMessage(message);
+    if (snap) {
+      thread.lastMessage = snap;
+      thread.lastMessageAt = Number(snap.timestamp || Date.now());
+    }
+    await this.writeIndex();
+    return { partId, createdNewPart, threadDir: thread.threadDir };
+  }
+
+  async updateMessage(sessionId, archiveId, messageId, updater, partId = '') {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return null;
+    const thread = this._normalizeThreadMeta(this._ensureThread(entry, archiveId));
+    if (!thread) return null;
+    const targetId = String(messageId || '').trim();
+    if (!targetId) return null;
+    const ids = partId
+      ? [partId]
+      : (Array.isArray(thread.parts) ? thread.parts.map(p => p.id).slice().reverse() : []);
+    for (const pid of ids) {
+      const existing = await this.readPart(entry, thread, pid);
+      const list = Array.isArray(existing) ? existing : [];
+      const idx = list.findIndex(m => String(m?.id || '') === targetId);
+      if (idx === -1) continue;
+      const prev = list[idx];
+      const updated = { ...prev, ...updater };
+      list[idx] = updated;
+      await this.writePart(entry, thread, pid, list);
+      const partMeta = (thread.parts || []).find(p => p.id === pid);
+      if (partMeta) {
+        const diff = estimateMessageChars(updated) - estimateMessageChars(prev);
+        partMeta.chars = Number(partMeta.chars || 0) + diff;
+      }
+      if (thread.lastMessage && String(thread.lastMessage?.id || '') === targetId) {
+        const snap = snapshotMessage(updated);
+        if (snap) {
+          thread.lastMessage = snap;
+          thread.lastMessageAt = Number(snap.timestamp || Date.now());
+        }
+      }
+      await this.writeIndex();
+      return updated;
+    }
+    return null;
+  }
+
+  async _refreshLastMessage(entry, thread) {
+    const parts = Array.isArray(thread?.parts) ? thread.parts : [];
+    if (!parts.length) {
+      thread.lastMessage = null;
+      thread.lastMessageAt = 0;
+      thread.total = 0;
+      return;
+    }
+    const lastPart = parts[parts.length - 1];
+    const existing = await this.readPart(entry, thread, lastPart.id);
+    const list = Array.isArray(existing) ? existing : [];
+    const last = list.length ? list[list.length - 1] : null;
+    const snap = snapshotMessage(last);
+    if (snap) {
+      thread.lastMessage = snap;
+      thread.lastMessageAt = Number(snap.timestamp || Date.now());
+    } else {
+      thread.lastMessage = null;
+      thread.lastMessageAt = 0;
+    }
+  }
+
+  async deleteMessage(sessionId, archiveId, messageId, partId = '') {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return false;
+    const thread = this._normalizeThreadMeta(this._ensureThread(entry, archiveId));
+    if (!thread) return false;
+    const targetId = String(messageId || '').trim();
+    if (!targetId) return false;
+    const ids = partId
+      ? [partId]
+      : (Array.isArray(thread.parts) ? thread.parts.map(p => p.id).slice().reverse() : []);
+    for (const pid of ids) {
+      const existing = await this.readPart(entry, thread, pid);
+      const list = Array.isArray(existing) ? existing : [];
+      const idx = list.findIndex(m => String(m?.id || '') === targetId);
+      if (idx === -1) continue;
+      const removed = list[idx];
+      list.splice(idx, 1);
+      const partMetaIdx = (thread.parts || []).findIndex(p => p.id === pid);
+      const partMeta = partMetaIdx >= 0 ? thread.parts[partMetaIdx] : null;
+      if (list.length) {
+        await this.writePart(entry, thread, pid, list);
+        if (partMeta) {
+          partMeta.count = Math.max(0, Number(partMeta.count || 1) - 1);
+          partMeta.chars = Math.max(0, Number(partMeta.chars || 0) - estimateMessageChars(removed));
+        }
+      } else {
+        await this.deletePart(entry, thread, pid);
+        if (partMetaIdx >= 0) thread.parts.splice(partMetaIdx, 1);
+      }
+      thread.total = Math.max(0, Number(thread.total || 1) - 1);
+      if (!thread.total) {
+        thread.lastMessage = null;
+        thread.lastMessageAt = 0;
+      } else if (thread.lastMessage && String(thread.lastMessage?.id || '') === targetId) {
+        await this._refreshLastMessage(entry, thread);
+      }
+      await this.writeIndex();
+      return true;
+    }
+    return false;
+  }
+
+  async flush() {
+    try {
+      await this._queue;
+    } catch {}
+    return this.writeIndex();
+  }
+
+  async replaceThreadMessages(sessionId, archiveId, messages = []) {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return false;
+    const thread = this._normalizeThreadMeta(this._ensureThread(entry, archiveId));
+    if (!thread) return false;
+    await this.deleteThread(entry, thread);
+    thread.parts = [];
+    thread.total = 0;
+    thread.lastMessage = null;
+    thread.lastMessageAt = 0;
+    thread.nextPart = 1;
+
+    const list = Array.isArray(messages) ? messages : [];
+    if (!list.length) {
+      await this.writeIndex();
+      return true;
+    }
+    let bucket = [];
+    let chars = 0;
+    for (let i = 0; i < list.length; i++) {
+      const msg = list[i];
+      const msgChars = estimateMessageChars(msg);
+      const shouldRoll =
+        bucket.length >= V2_PART_MESSAGE_LIMIT ||
+        (chars + msgChars > V2_PART_CHAR_LIMIT && bucket.length > 0);
+      if (shouldRoll) {
+        const partId = this._nextPartId(thread);
+        await this.writePart(entry, thread, partId, bucket);
+        thread.parts.push({ id: partId, count: bucket.length, chars });
+        thread.total += bucket.length;
+        bucket = [];
+        chars = 0;
+      }
+      bucket.push(msg);
+      chars += msgChars;
+    }
+    if (bucket.length) {
+      const partId = this._nextPartId(thread);
+      await this.writePart(entry, thread, partId, bucket);
+      thread.parts.push({ id: partId, count: bucket.length, chars });
+      thread.total += bucket.length;
+    }
+    const last = list[list.length - 1];
+    const snap = snapshotMessage(last);
+    if (snap) {
+      thread.lastMessage = snap;
+      thread.lastMessageAt = Number(snap.timestamp || Date.now());
+    }
+    await this.writeIndex();
+    return true;
+  }
+
+  async cloneCurrentToArchive(sessionId, archiveId) {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return false;
+    const current = this._normalizeThreadMeta(entry.current);
+    if (!current) return false;
+    const aid = String(archiveId || '').trim();
+    if (!aid) return false;
+    const clone = {
+      threadDir: current.threadDir,
+      parts: Array.isArray(current.parts) ? current.parts.map(p => ({ ...p })) : [],
+      total: Number(current.total || 0) || 0,
+      lastMessageAt: Number(current.lastMessageAt || 0) || 0,
+      lastMessage: current.lastMessage ? { ...current.lastMessage } : null,
+      nextPart: Number(current.nextPart || 1) || 1,
+    };
+    entry.archives[aid] = clone;
+    entry.current = this._makeThread();
+    await this.writeIndex();
+    return true;
+  }
+
+  async resetThread(sessionId, archiveId = '') {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return false;
+    const aid = String(archiveId || '').trim();
+    const thread = this._ensureThread(entry, aid);
+    if (!thread) return false;
+    await this.deleteThread(entry, thread);
+    const next = this._makeThread();
+    if (aid) entry.archives[aid] = next;
+    else entry.current = next;
+    await this.writeIndex();
+    return true;
+  }
+
+  async renameSession(oldId, newId) {
+    const from = String(oldId || '').trim();
+    const to = String(newId || '').trim();
+    if (!from || !to) return false;
+    if (!this.index.sessions[from] || this.index.sessions[to]) return false;
+    this.index.sessions[to] = this.index.sessions[from];
+    delete this.index.sessions[from];
+    await this.writeIndex();
+    return true;
+  }
+
+  async deleteArchive(sessionId, archiveId) {
+    const entry = this.ensureSession(sessionId);
+    if (!entry) return false;
+    const aid = String(archiveId || '').trim();
+    const thread = entry.archives?.[aid];
+    if (!thread) return false;
+    await this.deleteThread(entry, thread);
+    delete entry.archives[aid];
+    await this.writeIndex();
+    return true;
+  }
+}
+
 const readLocalState = (key) => {
   try {
     const raw = localStorage.getItem(key);
@@ -310,6 +797,11 @@ export class ChatStore {
     this.state = sanitizeStateForPersist(this._load());
     this.currentId = this.state.currentId || 'default';
     this.ready = this._hydrateFromDisk();
+    this._skipMessagePersist = false;
+    this._useV2 = false;
+    this._v2 = new ChatStoreV2({ scopeId: this.scopeId });
+    this._v2ThreadState = new Map();
+    this._v2Ready = this._hydrateV2FromDisk();
     this._lsDisabled = false;
     this._lsQuotaWarned = false;
     this._hydrateRetryCount = 0;
@@ -331,6 +823,8 @@ export class ChatStore {
         compactedSummary: null,
         compactedSummaryLastRaw: null,
         lastReadMessageId: '',
+        lastReadAt: 0,
+        unreadCount: 0,
       };
       return;
     }
@@ -344,6 +838,8 @@ export class ChatStore {
     if (typeof s.compactedSummary !== 'object') s.compactedSummary = null;
     if (typeof s.compactedSummaryLastRaw !== 'object') s.compactedSummaryLastRaw = null;
     if (typeof s.lastReadMessageId !== 'string') s.lastReadMessageId = '';
+    if (!Number.isFinite(s.lastReadAt)) s.lastReadAt = 0;
+    if (!Number.isFinite(s.unreadCount)) s.unreadCount = 0;
     // Normalize legacy summaries (string[]) into objects
     try {
       s.detachedSummaries = (s.detachedSummaries || [])
@@ -428,8 +924,233 @@ export class ChatStore {
     }
   }
 
+  _getThreadKey(sessionId, archiveId = '') {
+    const sid = String(sessionId || '').trim();
+    const aid = String(archiveId || '').trim();
+    return `${sid}::${aid || 'current'}`;
+  }
+
+  _getThreadState(threadKey, { reset = false } = {}) {
+    if (reset || !this._v2ThreadState.has(threadKey)) {
+      this._v2ThreadState.set(threadKey, { loadedParts: [], messagePartMap: new Map() });
+    }
+    return this._v2ThreadState.get(threadKey);
+  }
+
+  _clearThreadState(threadKey) {
+    if (!threadKey) return;
+    this._v2ThreadState.delete(threadKey);
+  }
+
+  async _hydrateV2FromDisk() {
+    try {
+      await this.ready;
+    } catch {}
+    const ok = await this._v2.init();
+    if (!ok) return false;
+    this._useV2 = true;
+    this._skipMessagePersist = true;
+    try {
+      const v2Sessions = this._v2.index?.sessions || {};
+      for (const sid of Object.keys(v2Sessions)) {
+        this._ensureSession(sid);
+      }
+    } catch {}
+    try {
+      await this._maybeMigrateToV2();
+    } catch (err) {
+      logger.warn('chat store v2 migrate failed', err);
+    }
+    try {
+      const current = String(this.getCurrent() || '').trim();
+      if (current) {
+        await this._loadRecentMessages(current);
+      }
+      for (const sid of Object.keys(this.state.sessions || {})) {
+        if (sid !== current) {
+          this.state.sessions[sid].messages = [];
+        }
+      }
+    } catch (err) {
+      logger.warn('chat store v2 load recent failed', err);
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('store-hydrated', { detail: { store: 'chat' } }));
+    } catch {}
+    return true;
+  }
+
+  async _maybeMigrateToV2() {
+    if (!this._useV2) return false;
+    const existing = this._v2.index?.sessions || {};
+    const sessions = this.state.sessions || {};
+    let migrated = false;
+    for (const [sid, session] of Object.entries(sessions)) {
+      if (existing && Object.prototype.hasOwnProperty.call(existing, sid)) continue;
+      const hasMessages = (() => {
+        if (Array.isArray(session?.messages) && session.messages.length) return true;
+        const arcs = Array.isArray(session?.archives) ? session.archives : [];
+        return arcs.some(a => Array.isArray(a?.messages) && a.messages.length);
+      })();
+      if (!hasMessages) continue;
+      await this._migrateSessionToV2(sid, session);
+      migrated = true;
+    }
+    if (migrated) {
+      await this._v2.writeIndex();
+    }
+    return migrated;
+  }
+
+  async _migrateSessionToV2(sessionId, session) {
+    const sid = String(sessionId || '').trim();
+    if (!sid || !session) return;
+    this._v2.ensureSession(sid);
+    const currentArchiveId = String(session.currentArchiveId || '').trim();
+    const archives = Array.isArray(session.archives) ? session.archives : [];
+    if (!Number.isFinite(session.lastReadAt)) {
+      const lastReadId = String(session.lastReadMessageId || '').trim();
+      if (lastReadId) {
+        const source = currentArchiveId
+          ? (archives.find(a => String(a?.id || '').trim() === currentArchiveId)?.messages || [])
+          : session.messages;
+        const list = Array.isArray(source) ? source : [];
+        const found = list.find(m => String(m?.id || '') === lastReadId);
+        if (found && Number.isFinite(found.timestamp)) {
+          session.lastReadAt = Number(found.timestamp || 0) || 0;
+        }
+      }
+    }
+    const hasCurrentArchive = currentArchiveId && archives.some(a => String(a?.id || '').trim() === currentArchiveId);
+    if (!currentArchiveId || !hasCurrentArchive) {
+      const raw = Array.isArray(session.messages) ? session.messages : [];
+      const messages = raw.map(sanitizeMessageForPersist);
+      await this._v2.replaceThreadMessages(sid, '', messages);
+    }
+    for (const arc of archives) {
+      if (!arc || typeof arc !== 'object') continue;
+      const aid = String(arc.id || '').trim();
+      if (!aid) continue;
+      const useCurrent = currentArchiveId && aid === currentArchiveId;
+      const source = useCurrent ? session.messages : arc.messages;
+      const raw = Array.isArray(source) ? source : [];
+      const messages = raw.map(sanitizeMessageForPersist);
+      await this._v2.replaceThreadMessages(sid, aid, messages);
+      arc.messageCount = messages.length;
+      if (useCurrent && currentArchiveId) {
+        const thread = this._v2.getThread(sid, aid);
+        if (thread) {
+          thread.lastMessageAt = thread.lastMessageAt || Date.now();
+        }
+      }
+    }
+    // Reset current thread if we were inside an archive
+    if (currentArchiveId) {
+      const entry = this._v2.ensureSession(sid);
+      if (entry && entry.current && entry.current.total) {
+        // keep as-is
+      } else if (entry) {
+        entry.current = entry.current || this._v2._makeThread();
+      }
+    }
+  }
+
+  async _loadRecentMessages(id = this.currentId, archiveId = '', { partCount = V2_RECENT_PARTS } = {}) {
+    if (!this._useV2) return this.getMessages(id);
+    const sid = String(id || '').trim();
+    if (!sid) return [];
+    this._ensureSession(sid);
+    const aid = String(archiveId || '').trim();
+    const entry = this._v2.ensureSession(sid);
+    const thread = this._v2.getThread(sid, aid);
+    if (!entry || !thread) {
+      this.state.sessions[sid].messages = [];
+      return [];
+    }
+    const parts = Array.isArray(thread.parts) ? thread.parts : [];
+    const ids = parts.slice(-partCount).map(p => p.id);
+    const threadKey = this._getThreadKey(sid, aid);
+    const threadState = this._getThreadState(threadKey, { reset: true });
+    const merged = [];
+    for (const partId of ids) {
+      const existing = await this._v2.readPart(entry, thread, partId);
+      const list = Array.isArray(existing) ? existing : [];
+      for (const msg of list) {
+        const mid = String(msg?.id || '');
+        if (mid) threadState.messagePartMap.set(mid, partId);
+      }
+      merged.push(...list);
+    }
+    threadState.loadedParts = ids;
+    this.state.sessions[sid].messages = merged;
+    this.state.sessions[sid]._loadedThreadKey = threadKey;
+    return merged;
+  }
+
+  async ensureRecentMessagesLoaded(id = this.currentId, archiveId = '') {
+    const sid = String(id || '').trim();
+    if (!sid) return [];
+    this._ensureSession(sid);
+    const aid = String(archiveId || this.state.sessions[sid]?.currentArchiveId || '').trim();
+    const threadKey = this._getThreadKey(sid, aid);
+    if (!this._useV2) return this.getMessages(sid);
+    if (this.state.sessions[sid]._loadedThreadKey === threadKey) return this.getMessages(sid);
+    return this._loadRecentMessages(sid, aid);
+  }
+
+  hasOlderMessages(id = this.currentId, archiveId = '') {
+    if (!this._useV2) return false;
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const aid = String(archiveId || this.state.sessions[sid]?.currentArchiveId || '').trim();
+    const thread = this._v2.getThread(sid, aid);
+    if (!thread || !Array.isArray(thread.parts)) return false;
+    const threadKey = this._getThreadKey(sid, aid);
+    const state = this._getThreadState(threadKey);
+    if (!state?.loadedParts?.length) return thread.parts.length > 0;
+    const all = thread.parts.map(p => p.id);
+    const oldest = state.loadedParts[0];
+    const idx = all.indexOf(oldest);
+    return idx > 0;
+  }
+
+  async loadOlderMessages(id = this.currentId, archiveId = '', { partCount = 1 } = {}) {
+    if (!this._useV2) return [];
+    const sid = String(id || '').trim();
+    if (!sid) return [];
+    this._ensureSession(sid);
+    const aid = String(archiveId || this.state.sessions[sid]?.currentArchiveId || '').trim();
+    const entry = this._v2.ensureSession(sid);
+    const thread = this._v2.getThread(sid, aid);
+    if (!entry || !thread || !Array.isArray(thread.parts) || !thread.parts.length) return [];
+    const threadKey = this._getThreadKey(sid, aid);
+    const state = this._getThreadState(threadKey);
+    const all = thread.parts.map(p => p.id);
+    const loaded = state.loadedParts || [];
+    const oldest = loaded.length ? loaded[0] : null;
+    const oldestIdx = oldest ? all.indexOf(oldest) : all.length;
+    const start = Math.max(0, oldestIdx - partCount);
+    const pick = all.slice(start, oldestIdx);
+    if (!pick.length) return [];
+    const older = [];
+    for (const partId of pick) {
+      const existing = await this._v2.readPart(entry, thread, partId);
+      const list = Array.isArray(existing) ? existing : [];
+      for (const msg of list) {
+        const mid = String(msg?.id || '');
+        if (mid) state.messagePartMap.set(mid, partId);
+      }
+      older.push(...list);
+    }
+    state.loadedParts = pick.concat(loaded);
+    const current = this.state.sessions[sid].messages || [];
+    this.state.sessions[sid].messages = older.concat(current);
+    this.state.sessions[sid]._loadedThreadKey = threadKey;
+    return older;
+  }
+
   _persist() {
-    const persistable = () => sanitizeStateForPersist(this.state);
+    const persistable = () => sanitizeStateForPersist(this.state, { skipMessages: this._skipMessagePersist });
     // 1. Fast path: Schedule localStorage shortly (50ms debounce) to skip current frame
     if (this._lsTimer) clearTimeout(this._lsTimer);
     this._lsTimer = setTimeout(() => {
@@ -465,7 +1186,7 @@ export class ChatStore {
   }
 
   async flush() {
-    const data = sanitizeStateForPersist(this.state);
+    const data = sanitizeStateForPersist(this.state, { skipMessages: this._skipMessagePersist });
     try {
       if (!this._lsDisabled) {
         localStorage.setItem(this.storeKey, JSON.stringify(data));
@@ -492,6 +1213,13 @@ export class ChatStore {
     } catch (err) {
       logger.debug('chat store flush save_kv failed (可能非 Tauri)', err);
     }
+    if (this._useV2) {
+      try {
+        await this._v2.flush();
+      } catch (err) {
+        logger.debug('chat store v2 flush failed', err);
+      }
+    }
   }
 
   async setScope(scopeId = '') {
@@ -506,6 +1234,11 @@ export class ChatStore {
     this._diskTimer = null;
     this.scopeId = nextScope;
     this.storeKey = makeScopedKey(BASE_STORE_KEY, this.scopeId);
+    this._useV2 = false;
+    this._skipMessagePersist = false;
+    this._v2ThreadState.clear();
+    this._v2 = new ChatStoreV2({ scopeId: this.scopeId });
+    this._v2Ready = this._hydrateV2FromDisk();
     this._lsDisabled = false;
     this._lsQuotaWarned = false;
     this._hydrateRetryCount = 0;
@@ -640,7 +1373,15 @@ export class ChatStore {
 
   getLastMessage(id = this.currentId) {
     const msgs = this.getMessages(id);
-    return msgs.length ? msgs[msgs.length - 1] : null;
+    if (msgs.length) return msgs[msgs.length - 1];
+    if (this._useV2) {
+      const sid = String(id || '').trim();
+      const curAid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
+      const thread = this._v2.getThread(sid, curAid);
+      const snap = thread?.lastMessage || this._v2.getLastMessageSnapshot(sid);
+      if (snap) return snap;
+    }
+    return null;
   }
 
   appendMessage(message, id = this.currentId) {
@@ -648,6 +1389,25 @@ export class ChatStore {
     const msg = ensureId({ ...message });
     this._persistRawOriginal(msg, id);
     this.state.sessions[id].messages.push(msg);
+    if (msg?.role === 'assistant') {
+      this.state.sessions[id].unreadCount = Number(this.state.sessions[id].unreadCount || 0) + 1;
+    }
+    if (this._useV2) {
+      const sid = String(id || '').trim();
+      const aid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
+      const threadKey = this._getThreadKey(sid, aid);
+      const sanitized = sanitizeMessageForPersist(msg);
+      this._v2.enqueue(async () => {
+        const res = await this._v2.appendMessage(sid, aid, sanitized);
+        if (this.state.sessions[sid]?._loadedThreadKey === threadKey && res?.partId) {
+          const threadState = this._getThreadState(threadKey);
+          if (res.createdNewPart && !threadState.loadedParts.includes(res.partId)) {
+            threadState.loadedParts.push(res.partId);
+          }
+          threadState.messagePartMap.set(String(msg?.id || ''), res.partId);
+        }
+      });
+    }
     this._persist();
     return msg;
   }
@@ -659,12 +1419,25 @@ export class ChatStore {
     const nextId = String(messageId || '').trim();
     if (nextId) {
       this.state.sessions[sid].lastReadMessageId = nextId;
+      this.state.sessions[sid].unreadCount = 0;
+      try {
+        const m = this.findMessage(nextId, sid);
+        if (m && Number.isFinite(m.timestamp)) {
+          this.state.sessions[sid].lastReadAt = Number(m.timestamp || 0) || Date.now();
+        } else {
+          this.state.sessions[sid].lastReadAt = Date.now();
+        }
+      } catch {
+        this.state.sessions[sid].lastReadAt = Date.now();
+      }
       this._persist();
       return;
     }
     const last = this.getLastMessage(sid);
     if (last?.id) {
       this.state.sessions[sid].lastReadMessageId = String(last.id);
+      this.state.sessions[sid].unreadCount = 0;
+      this.state.sessions[sid].lastReadAt = Number(last.timestamp || 0) || Date.now();
       this._persist();
     }
   }
@@ -679,6 +1452,31 @@ export class ChatStore {
     const msgs = this.getMessages(id) || [];
     const lastRead = this.getLastReadMessageId(id);
     const startIdx = lastRead ? msgs.findIndex(m => String(m?.id || '') === lastRead) : -1;
+    if (this._useV2) {
+      const unread = Number(this.state.sessions[id]?.unreadCount || 0);
+      if (startIdx === -1 && unread <= 0) return '';
+      if (startIdx === -1) {
+        const lastReadAt = Number(this.state.sessions[id]?.lastReadAt || 0);
+        if (lastReadAt > 0) {
+          for (let i = 0; i < msgs.length; i++) {
+            const m = msgs[i];
+            if (!m || m.role !== 'assistant') continue;
+            if (Number(m.timestamp || 0) > lastReadAt) return String(m.id || '');
+          }
+        }
+      }
+      if (unread > 0 && startIdx === -1) {
+        let count = 0;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (!m) continue;
+          if (m.role !== 'assistant') continue;
+          count += 1;
+          if (count === unread) return String(m.id || '');
+        }
+        return '';
+      }
+    }
     const from = startIdx >= 0 ? startIdx + 1 : 0;
     for (let i = from; i < msgs.length; i++) {
       const m = msgs[i];
@@ -690,6 +1488,9 @@ export class ChatStore {
 
   getUnreadCount(id = this.currentId) {
     this._ensureSession(id);
+    if (this._useV2 && Number.isFinite(this.state.sessions[id]?.unreadCount)) {
+      return Number(this.state.sessions[id].unreadCount || 0);
+    }
     const msgs = this.getMessages(id) || [];
     const lastRead = this.getLastReadMessageId(id);
     const startIdx = lastRead ? msgs.findIndex(m => String(m?.id || '') === lastRead) : -1;
@@ -701,6 +1502,20 @@ export class ChatStore {
       if (m.role === 'assistant') n++;
     }
     return n;
+  }
+
+  hasMessages(id = this.currentId) {
+    const sid = String(id || '').trim();
+    if (!sid) return false;
+    const msgs = this.getMessages(sid) || [];
+    if (msgs.some(isConversationMessage)) return true;
+    if (this._useV2) {
+      const curAid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
+      if (this._v2.getThreadTotal(sid, curAid) > 0) return true;
+      const snap = this._v2.getLastMessageSnapshot(sid);
+      if (snap && isConversationMessage(snap)) return true;
+    }
+    return false;
   }
 
   setDraft(text, id = this.currentId) {
@@ -754,15 +1569,34 @@ export class ChatStore {
       this.state.sessions[id].draft = '';
       this.state.sessions[id].lastRawResponse = '';
       this.state.sessions[id].lastRawAt = 0;
+      this.state.sessions[id].unreadCount = 0;
+      if (this._useV2) {
+        const sid = String(id || '').trim();
+        const aid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
+        const threadKey = this._getThreadKey(sid, aid);
+        this._clearThreadState(threadKey);
+        this._v2.enqueue(async () => {
+          await this._v2.resetThread(sid, aid);
+        });
+      }
       this._persist();
     }
   }
 
   delete(id) {
+    const sid = String(id || '').trim();
     delete this.state.sessions[id];
     if (this.currentId === id) {
       this.currentId = 'default';
       this.state.currentId = 'default';
+    }
+    if (this._useV2 && sid) {
+      for (const key of this._v2ThreadState.keys()) {
+        if (key.startsWith(`${sid}::`)) this._v2ThreadState.delete(key);
+      }
+      this._v2.enqueue(async () => {
+        await this._v2.deleteSession(sid);
+      });
     }
     this._persist();
   }
@@ -775,6 +1609,11 @@ export class ChatStore {
     if (this.currentId === oldId) {
       this.currentId = newId;
       this.state.currentId = newId;
+    }
+    if (this._useV2) {
+      this._v2.enqueue(async () => {
+        await this._v2.renameSession(oldId, newId);
+      });
     }
     this._persist();
   }
@@ -792,6 +1631,16 @@ export class ChatStore {
   clearMessages(id = this.currentId) {
     if (this.state.sessions[id]) {
       this.state.sessions[id].messages = [];
+      this.state.sessions[id].unreadCount = 0;
+      if (this._useV2) {
+        const sid = String(id || '').trim();
+        const aid = String(this.state.sessions[sid]?.currentArchiveId || '').trim();
+        const threadKey = this._getThreadKey(sid, aid);
+        this._clearThreadState(threadKey);
+        this._v2.enqueue(async () => {
+          await this._v2.resetThread(sid, aid);
+        });
+      }
       this._persist();
     }
   }
@@ -814,6 +1663,20 @@ export class ChatStore {
     if (!changed) return false;
 
     this._deleteRawOriginal(target, id);
+    if (target?.role === 'assistant' && Number(session.unreadCount || 0) > 0) {
+      session.unreadCount = Math.max(0, Number(session.unreadCount || 0) - 1);
+    }
+    if (this._useV2) {
+      const sid = String(id || '').trim();
+      const aid = String(session.currentArchiveId || '').trim();
+      const threadKey = this._getThreadKey(sid, aid);
+      const threadState = this._getThreadState(threadKey);
+      const partId = threadState.messagePartMap.get(targetId);
+      this._v2.enqueue(async () => {
+        await this._v2.deleteMessage(sid, aid, targetId, partId || '');
+      });
+      threadState.messagePartMap.delete(targetId);
+    }
 
     // If we deleted the message that "lastReadMessageId" points to,
     // keep the read pointer stable by moving it to a nearby existing message.
@@ -825,6 +1688,14 @@ export class ChatStore {
           ? String(session.messages[session.messages.length - 1]?.id || '')
           : '';
       session.lastReadMessageId = fallback;
+      if (fallback) {
+        const picked = session.messages.find(m => String(m?.id || '') === fallback);
+        session.lastReadAt = picked && Number.isFinite(picked.timestamp)
+          ? Number(picked.timestamp || 0) || Date.now()
+          : Date.now();
+      } else {
+        session.lastReadAt = 0;
+      }
     }
 
     this._persist();
@@ -840,6 +1711,17 @@ export class ChatStore {
     session.messages[idx] = updated;
     if (typeof updater?.rawOriginal === 'string') {
       this._persistRawOriginal(updated, id);
+    }
+    if (this._useV2) {
+      const sid = String(id || '').trim();
+      const aid = String(session.currentArchiveId || '').trim();
+      const threadKey = this._getThreadKey(sid, aid);
+      const threadState = this._getThreadState(threadKey);
+      const partId = threadState.messagePartMap.get(String(msgId || ''));
+      const sanitized = sanitizeMessageForPersist(updated);
+      this._v2.enqueue(async () => {
+        await this._v2.updateMessage(sid, aid, msgId, sanitized, partId || '');
+      });
     }
     this._persist();
     return updated;
@@ -914,14 +1796,18 @@ export class ChatStore {
 
   archiveCurrentMessages(id = this.currentId, name = '', forceCreate = false, options = {}) {
     if (!this.state.sessions[id]) return null;
-    const messages = this.state.sessions[id].messages || [];
-    if (!messages.length) return null;
+    const session = this.state.sessions[id];
+    const messages = session.messages || [];
+    const currentArchiveId = session.currentArchiveId;
+    const totalMessages = this._useV2
+      ? this._v2.getThreadTotal(id, currentArchiveId)
+      : messages.length;
+    if (!totalMessages) return null;
 
-    if (!this.state.sessions[id].archives) {
-      this.state.sessions[id].archives = [];
+    if (!session.archives) {
+      session.archives = [];
     }
 
-    const currentArchiveId = this.state.sessions[id].currentArchiveId;
     const timestamp = Date.now();
     const suffix = ` (${this._tsSuffix()})`;
 
@@ -929,22 +1815,22 @@ export class ChatStore {
 
     // 1. Update existing archive (if not forced new and attached)
     if (!forceCreate && currentArchiveId) {
-      const idx = this.state.sessions[id].archives.findIndex(a => a.id === currentArchiveId);
+      const idx = session.archives.findIndex(a => a.id === currentArchiveId);
       if (idx !== -1) {
-        this.state.sessions[id].archives[idx].messages = [...messages];
-        this.state.sessions[id].archives[idx].timestamp = timestamp;
+        session.archives[idx].timestamp = timestamp;
+        session.archives[idx].messageCount = totalMessages;
         if (memoryTableSnapshot) {
-          this.state.sessions[id].archives[idx].memoryTableSnapshot = memoryTableSnapshot;
+          session.archives[idx].memoryTableSnapshot = memoryTableSnapshot;
         }
         // Snapshot summaries into archive (for attached mode, it's the source of truth)
         try {
-          const list = this.state.sessions[id].archives[idx].summaries;
-          if (!Array.isArray(list)) this.state.sessions[id].archives[idx].summaries = [];
+          const list = session.archives[idx].summaries;
+          if (!Array.isArray(list)) session.archives[idx].summaries = [];
         } catch {}
         if (name) {
           const clean = name.trim();
           // Append suffix only if no timestamp looks present
-          this.state.sessions[id].archives[idx].name = clean.match(/\d{4}\/\d{2}\/\d{2}/) ? clean : clean + suffix;
+          session.archives[idx].name = clean.match(/\d{4}\/\d{2}\/\d{2}/) ? clean : clean + suffix;
         }
         this._persist();
         return currentArchiveId;
@@ -1023,14 +1909,22 @@ export class ChatStore {
       id: archiveId,
       name: baseName,
       timestamp,
-      messages: [...messages],
+      messageCount: totalMessages,
       summaries: getCurrentSummariesSnapshot(),
       compactedSummary: getCurrentCompactedSummarySnapshot(),
     };
     if (memoryTableSnapshot) {
       nextArchive.memoryTableSnapshot = memoryTableSnapshot;
     }
-    this.state.sessions[id].archives.push(nextArchive);
+    session.archives.push(nextArchive);
+    if (this._useV2) {
+      const sid = String(id || '').trim();
+      const threadKey = this._getThreadKey(sid, '');
+      this._getThreadState(threadKey, { reset: true });
+      this._v2.enqueue(async () => {
+        await this._v2.cloneCurrentToArchive(sid, archiveId);
+      });
+    }
 
     this._persist();
     return archiveId;
@@ -1041,7 +1935,10 @@ export class ChatStore {
     if (!session) return;
 
     let archiveId = null;
-    if (session.messages && session.messages.length > 0) {
+    const totalMessages = this._useV2
+      ? this._v2.getThreadTotal(id, session.currentArchiveId)
+      : (session.messages || []).length;
+    if (totalMessages > 0) {
       // Force create a snapshot of current state before clearing
       archiveId = this.archiveCurrentMessages(id, archiveName, true, options);
     }
@@ -1052,15 +1949,30 @@ export class ChatStore {
     session.compactedSummary = null;
     session.draft = '';
     session.lastRawResponse = '';
+    session.unreadCount = 0;
+    if (this._useV2) {
+      const threadKey = this._getThreadKey(String(id || '').trim(), '');
+      this._getThreadState(threadKey, { reset: true });
+    }
     this._persist();
     return archiveId;
   }
 
   getArchives(id = this.currentId) {
-    return (this.state.sessions[id]?.archives || []).sort((a, b) => b.timestamp - a.timestamp);
+    const sid = String(id || '').trim();
+    const list = this.state.sessions[sid]?.archives || [];
+    if (this._useV2) {
+      for (const arc of list) {
+        const aid = String(arc?.id || '').trim();
+        if (!aid) continue;
+        const thread = this._v2.getThread(sid, aid);
+        if (thread && Number.isFinite(thread.total)) arc.messageCount = thread.total;
+      }
+    }
+    return list.sort((a, b) => b.timestamp - a.timestamp);
   }
 
-  loadArchivedMessages(archiveId, id = this.currentId, options = {}) {
+  async loadArchivedMessages(archiveId, id = this.currentId, options = {}) {
     const session = this.state.sessions[id];
     if (!session || !session.archives) return false;
 
@@ -1068,14 +1980,21 @@ export class ChatStore {
     if (!archive) return false;
 
     // Save current state before switching
-    if (session.messages && session.messages.length > 0) {
+    const totalMessages = this._useV2
+      ? this._v2.getThreadTotal(id, session.currentArchiveId)
+      : (session.messages || []).length;
+    if (totalMessages > 0) {
       const isDetached = !session.currentArchiveId;
       const autoName = isDetached ? '自动存档' : '';
       this.archiveCurrentMessages(id, autoName, false, options);
     }
 
-    session.messages = [...archive.messages];
     session.currentArchiveId = archiveId;
+    if (this._useV2) {
+      await this._loadRecentMessages(id, archiveId);
+    } else {
+      session.messages = Array.isArray(archive.messages) ? [...archive.messages] : [];
+    }
     this._persist();
     return true;
   }
@@ -1086,6 +2005,14 @@ export class ChatStore {
     session.archives = session.archives.filter(a => a.id !== archiveId);
     if (session.currentArchiveId === archiveId) {
       session.currentArchiveId = null;
+    }
+    if (this._useV2) {
+      const sid = String(id || '').trim();
+      const aid = String(archiveId || '').trim();
+      this._clearThreadState(this._getThreadKey(sid, aid));
+      this._v2.enqueue(async () => {
+        await this._v2.deleteArchive(sid, aid);
+      });
     }
     this._persist();
     return true;
