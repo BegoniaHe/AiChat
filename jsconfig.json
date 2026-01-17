@@ -1,0 +1,50 @@
+{
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "target": "ESNext",
+        "module": "ESNext",
+        "resolveJsonModule": true,
+        "allowJs": true,
+        "checkJs": true,
+        "isolatedModules": true,
+        "noEmit": true,
+        "strict": true,
+        "baseUrl": ".",
+        "paths": {
+            "$lib": [
+                "src/lib"
+            ],
+            "$lib/*": [
+                "src/lib/*"
+            ],
+            "$stores": [
+                "src/lib/stores"
+            ],
+            "$stores/*": [
+                "src/lib/stores/*"
+            ],
+            "$api": [
+                "src/lib/api"
+            ],
+            "$api/*": [
+                "src/lib/api/*"
+            ],
+            "$utils": [
+                "src/lib/utils"
+            ],
+            "$utils/*": [
+                "src/lib/utils/*"
+            ]
+        }
+    },
+    "include": [
+        "src/**/*.js",
+        "src/**/*.svelte"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist",
+        "src-legacy",
+        "src-tauri"
+    ]
+}

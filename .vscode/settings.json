@@ -1,5 +1,7 @@
 {
-  "rust-analyzer.linkedProjects": ["src-tauri/Cargo.toml"],
+  "rust-analyzer.linkedProjects": [
+    "src-tauri/Cargo.toml"
+  ],
   "rust-analyzer.cargo.features": "all",
   "files.associations": {
     "*.rs": "rust"
@@ -9,7 +11,7 @@
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
   "[javascript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
+    "editor.defaultFormatter": "vscode.typescript-language-features"
   },
   "[json]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
