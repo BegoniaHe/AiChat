@@ -1,5 +1,10 @@
 # 開發進度追蹤（必更新）(必须使用当下时间记录)
 
+## 2026-01-17 15:44
+- Android 资料包导出：补强 MediaStore 导出后回传实际下载路径并触发媒体扫描，避免导出后找不到文件。
+- 修改：
+  - `src-tauri/src/commands.rs`
+
 ## 2026-01-17 02:12
 - Persona 调试日志：调试面板新增日志筛选输入；Persona 切换与 Chat/Contacts store 加入范围日志与 session/联系人新增日志。
 - ChatStore v2 队列：异步写入改用捕获的 v2 实例，避免 Persona 切换时写入跨 scope。

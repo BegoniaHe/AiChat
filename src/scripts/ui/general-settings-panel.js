@@ -606,6 +606,29 @@ export class GeneralSettingsPanel {
       reader.readAsDataURL(file);
     });
 
+    const buildBundleFileName = () => {
+      const now = new Date();
+      const pad = (value) => String(value).padStart(2, '0');
+      const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      return `chatapp_backup_${ts}.zip`;
+    };
+
+    const pickBundleExportPath = async () => {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const fileName = buildBundleFileName();
+        const result = await save({
+          defaultPath: fileName,
+          filters: [{ name: 'ZIP', extensions: ['zip'] }],
+        });
+        if (!result) return { path: '', cancelled: true, fallback: false };
+        return { path: result, cancelled: false, fallback: false };
+      } catch (err) {
+        console.warn('bundle export: save dialog unavailable', err);
+        return { path: '', cancelled: false, fallback: true };
+      }
+    };
+
     this.bundleExportBtn?.addEventListener('click', async () => {
       if (this.bundleExportBtn) this.bundleExportBtn.disabled = true;
       setBundleStatus('正在打包...');
@@ -616,7 +639,14 @@ export class GeneralSettingsPanel {
         await bridge?.momentsStore?.flush?.();
       } catch {}
       try {
-        const result = await safeInvoke('export_data_bundle', {});
+        const pick = await pickBundleExportPath();
+        if (pick.cancelled) {
+          setBundleStatus('已取消导出');
+          return;
+        }
+        const result = pick.fallback
+          ? await safeInvoke('export_data_bundle', {})
+          : await safeInvoke('export_data_bundle', { path: pick.path });
         const path = String(result?.path || '').trim();
         const bytes = Number(result?.bytes || 0);
         const size = bytes ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : '';

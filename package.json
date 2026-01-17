@@ -12,7 +12,9 @@
     "android:dev": "tauri android dev",
     "android:build": "tauri android build"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.0.0"
+  },
   "devDependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/cli": "^2.0.0"

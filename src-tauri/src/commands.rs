@@ -23,7 +23,13 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 #[cfg(target_os = "android")]
-use std::os::unix::io::AsRawFd;
+use jni::{JNIEnv, JavaVM};
+#[cfg(target_os = "android")]
+use jni::objects::{JObject, JString, JValue};
+#[cfg(target_os = "android")]
+use ndk_context::android_context;
+#[cfg(target_os = "android")]
+use std::os::unix::io::{AsRawFd, FromRawFd};
 
 /// 获取数据目录
 fn get_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -254,6 +260,38 @@ fn decode_base64_payload(payload: &str) -> Result<Vec<u8>, String> {
     BASE64_ENGINE.decode(data).map_err(|e| e.to_string())
 }
 
+#[cfg(target_os = "android")]
+fn resolve_export_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = get_data_dir(app).ok();
+    let is_private = |dir: &PathBuf| {
+        if let Some(base) = &app_data {
+            if dir.starts_with(base) {
+                return true;
+            }
+        }
+        let raw = dir.to_string_lossy().to_lowercase();
+        raw.contains("/android/data/") || raw.contains("/android/obb/")
+    };
+    if let Ok(dir) = app.path().download_dir() {
+        if !is_private(&dir) {
+            return Ok(dir);
+        }
+    }
+    let mut candidates = Vec::new();
+    if let Ok(base) = std::env::var("EXTERNAL_STORAGE") {
+        candidates.push(PathBuf::from(base).join("Download"));
+    }
+    candidates.push(PathBuf::from("/storage/emulated/0/Download"));
+    candidates.push(PathBuf::from("/sdcard/Download"));
+    for dir in candidates {
+        if fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    Err("无法定位可写的下载目录，请检查系统权限".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
 fn resolve_export_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(dir) = app.path().download_dir() {
         return Ok(dir);
@@ -262,6 +300,290 @@ fn resolve_export_dir(app: &AppHandle) -> Result<PathBuf, String> {
         return Ok(dir);
     }
     get_data_dir(app)
+}
+
+#[cfg(target_os = "android")]
+fn android_sdk_int(env: &mut JNIEnv) -> Result<i32, String> {
+    let class = env.find_class("android/os/Build$VERSION").map_err(|e| e.to_string())?;
+    env.get_static_field(class, "SDK_INT", "I")
+        .and_then(|value| value.i())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "android")]
+fn android_scan_file(env: &mut JNIEnv, context: &JObject, path: &Path) -> Result<(), String> {
+    let scan_class = env
+        .find_class("android/media/MediaScannerConnection")
+        .map_err(|e| e.to_string())?;
+    let path_str = path.to_string_lossy();
+    let path_java = env.new_string(path_str.as_ref()).map_err(|e| e.to_string())?;
+    let array = env
+        .new_object_array(1, "java/lang/String", JObject::from(path_java))
+        .map_err(|e| e.to_string())?;
+    let null_obj = JObject::null();
+    env.call_static_method(
+        scan_class,
+        "scanFile",
+        "(Landroid/content/Context;[Ljava/lang/String;[Ljava/lang/String;Landroid/media/MediaScannerConnection$OnScanCompletedListener;)V",
+        &[
+            JValue::Object(context),
+            JValue::Object(&array),
+            JValue::Object(&null_obj),
+            JValue::Object(&null_obj),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn android_public_download_dir(env: &mut JNIEnv) -> Result<PathBuf, String> {
+    let env_class = env
+        .find_class("android/os/Environment")
+        .map_err(|e| e.to_string())?;
+    let dir_key = env
+        .get_static_field(env_class, "DIRECTORY_DOWNLOADS", "Ljava/lang/String;")
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let dir_file = env
+        .call_static_method(
+            env_class,
+            "getExternalStoragePublicDirectory",
+            "(Ljava/lang/String;)Ljava/io/File;",
+            &[JValue::Object(&dir_key)],
+        )
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let dir_path = env
+        .call_method(dir_file, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let dir_str: String = env
+        .get_string(&JString::from(dir_path))
+        .map_err(|e| e.to_string())?
+        .into();
+    Ok(PathBuf::from(dir_str))
+}
+
+#[cfg(target_os = "android")]
+fn publish_bundle_legacy(
+    app: &AppHandle,
+    source_path: &Path,
+    file_name: &str,
+) -> Result<String, String> {
+    let export_dir = resolve_export_dir(app)?;
+    let target = export_dir.join(file_name);
+    if source_path != target {
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(source_path, &target).map_err(|e| e.to_string())?;
+    }
+    let ctx = android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let _ = android_scan_file(&mut env, &context, &target);
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[cfg(target_os = "android")]
+fn publish_bundle_mediastore(
+    env: &mut JNIEnv,
+    context: JObject,
+    source_path: &Path,
+    file_name: &str,
+) -> Result<String, String> {
+    let resolver = env
+        .call_method(&context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let values = env
+        .new_object("android/content/ContentValues", "()V", &[])
+        .map_err(|e| e.to_string())?;
+    let media_columns = env
+        .find_class("android/provider/MediaStore$MediaColumns")
+        .map_err(|e| e.to_string())?;
+    let display_key = env
+        .get_static_field(&media_columns, "DISPLAY_NAME", "Ljava/lang/String;")
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let mime_key = env
+        .get_static_field(&media_columns, "MIME_TYPE", "Ljava/lang/String;")
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let display_value = env.new_string(file_name).map_err(|e| e.to_string())?;
+    let display_value_obj = JObject::from(display_value);
+    env.call_method(
+        &values,
+        "put",
+        "(Ljava/lang/String;Ljava/lang/String;)V",
+        &[
+            JValue::Object(&display_key),
+            JValue::Object(&display_value_obj),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    let mime_value = env
+        .new_string("application/zip")
+        .map_err(|e| e.to_string())?;
+    let mime_value_obj = JObject::from(mime_value);
+    env.call_method(
+        &values,
+        "put",
+        "(Ljava/lang/String;Ljava/lang/String;)V",
+        &[
+            JValue::Object(&mime_key),
+            JValue::Object(&mime_value_obj),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    if let Ok(relative_key) = env
+        .get_static_field(&media_columns, "RELATIVE_PATH", "Ljava/lang/String;")
+        .and_then(|value| value.l())
+    {
+        if let Ok(relative_value) = env.new_string("Download/") {
+            let relative_value_obj = JObject::from(relative_value);
+            let _ = env.call_method(
+                &values,
+                "put",
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[
+                    JValue::Object(&relative_key),
+                    JValue::Object(&relative_value_obj),
+                ],
+            );
+        }
+    }
+    if let Ok(pending_key) = env
+        .get_static_field(&media_columns, "IS_PENDING", "Ljava/lang/String;")
+        .and_then(|value| value.l())
+    {
+        if let Ok(int_class) = env.find_class("java/lang/Integer") {
+            if let Ok(pending_value) =
+                env.call_static_method(int_class, "valueOf", "(I)Ljava/lang/Integer;", &[JValue::from(1)])
+                    .and_then(|value| value.l())
+            {
+                let _ = env.call_method(
+                    &values,
+                    "put",
+                    "(Ljava/lang/String;Ljava/lang/Integer;)V",
+                    &[
+                        JValue::Object(&pending_key),
+                        JValue::Object(&pending_value),
+                    ],
+                );
+            }
+        }
+    }
+    let downloads_class = env
+        .find_class("android/provider/MediaStore$Downloads")
+        .map_err(|e| e.to_string())?;
+    let base_uri = env
+        .get_static_field(downloads_class, "EXTERNAL_CONTENT_URI", "Landroid/net/Uri;")
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    let inserted = env
+        .call_method(
+            &resolver,
+            "insert",
+            "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
+            &[JValue::Object(&base_uri), JValue::Object(&values)],
+        )
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    if inserted.is_null() {
+        return Err("无法写入下载目录".to_string());
+    }
+    let mode = env.new_string("w").map_err(|e| e.to_string())?;
+    let mode_obj = JObject::from(mode);
+    let pfd = env
+        .call_method(
+            &resolver,
+            "openFileDescriptor",
+            "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
+            &[
+                JValue::Object(&inserted),
+                JValue::Object(&mode_obj),
+            ],
+        )
+        .and_then(|value| value.l())
+        .map_err(|e| e.to_string())?;
+    if pfd.is_null() {
+        return Err("无法打开下载文件".to_string());
+    }
+    let fd = env
+        .call_method(&pfd, "detachFd", "()I", &[])
+        .and_then(|value| value.i())
+        .map_err(|e| e.to_string())?;
+    if fd < 0 {
+        return Err("无法创建下载文件".to_string());
+    }
+    {
+        let mut input = fs::File::open(source_path).map_err(|e| e.to_string())?;
+        let mut output = unsafe { fs::File::from_raw_fd(fd) };
+        std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+        output.sync_all().map_err(|e| e.to_string())?;
+    }
+    let _ = env.call_method(&pfd, "close", "()V", &[]);
+    if let Ok(pending_key) = env
+        .get_static_field(&media_columns, "IS_PENDING", "Ljava/lang/String;")
+        .and_then(|value| value.l())
+    {
+        if let Ok(values) = env.new_object("android/content/ContentValues", "()V", &[]) {
+            if let Ok(int_class) = env.find_class("java/lang/Integer") {
+                if let Ok(pending_value) =
+                    env.call_static_method(int_class, "valueOf", "(I)Ljava/lang/Integer;", &[JValue::from(0)])
+                        .and_then(|value| value.l())
+                {
+                    let _ = env.call_method(
+                        &values,
+                        "put",
+                        "(Ljava/lang/String;Ljava/lang/Integer;)V",
+                        &[
+                            JValue::Object(&pending_key),
+                            JValue::Object(&pending_value),
+                        ],
+                    );
+                    let null_obj = JObject::null();
+                    let _ = env.call_method(
+                        &resolver,
+                        "update",
+                        "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
+                        &[
+                            JValue::Object(&inserted),
+                            JValue::Object(&values),
+                            JValue::Object(&null_obj),
+                            JValue::Object(&null_obj),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+    let download_path = android_public_download_dir(env)
+        .map(|dir| dir.join(file_name))
+        .unwrap_or_else(|_| PathBuf::from("Download").join(file_name));
+    let _ = android_scan_file(env, &context, &download_path);
+    Ok(download_path.to_string_lossy().to_string())
+}
+
+#[cfg(target_os = "android")]
+fn publish_bundle_to_downloads(
+    app: &AppHandle,
+    source_path: &Path,
+    file_name: &str,
+) -> Result<String, String> {
+    let ctx = android_context();
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+    let sdk_int = android_sdk_int(&mut env).unwrap_or(29);
+    if sdk_int < 29 {
+        return publish_bundle_legacy(app, source_path, file_name);
+    }
+    publish_bundle_mediastore(&mut env, context, source_path, file_name)
+        .or_else(|_| publish_bundle_legacy(app, source_path, file_name))
 }
 
 fn clear_data_dir(dir: &Path) -> Result<(), String> {
@@ -789,14 +1111,40 @@ pub async fn cleanup_wallpapers(
 pub async fn export_data_bundle(
     app: AppHandle,
     state: State<'_, MemoryDb>,
+    path: Option<String>,
 ) -> Result<DataBundleResult, String> {
     state.close_all();
     let data_dir = get_data_dir(&app)?;
-    let export_dir = resolve_export_dir(&app)?;
-    fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
     let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let file_name = format!("chatapp_backup_{ts}.zip");
-    let output_path = export_dir.join(file_name);
+    let mut output_path: PathBuf;
+    #[cfg(target_os = "android")]
+    let mut publish_download = false;
+    let raw_path = path.unwrap_or_default();
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        #[cfg(target_os = "android")]
+        {
+            let temp_dir = data_dir.join("exports_tmp");
+            output_path = temp_dir.join(&file_name);
+            publish_download = true;
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            output_path = resolve_export_dir(&app)?.join(&file_name);
+        }
+    } else {
+        output_path = PathBuf::from(trimmed);
+        if output_path.extension().is_none() {
+            output_path.set_extension("zip");
+        }
+        if output_path.is_dir() {
+            output_path = output_path.join(&file_name);
+        }
+    }
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let file = fs::File::create(&output_path).map_err(|e| e.to_string())?;
     let mut writer = ZipWriter::new(file);
     let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -820,9 +1168,18 @@ pub async fn export_data_bundle(
     let files = add_dir_to_zip(&mut writer, &data_dir, &data_dir, options, Some(&output_path))?;
     writer.finish().map_err(|e| e.to_string())?;
     let bytes = fs::metadata(&output_path).map_err(|e| e.to_string())?.len();
+    let mut result_path = output_path.to_string_lossy().to_string();
+    #[cfg(target_os = "android")]
+    {
+        if publish_download {
+            let published = publish_bundle_to_downloads(&app, &output_path, &file_name)?;
+            let _ = fs::remove_file(&output_path);
+            result_path = published;
+        }
+    }
 
     Ok(DataBundleResult {
-        path: output_path.to_string_lossy().to_string(),
+        path: result_path,
         bytes,
         files,
     })
