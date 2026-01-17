@@ -5,6 +5,16 @@
 - 修改：
   - `src-tauri/src/commands.rs`
 
+## 2026-01-17 23:10
+- Dev/Release 分离：新增 dev 配置覆盖包名，避免 Android 调试包与 release 安装冲突。
+- 修改：
+  - `src-tauri/tauri.conf.dev.json`
+
+## 2026-01-17 23:16
+- Android debug 安装隔离：debug build 加上 applicationIdSuffix 与版本后缀，避免与 release 包名冲突。
+- 修改：
+  - `src-tauri/gen/android/app/build.gradle.kts`
+
 ## 2026-01-17 02:12
 - Persona 调试日志：调试面板新增日志筛选输入；Persona 切换与 Chat/Contacts store 加入范围日志与 session/联系人新增日志。
 - ChatStore v2 队列：异步写入改用捕获的 v2 实例，避免 Persona 切换时写入跨 scope。

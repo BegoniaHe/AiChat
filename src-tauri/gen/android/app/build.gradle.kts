@@ -26,6 +26,8 @@ android {
     }
     buildTypes {
         getByName("debug") {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             isDebuggable = true
             isJniDebuggable = true

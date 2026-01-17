@@ -342,7 +342,7 @@ fn android_public_download_dir(env: &mut JNIEnv) -> Result<PathBuf, String> {
         .find_class("android/os/Environment")
         .map_err(|e| e.to_string())?;
     let dir_key = env
-        .get_static_field(env_class, "DIRECTORY_DOWNLOADS", "Ljava/lang/String;")
+        .get_static_field(&env_class, "DIRECTORY_DOWNLOADS", "Ljava/lang/String;")
         .and_then(|value| value.l())
         .map_err(|e| e.to_string())?;
     let dir_file = env
