@@ -199,7 +199,7 @@ const buildFallbackUrls = (resolvedUrl, item) => {
                     try {
                         const converted = convert(full);
                         if (converted) urls.push(converted);
-                    } catch {}
+                    } catch { }
                 }
                 const fileUrl = toFileUrl(full);
                 if (fileUrl) urls.push(fileUrl);
@@ -261,7 +261,7 @@ const resolveItemUrl = (item) => {
         if (typeof convert === 'function') {
             try {
                 return convert(full);
-            } catch {}
+            } catch { }
         }
         return toFileUrl(full) || full;
     }
@@ -278,7 +278,7 @@ export const initMediaAssets = async () => {
         let manifest = null;
         let baseDir = '';
         let baseType = 'web';
-        
+
         // Try Tauri first
         try {
             const resp = await safeInvoke('ensure_media_bundle', {});
@@ -331,12 +331,12 @@ export const resolveMediaAsset = (kind, value) => {
     const input = String(value || '').trim();
     const k = normalizeKind(kind);
     if (!input || !k) return null;
-    
+
     if (!STATE.ready && !STATE.loading) {
         if (isLikelyUrl(input)) return { url: input, direct: true, fallbacks: [input] };
         return null;
     }
-    
+
     // Check asset reference
     const ref = parseAssetRef(input, k);
     if (ref) {
@@ -347,7 +347,7 @@ export const resolveMediaAsset = (kind, value) => {
         }
         return null;
     }
-    
+
     // Check URL
     if (isLikelyUrl(input)) {
         const norm = normalizeUrl(input);
@@ -364,7 +364,7 @@ export const resolveMediaAsset = (kind, value) => {
         }
         return { url: input, direct: true, fallbacks: [input] };
     }
-    
+
     // Check by key
     const key = normalizeKey(input);
     const map = STATE.maps[k];
@@ -373,7 +373,7 @@ export const resolveMediaAsset = (kind, value) => {
         const url = resolveItemUrl(hit);
         return { url, item: hit, fallbacks: buildFallbackUrls(url, hit) };
     }
-    
+
     // Sticker fallback to image
     if (k === 'sticker') {
         const fallback = STATE.maps.image.get(key);
@@ -382,7 +382,7 @@ export const resolveMediaAsset = (kind, value) => {
             return { url, item: fallback, fallbacks: buildFallbackUrls(url, fallback) };
         }
     }
-    
+
     return null;
 };
 

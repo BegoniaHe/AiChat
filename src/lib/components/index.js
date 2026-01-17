@@ -34,4 +34,9 @@ export { default as GroupPanel } from './GroupPanel.svelte';
 export { default as MomentsPanel } from './MomentsPanel.svelte';
 export { default as SettingsPanel } from './SettingsPanel.svelte';
 export { default as Sidebar } from './Sidebar.svelte';
+export { default as StickerPicker } from './StickerPicker.svelte';
+export { default as VariablePanel } from './VariablePanel.svelte';
+
+// 预设管理
+export * from './preset/index.js';
 
