@@ -7092,6 +7092,70 @@ ${listPart || '-（无）'}
   });
   ui.onMessageAction(async (action, message, payload) => {
     const sessionId = chatStore.getCurrent();
+    const isSyntheticUser = (m) => m?.role === 'user' && m?.meta?.generatedByAssistant === true;
+    const regenerateFromUserIndex = async (userIdx, { allowEmpty = false } = {}) => {
+      const msgs = chatStore.getMessages(sessionId);
+      const prevUser = msgs[userIdx];
+      if (!prevUser || prevUser.role !== 'user' || isSyntheticUser(prevUser)) return;
+      if (prevUser.status === 'pending' || prevUser.status === 'sending') {
+        window.toastr?.warning('发送中的消息无法重生成');
+        return;
+      }
+      let nextUserIdx = -1;
+      for (let i = userIdx + 1; i < msgs.length; i++) {
+        if (msgs[i]?.role === 'user' && !isSyntheticUser(msgs[i]) && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
+          nextUserIdx = i;
+          break;
+        }
+      }
+      if (nextUserIdx !== -1) {
+        window.toastr?.warning('只能重生成最新一轮回复');
+        return;
+      }
+      const roundMessages = msgs.slice(userIdx + 1, nextUserIdx === -1 ? msgs.length : nextUserIdx);
+      const regenMessages = roundMessages.filter(m => m?.role === 'assistant' || isSyntheticUser(m));
+      if (!regenMessages.length && !allowEmpty) {
+        window.toastr?.warning('未找到可重生成的 AI 回复');
+        return;
+      }
+      if (regenMessages.length) {
+        regenMessages.forEach(m => {
+          chatStore.deleteMessage(m.id, sessionId);
+          ui.removeMessage(m.id);
+        });
+        refreshChatAndContacts();
+      }
+      chatStore.removeLastSummary?.(sessionId);
+      const settings = appSettings.get();
+      const memoryMode = String(settings.memoryStorageMode || 'table').toLowerCase();
+      if (memoryMode === 'table') {
+        try {
+          logger.debug('memory rollback: start', { sessionId, messageId: prevUser?.id || '' });
+          const rollbackFn = window.appBridge?.rollbackLastMemoryUpdate;
+          if (typeof rollbackFn === 'function') {
+            const rolled = await rollbackFn(sessionId);
+            logger.debug('memory rollback: done', { sessionId, messageId: prevUser?.id || '', rolled });
+          } else {
+            logger.warn('memory rollback: missing handler', { sessionId, messageId: prevUser?.id || '' });
+          }
+        } catch (err) {
+          logger.warn('rollback memory update failed', err);
+        }
+      }
+      const resendText = getMessageSendText(prevUser);
+      if (!String(resendText || '').trim()) {
+        window.toastr?.warning('未找到对应的用户消息内容');
+        return;
+      }
+      await handleSend(null, {
+        overrideText: resendText,
+        ignorePending: true,
+        suppressUserMessage: true,
+        skipInputRegex: true,
+        existingUserMessageId: prevUser?.id || '',
+        includeAttachments: false,
+      });
+    };
 
     // 处理"发送到这里"
     if (action === 'send-to-here' && message.status === 'pending') {
@@ -7229,7 +7293,6 @@ ${listPart || '-（无）'}
       const msgs = chatStore.getMessages(sessionId);
       const idx = msgs.findIndex(m => m.id === message.id);
       if (idx === -1) return;
-      const isSyntheticUser = (m) => m?.role === 'user' && m?.meta?.generatedByAssistant === true;
       let prevUserIdx = -1;
       for (let i = idx - 1; i >= 0; i--) {
         if (msgs[i]?.role === 'user' && !isSyntheticUser(msgs[i]) && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
@@ -7241,61 +7304,14 @@ ${listPart || '-（无）'}
         window.toastr?.warning('未找到对应的用户消息，无法重生成');
         return;
       }
-      let nextUserIdx = -1;
-      for (let i = prevUserIdx + 1; i < msgs.length; i++) {
-        if (msgs[i]?.role === 'user' && !isSyntheticUser(msgs[i]) && msgs[i]?.status !== 'pending' && msgs[i]?.status !== 'sending') {
-          nextUserIdx = i;
-          break;
-        }
-      }
-      if (nextUserIdx !== -1) {
-        window.toastr?.warning('只能重生成最新一轮回复');
-        return;
-      }
-      const roundMessages = msgs.slice(prevUserIdx + 1, nextUserIdx === -1 ? msgs.length : nextUserIdx);
-      const regenMessages = roundMessages.filter(m => m?.role === 'assistant' || isSyntheticUser(m));
-      if (!regenMessages.length) {
-        window.toastr?.warning('未找到可重生成的 AI 回复');
-        return;
-      }
-      regenMessages.forEach(m => {
-        chatStore.deleteMessage(m.id, sessionId);
-        ui.removeMessage(m.id);
-      });
-      chatStore.removeLastSummary?.(sessionId);
-      refreshChatAndContacts();
-
-      const settings = appSettings.get();
-      const memoryMode = String(settings.memoryStorageMode || 'table').toLowerCase();
-      if (memoryMode === 'table') {
-        try {
-          logger.debug('memory rollback: start', { sessionId, messageId: message.id });
-          const rollbackFn = window.appBridge?.rollbackLastMemoryUpdate;
-          if (typeof rollbackFn === 'function') {
-            const rolled = await rollbackFn(sessionId);
-            logger.debug('memory rollback: done', { sessionId, messageId: message.id, rolled });
-          } else {
-            logger.warn('memory rollback: missing handler', { sessionId, messageId: message.id });
-          }
-        } catch (err) {
-          logger.warn('rollback memory update failed', err);
-        }
-      }
-
-      const prevUser = msgs[prevUserIdx];
-      const resendText = getMessageSendText(prevUser);
-      if (!String(resendText || '').trim()) {
-        window.toastr?.warning('未找到对应的用户消息内容');
-        return;
-      }
-      await handleSend(null, {
-        overrideText: resendText,
-        ignorePending: true,
-        suppressUserMessage: true,
-        skipInputRegex: true,
-        existingUserMessageId: prevUser?.id || '',
-        includeAttachments: false,
-      });
+      await regenerateFromUserIndex(prevUserIdx, { allowEmpty: false });
+      return;
+    }
+    if (action === 'regenerate' && message.role === 'user') {
+      const msgs = chatStore.getMessages(sessionId);
+      const idx = msgs.findIndex(m => m.id === message.id);
+      if (idx === -1) return;
+      await regenerateFromUserIndex(idx, { allowEmpty: true });
       return;
     }
   });

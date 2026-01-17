@@ -201,6 +201,7 @@ export class MomentsPanel {
     const snap = String(m?.authorAvatar || '').trim();
     if (snap) return snap;
     const authorId = String(m?.authorId || '').trim();
+    if (authorId === 'user') return this.userAvatar || this.defaultAvatar;
     if (authorId) {
       try {
         const c = this.contactsStore?.getContact?.(authorId);

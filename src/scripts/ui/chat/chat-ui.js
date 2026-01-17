@@ -1545,6 +1545,9 @@ export class ChatUI {
         actions.push({ key: 'send-to-here', label: '🚀 发送到这里' });
       }
       actions.push({ key: 'copy-text', label: '复制' });
+      if (msg.status !== 'pending' && msg.status !== 'sending' && !msg?.meta?.generatedByAssistant) {
+        actions.push({ key: 'regenerate', label: '重新生成' });
+      }
       if (msg.status !== 'pending' && msg.status !== 'sending') {
         // 已发送的消息才能编辑/收回
         actions.push({ key: 'edit', label: '编辑' });
