@@ -10,7 +10,9 @@ use_small_heuristics = "Default"
 reorder_imports = true
 reorder_modules = true
 remove_nested_parens = true
-format_strings = true
-normalize_comments = true
-wrap_comments = true
-comment_width = 80
+
+# Unstable features (require nightly):
+# wrap_comments = true
+# comment_width = 80
+# normalize_comments = true
+# format_strings = true
