@@ -9,7 +9,7 @@
     import Button from "./Button.svelte";
     import Input from "./Input.svelte";
 
-    let { contactId = "", onclose } = $props();
+    const { contactId = "", onclose } = $props();
 
     // 获取联系人
     const contact = $derived(contactsStore.get(contactId));

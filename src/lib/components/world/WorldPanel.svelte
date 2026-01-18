@@ -17,7 +17,7 @@
     import { downloadJson } from "./world-types.js";
 
     /** @type {{ scope?: 'session' | 'global', getSessionId?: () => string }} */
-    let { scope = "session", getSessionId = null } = $props();
+    const { scope = "session", getSessionId = null } = $props();
 
     const store = getWorldInfoStore();
     const regexStore = getRegexStore();
@@ -42,10 +42,10 @@
     let editorRef = $state(null);
 
     // Computed
-    let displayNames = $derived(
+    const displayNames = $derived(
         worldNames.filter((n) => n !== "__builtin_phone_format__"),
     );
-    let currentIndicator = $derived(() => {
+    const currentIndicator = $derived(() => {
         if (currentScope === "global") {
             return `全局当前：${globalWorldId || "未启用"}`;
         }
@@ -54,7 +54,7 @@
         }
         return `会话 ${sessionId} 当前：${currentWorldId || "未启用"}`;
     });
-    let activatedWorldId = $derived(
+    const activatedWorldId = $derived(
         currentScope === "global" ? globalWorldId : currentWorldId,
     );
 

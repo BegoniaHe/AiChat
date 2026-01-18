@@ -35,7 +35,7 @@
     let statusVisible = $state(false);
 
     // Drafts keyed by `${storeType}:${presetId}` so changes across tabs aren't lost
-    let drafts = $state(new Map());
+    const drafts = $state(new Map());
 
     // Editor references
     let syspromptEditor = $state(null);
@@ -551,7 +551,7 @@
     });
 
     // Derived: current preset
-    let currentPreset = $derived(getCurrentPreset());
+    const currentPreset = $derived(getCurrentPreset());
 </script>
 
 {#if visible}

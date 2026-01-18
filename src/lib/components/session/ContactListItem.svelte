@@ -23,7 +23,7 @@
      */
 
     /** @type {Props} */
-    let {
+    const {
         id,
         name,
         avatar = "",

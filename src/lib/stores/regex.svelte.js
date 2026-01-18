@@ -7,6 +7,7 @@
  *  3) session: per chat session id
  */
 
+import { safeInvoke } from '$utils/tauri';
 
 // ST-like placement enum
 export const regex_placement = {

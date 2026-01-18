@@ -27,7 +27,7 @@
     }
 
     // Filter and sort variables
-    let filteredEntries = $derived(() => {
+    const filteredEntries = $derived(() => {
         const term = searchTerm.trim().toLowerCase();
         return Object.entries(variables || {})
             .map(([k, v]) => ({

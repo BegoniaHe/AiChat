@@ -16,7 +16,7 @@
    */
 
   /** @type {Props} */
-  let {
+  const {
     text,
     at = 0,
     batchMode = false,

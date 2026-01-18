@@ -20,7 +20,7 @@
      */
 
     /** @type {Props} */
-    let {
+    const {
         persona = null,
         canDelete = false,
         onSave,

@@ -3,7 +3,7 @@
   悬浮提示文字
 -->
 <script>
-    let {
+    const {
         text = "",
         position = "top", // top | bottom | left | right
         children,

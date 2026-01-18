@@ -6,7 +6,7 @@
     import Avatar from "./Avatar.svelte";
     import MarkdownRenderer from "./MarkdownRenderer.svelte";
 
-    let {
+    const {
         id = "",
         role = "user", // 'user' | 'assistant' | 'system'
         content = "",

@@ -6,7 +6,7 @@
     import { OPENAI_KNOWN_BLOCKS, roleIdToName } from "./preset-types.js";
 
     /** @type {{ preset: Object, onUpdate?: (data: Object) => void }} */
-    let { preset = {}, onUpdate = () => {} } = $props();
+    const { preset = {}, onUpdate = () => {} } = $props();
 
     // Extract prompt data
     function pickPromptOrderBlock(p) {

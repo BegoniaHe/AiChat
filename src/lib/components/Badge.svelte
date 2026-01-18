@@ -2,7 +2,7 @@
   Badge 徽章组件
 -->
 <script>
-    let {
+    const {
         variant = "default", // 'default' | 'primary' | 'success' | 'warning' | 'error'
         size = "md", // 'sm' | 'md' | 'lg'
         dot = false, // 小圆点模式

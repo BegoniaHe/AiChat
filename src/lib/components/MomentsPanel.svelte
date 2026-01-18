@@ -7,7 +7,7 @@
     import { onMount } from "svelte";
 
     // Props
-    let {
+    const {
         userAvatar = "",
         defaultAvatar = "/assets/default-avatar.png",
         onUserComment = null,
@@ -285,8 +285,8 @@
     }
 
     // Derived
-    let visibleMoments = $derived(moments.slice(0, visibleCount));
-    let hasMore = $derived(moments.length > visibleCount);
+    const visibleMoments = $derived(moments.slice(0, visibleCount));
+    const hasMore = $derived(moments.length > visibleCount);
 </script>
 
 <div class="moments-panel">

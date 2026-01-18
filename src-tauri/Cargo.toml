@@ -5,6 +5,26 @@ description = "A cross-platform chat application"
 authors = ["you"]
 edition = "2021"
 
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "warn"
+
+[lints.clippy]
+# Pedantic lints (stricter than default)
+pedantic = "warn"
+# Performance lints
+perf = "warn"
+# Complexity lints
+complexity = "warn"
+# Style lints
+style = "warn"
+
+# Allow certain pedantic lints that are too noisy
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
 [lib]
 name = "tauri_chat_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -22,7 +42,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
 chrono = "0.4"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
 libc = "0.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
 zip = "0.6"

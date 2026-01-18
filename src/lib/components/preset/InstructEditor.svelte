@@ -5,7 +5,7 @@
      */
 
     /** @type {{ preset: Object, onUpdate?: (data: Object) => void }} */
-    let { preset = {}, onUpdate = () => {} } = $props();
+    const { preset = {}, onUpdate = () => {} } = $props();
 
     let inputSequence = $state(preset.input_sequence ?? "");
     let outputSequence = $state(preset.output_sequence ?? "");

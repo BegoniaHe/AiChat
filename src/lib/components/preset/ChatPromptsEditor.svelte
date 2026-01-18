@@ -10,7 +10,7 @@
     } from "./preset-types.js";
 
     /** @type {{ preset: Object, onUpdate?: (data: Object) => void }} */
-    let { preset = {}, onUpdate = () => {} } = $props();
+    const { preset = {}, onUpdate = () => {} } = $props();
 
     // Dialogue (Private chat)
     let dialogueEnabled = $state(Boolean(preset.dialogue_enabled));
@@ -60,7 +60,7 @@
     let summaryRules = $state(preset.summary_rules || "");
 
     // Collapsed states
-    let collapsed = $state({
+    const collapsed = $state({
         dialogue: true,
         momentCreate: true,
         momentComment: true,

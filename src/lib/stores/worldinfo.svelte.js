@@ -4,6 +4,7 @@
  * - Provides ST JSON conversion
  */
 
+import { safeInvoke } from '$utils/tauri';
 
 const STORAGE_KEY = 'worldinfo_store';
 

@@ -3,7 +3,7 @@
   支持代码高亮、表格、列表等
 -->
 <script>
-    let { content = "", class: className = "" } = $props();
+    const { content = "", class: className = "" } = $props();
 
     // 简单的 Markdown 解析
     // 实际项目中可以使用 marked + highlight.js

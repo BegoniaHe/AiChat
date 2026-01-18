@@ -17,7 +17,7 @@
      */
 
     /** @type {Props} */
-    let {
+    const {
         persona,
         isActive = false,
         isLocked = false,

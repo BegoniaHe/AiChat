@@ -10,7 +10,7 @@
     } from "./preset-types.js";
 
     /** @type {{ preset: Object, onUpdate?: (data: Object) => void }} */
-    let { preset = {}, onUpdate = () => {} } = $props();
+    const { preset = {}, onUpdate = () => {} } = $props();
 
     let storyString = $state(preset.story_string || "");
     let position = $state(

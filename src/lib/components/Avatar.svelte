@@ -4,7 +4,7 @@
 -->
 <script>
     /** @type {string} */
-    let { src = "", alt = "", size = "md", fallback = "" } = $props();
+    const { src = "", alt = "", size = "md", fallback = "" } = $props();
 
     const sizes = {
         sm: 32,

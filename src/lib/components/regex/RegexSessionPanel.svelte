@@ -10,7 +10,7 @@
     import { createDefaultRule, normalizeScript } from "./regex-types.js";
 
     /** @type {{ getSessionId?: () => string }} */
-    let { getSessionId = null } = $props();
+    const { getSessionId = null } = $props();
 
     const store = getRegexStore();
 

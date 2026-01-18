@@ -1,0 +1,9 @@
+# Clippy configuration for AiChat Tauri app
+# https://doc.rust-lang.org/clippy/
+
+# Lint levels
+# Set stricter defaults for code quality
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 8
+type-complexity-threshold = 500
+single-char-lifetime-names-threshold = 4

@@ -16,7 +16,7 @@
     } from "./world-types.js";
 
     /** @type {{ onSaved?: (name: string, data: any) => void }} */
-    let { onSaved } = $props();
+    const { onSaved } = $props();
 
     const store = getWorldInfoStore();
 
@@ -27,8 +27,8 @@
     let currentIndex = $state(0);
 
     // Computed
-    let currentEntry = $derived(data.entries[currentIndex] || null);
-    let entriesCount = $derived(data.entries.length);
+    const currentEntry = $derived(data.entries[currentIndex] || null);
+    const entriesCount = $derived(data.entries.length);
 
     /**
      * Show editor with world data

@@ -5,7 +5,7 @@
 <script>
     import Avatar from "./Avatar.svelte";
 
-    let {
+    const {
         id = "",
         name = "",
         avatar = "",

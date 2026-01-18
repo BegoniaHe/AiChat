@@ -6,10 +6,10 @@
     import { appSettingsStore } from "$stores";
 
     /** @type {{ preset: Object, onUpdate?: (data: Object) => void }} */
-    let { preset = {}, onUpdate = () => {} } = $props();
+    const { preset = {}, onUpdate = () => {} } = $props();
 
     // Settings from appSettings
-    let settings = $state(appSettingsStore?.get?.() || {});
+    const settings = $state(appSettingsStore?.get?.() || {});
 
     let reasoningAutoParse = $state(settings.reasoningAutoParse === true);
     let reasoningAutoExpand = $state(settings.reasoningAutoExpand === true);

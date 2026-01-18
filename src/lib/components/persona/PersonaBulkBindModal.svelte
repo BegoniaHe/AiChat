@@ -19,7 +19,7 @@
      */
 
     /** @type {Props} */
-    let {
+    const {
         open = false,
         persona = null,
         sessionIds = [],

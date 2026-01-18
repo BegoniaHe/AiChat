@@ -4,7 +4,7 @@
 -->
 <script>
     /** @type {'primary' | 'secondary' | 'ghost' | 'danger'} */
-    let {
+    const {
         variant = "primary",
         size = "md",
         disabled = false,

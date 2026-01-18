@@ -5,7 +5,7 @@
      */
 
     /** @type {{ preset: Object, onUpdate?: (data: Object) => void }} */
-    let { preset = {}, onUpdate = () => {} } = $props();
+    const { preset = {}, onUpdate = () => {} } = $props();
 
     // Generation parameters
     let maxContext = $state(preset.openai_max_context ?? 131072);

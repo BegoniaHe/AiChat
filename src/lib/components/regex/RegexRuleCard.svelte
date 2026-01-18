@@ -19,8 +19,8 @@
     let trimStringsText = $state((rule.trimStrings || []).join("\n"));
 
     // Computed
-    let title = $derived(getRuleTitle(rule));
-    let subtitle = $derived(getRuleSubtitle(rule));
+    const title = $derived(getRuleTitle(rule));
+    const subtitle = $derived(getRuleSubtitle(rule));
 
     /**
      * Toggle collapsed state

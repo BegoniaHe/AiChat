@@ -188,8 +188,8 @@
     }
 
     // Derived
-    let tree = $derived(buildGroupTree(groups));
-    let flatGroups = $derived(flattenTree(tree));
+    const tree = $derived(buildGroupTree(groups));
+    const flatGroups = $derived(flattenTree(tree));
 </script>
 
 <Modal bind:show title="联系人分组" size="large">
