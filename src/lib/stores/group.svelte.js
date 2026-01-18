@@ -8,7 +8,11 @@ import { makeScopedKey, normalizeScopeId } from './store-scope.js';
 
 const safeInvoke = async (cmd, args) => {
   const g = typeof globalThis !== 'undefined' ? globalThis : window;
-  const invoker = g?.__TAURI__?.core?.invoke || g?.__TAURI__?.invoke || g?.__TAURI_INVOKE__ || g?.__TAURI_INTERNALS__?.invoke;
+  const invoker =
+    g?.__TAURI__?.core?.invoke ||
+    g?.__TAURI__?.invoke ||
+    g?.__TAURI_INVOKE__ ||
+    g?.__TAURI_INTERNALS__?.invoke;
   if (typeof invoker !== 'function') {
     throw new Error('Tauri invoke not available');
   }
@@ -72,10 +76,12 @@ export class GroupStore {
     const scopeId = this.scopeId;
     try {
       let kv = await safeInvoke('load_kv', { name: storeKey });
-      if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+      if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId)
+        return;
       if (!kv && this.scopeId && !isLegacyMigrated()) {
         const legacy = await safeInvoke('load_kv', { name: BASE_STORE_KEY });
-        if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+        if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId)
+          return;
         if (legacy && Array.isArray(legacy.groups)) {
           kv = legacy;
           markLegacyMigrated();
@@ -87,7 +93,8 @@ export class GroupStore {
         }
       }
       if (kv && Array.isArray(kv.groups)) {
-        if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId) return;
+        if (token !== this._scopeToken || storeKey !== this.storeKey || scopeId !== this.scopeId)
+          return;
         this.state = kv;
         if (this.scopeId) markLegacyMigrated();
         try {
@@ -136,7 +143,7 @@ export class GroupStore {
    * 根据 ID 获取分组
    */
   getGroup(groupId) {
-    return (this.state.groups || []).find(g => g.id === groupId) || null;
+    return (this.state.groups || []).find((g) => g.id === groupId) || null;
   }
 
   /**
@@ -147,7 +154,7 @@ export class GroupStore {
       throw new Error('分组名称不能为空');
     }
     const trimmed = name.trim();
-    if ((this.state.groups || []).some(g => g.name === trimmed)) {
+    if ((this.state.groups || []).some((g) => g.name === trimmed)) {
       throw new Error('分组名称已存在');
     }
     const nextParentId = String(parentId || '').trim();
@@ -181,7 +188,7 @@ export class GroupStore {
     }
     if (updates.name && updates.name !== group.name) {
       const trimmed = updates.name.trim();
-      if ((this.state.groups || []).some(g => g.id !== groupId && g.name === trimmed)) {
+      if ((this.state.groups || []).some((g) => g.id !== groupId && g.name === trimmed)) {
         throw new Error('分组名称已存在');
       }
       group.name = trimmed;
@@ -228,7 +235,7 @@ export class GroupStore {
         g.updatedAt = Date.now();
       }
     });
-    this.state.groups = (this.state.groups || []).filter(g => g.id !== groupId);
+    this.state.groups = (this.state.groups || []).filter((g) => g.id !== groupId);
     this._persist();
     logger.info('删除分组:', group.name);
     return true;
@@ -258,7 +265,7 @@ export class GroupStore {
     const group = this.getGroup(groupId);
     if (!group) return false;
     const before = group.contacts.length;
-    group.contacts = group.contacts.filter(cid => cid !== contactId);
+    group.contacts = group.contacts.filter((cid) => cid !== contactId);
     if (group.contacts.length !== before) {
       group.updatedAt = Date.now();
       this._persist();
@@ -272,8 +279,8 @@ export class GroupStore {
    * 移动联系人
    */
   moveContact(contactId, toGroupId) {
-    (this.state.groups || []).forEach(g => {
-      g.contacts = g.contacts.filter(cid => cid !== contactId);
+    (this.state.groups || []).forEach((g) => {
+      g.contacts = g.contacts.filter((cid) => cid !== contactId);
     });
     if (toGroupId && toGroupId !== 'ungrouped') {
       this.addContactToGroup(toGroupId, contactId);
@@ -286,14 +293,14 @@ export class GroupStore {
    * 检查联系人是否在任何分组中
    */
   isContactInAnyGroup(contactId) {
-    return (this.state.groups || []).some(g => g.contacts.includes(contactId));
+    return (this.state.groups || []).some((g) => g.contacts.includes(contactId));
   }
 
   /**
    * 获取联系人所在的分组
    */
   getGroupByContact(contactId) {
-    return (this.state.groups || []).find(g => g.contacts.includes(contactId)) || null;
+    return (this.state.groups || []).find((g) => g.contacts.includes(contactId)) || null;
   }
 
   /**

@@ -65,11 +65,7 @@
   </div>
 
   <div class="actions">
-    <button
-      class="action-btn"
-      class:primary={isCurrent}
-      onclick={onSwitch}
-    >
+    <button class="action-btn" class:primary={isCurrent} onclick={onSwitch}>
       {isCurrent ? '当前' : '切换'}
     </button>
     <button class="action-btn" onclick={onRename}>改名</button>

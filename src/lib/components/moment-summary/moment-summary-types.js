@@ -23,9 +23,9 @@
  * @returns {string}
  */
 export function getSummaryKey(item) {
-    const at = Number(item?.at || 0) || 0;
-    const text = typeof item === 'string' ? item : String(item?.text || '');
-    return `${at}|${text}`;
+  const at = Number(item?.at || 0) || 0;
+  const text = typeof item === 'string' ? item : String(item?.text || '');
+  return `${at}|${text}`;
 }
 
 /**
@@ -34,11 +34,11 @@ export function getSummaryKey(item) {
  * @returns {{ at: number, text: string }}
  */
 export function parseSummaryKey(key) {
-    const [atStr, ...rest] = String(key).split('|');
-    return {
-        at: Number(atStr || 0) || 0,
-        text: rest.join('|'),
-    };
+  const [atStr, ...rest] = String(key).split('|');
+  return {
+    at: Number(atStr || 0) || 0,
+    text: rest.join('|'),
+  };
 }
 
 /**
@@ -47,15 +47,15 @@ export function parseSummaryKey(key) {
  * @returns {string[]}
  */
 export function parseEditedSummaryLines(text) {
-    const raw = String(text || '');
-    const lines = raw.split(/\r?\n/).map((s) => String(s).trim());
-    // 优先识别 bullet 格式
-    const bullet = lines
-        .filter((l) => l.startsWith('- '))
-        .map((l) => l.slice(2).trim())
-        .filter(Boolean);
-    if (bullet.length) return bullet;
-    return lines.filter(Boolean);
+  const raw = String(text || '');
+  const lines = raw.split(/\r?\n/).map((s) => String(s).trim());
+  // 优先识别 bullet 格式
+  const bullet = lines
+    .filter((l) => l.startsWith('- '))
+    .map((l) => l.slice(2).trim())
+    .filter(Boolean);
+  if (bullet.length) return bullet;
+  return lines.filter(Boolean);
 }
 
 /**
@@ -64,8 +64,8 @@ export function parseEditedSummaryLines(text) {
  * @returns {string}
  */
 export function formatTime(ts) {
-    if (!ts) return '';
-    return new Date(ts).toLocaleString();
+  if (!ts) return '';
+  return new Date(ts).toLocaleString();
 }
 
 /**
@@ -74,7 +74,7 @@ export function formatTime(ts) {
  * @returns {string}
  */
 export function escapeHtml(text) {
-    return String(text || '')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+  return String(text || '')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }

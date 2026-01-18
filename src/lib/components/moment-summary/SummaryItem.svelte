@@ -16,14 +16,7 @@
    */
 
   /** @type {Props} */
-  const {
-    text,
-    at = 0,
-    batchMode = false,
-    selected = false,
-    onToggle,
-    onClick,
-  } = $props();
+  const { text, at = 0, batchMode = false, selected = false, onToggle, onClick } = $props();
 
   const time = $derived(formatTime(at));
 
@@ -43,12 +36,7 @@
   }
 </script>
 
-<button
-  class="summary-item"
-  class:batch-mode={batchMode}
-  class:selected
-  onclick={handleClick}
->
+<button class="summary-item" class:batch-mode={batchMode} class:selected onclick={handleClick}>
   {#if batchMode}
     <div class="checkbox" class:checked={selected}>
       {#if selected}✓{/if}

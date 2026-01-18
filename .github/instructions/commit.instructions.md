@@ -1,5 +1,5 @@
 ---
-applyTo: "**"
+applyTo: '**'
 ---
 
 # Commit Helper Instructions
@@ -27,11 +27,11 @@ When user requests commit help → Follow <a>.github/agents/commit.agent.md</a>
 
 ## Common Mistakes
 
-| Wrong | Right |
-|-------|-------|
-| `feat: Added feature` | `feat: add feature` (imperative) |
-| `Fix bug.` | `fix: resolve auth issue` (lowercase, no period) |
-| `feat: add A, refactor B, update C` | Split into 3 commits |
+| Wrong                               | Right                                            |
+| ----------------------------------- | ------------------------------------------------ |
+| `feat: Added feature`               | `feat: add feature` (imperative)                 |
+| `Fix bug.`                          | `fix: resolve auth issue` (lowercase, no period) |
+| `feat: add A, refactor B, update C` | Split into 3 commits                             |
 
 ## User Triggers
 

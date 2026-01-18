@@ -56,7 +56,7 @@ export class CustomProvider {
 
   getHeaders() {
     const headers = {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
     };
 
     if (this.apiKey) {
@@ -89,7 +89,10 @@ export class CustomProvider {
       }
     }
 
-    const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
+    const { controller, cleanup } = createLinkedAbortController({
+      timeoutMs: this.timeout,
+      signal,
+    });
     try {
       const response = await fetch(url, {
         method,
@@ -138,7 +141,7 @@ export class CustomProvider {
         model: this.model,
         messages: messages,
         stream: false,
-        ...payloadOptions
+        ...payloadOptions,
       }),
       signal,
     });
@@ -163,7 +166,7 @@ export class CustomProvider {
       model: this.model,
       messages: messages,
       stream: true,
-      ...payloadOptions
+      ...payloadOptions,
     });
 
     const invoker = getTauriInvoker();
@@ -199,13 +202,16 @@ export class CustomProvider {
       return;
     }
 
-    const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
+    const { controller, cleanup } = createLinkedAbortController({
+      timeoutMs: this.timeout,
+      signal,
+    });
     try {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { ...this.getHeaders(), Accept: 'text/event-stream' },
         signal: controller.signal,
-        body: payload
+        body: payload,
       });
 
       if (!response.ok) {
@@ -215,7 +221,9 @@ export class CustomProvider {
           const j = JSON.parse(String(txt || '').trim());
           detail = String(j?.error?.message || j?.message || j?.detail || j?.error || '').trim();
         } catch (_e) {}
-        const error = new Error(`Custom API Error: ${response.status}${detail ? ` - ${detail}` : ''}`);
+        const error = new Error(
+          `Custom API Error: ${response.status}${detail ? ` - ${detail}` : ''}`
+        );
         error.status = response.status;
         error.response = txt;
         throw error;
@@ -249,8 +257,8 @@ export class CustomProvider {
       });
       if (!res.ok) return [this.model];
       const data = JSON.parse(res.body || '{}');
-      if (Array.isArray(data)) return data.map(m => m.id || m.name || m);
-      if (data.data && Array.isArray(data.data)) return data.data.map(m => m.id || m.name || m);
+      if (Array.isArray(data)) return data.map((m) => m.id || m.name || m);
+      if (data.data && Array.isArray(data.data)) return data.data.map((m) => m.id || m.name || m);
       return [this.model];
     } catch (error) {
       console.warn('Failed to fetch models:', error);

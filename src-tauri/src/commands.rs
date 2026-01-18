@@ -1,31 +1,25 @@
 use crate::memory_db::{
-    MemoryCreateInput,
-    MemoryDb,
-    MemoryQuery,
-    MemoryRecord,
-    MemoryUpdateInput,
-    TemplateInput,
-    TemplateQuery,
-    TemplateRecord,
+    MemoryCreateInput, MemoryDb, MemoryQuery, MemoryRecord, MemoryUpdateInput, TemplateInput,
+    TemplateQuery, TemplateRecord,
 };
 use crate::storage::{simple_decrypt, simple_encrypt, ChatMessage};
+use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use base64::Engine;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use tauri::{AppHandle, Manager, State};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 #[cfg(target_os = "android")]
-use jni::{JNIEnv, JavaVM};
-#[cfg(target_os = "android")]
 use jni::objects::{JObject, JString, JValue};
+#[cfg(target_os = "android")]
+use jni::{JNIEnv, JavaVM};
 #[cfg(target_os = "android")]
 use ndk_context::android_context;
 #[cfg(target_os = "android")]
@@ -33,9 +27,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 
 /// 获取数据目录
 fn get_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())
+    app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
 fn sanitize_segment(input: &str) -> String {
@@ -49,7 +41,11 @@ fn sanitize_segment(input: &str) -> String {
         }
     }
     let trimmed = out.trim_matches('_');
-    let mut cleaned = if trimmed.is_empty() { "default".to_string() } else { out };
+    let mut cleaned = if trimmed.is_empty() {
+        "default".to_string()
+    } else {
+        out
+    };
     const MAX_LEN: usize = 80;
     if cleaned.len() > MAX_LEN {
         cleaned.truncate(MAX_LEN);
@@ -99,7 +95,9 @@ fn chat_store_v2_thread_dir(
     let scope_dir = chat_store_v2_scope_dir(app, scope)?;
     let session_key = validate_safe_key(session_dir, "session_dir")?;
     let thread_key = validate_safe_key(thread_dir, "thread_dir")?;
-    Ok(scope_dir.join(format!("session_{session_key}")).join(format!("thread_{thread_key}")))
+    Ok(scope_dir
+        .join(format!("session_{session_key}"))
+        .join(format!("thread_{thread_key}")))
 }
 
 fn write_json_file(path: &Path, data: &Value) -> Result<(), String> {
@@ -162,7 +160,10 @@ fn raw_reply_path(app: &AppHandle, session_id: &str, message_id: &str) -> Result
     let data_dir = get_data_dir(app)?;
     let sid = sanitize_segment(session_id);
     let mid = sanitize_segment(message_id);
-    Ok(data_dir.join("raw_replies").join(sid).join(format!("{mid}.txt")))
+    Ok(data_dir
+        .join("raw_replies")
+        .join(sid)
+        .join(format!("{mid}.txt")))
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
@@ -304,7 +305,9 @@ fn resolve_export_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 #[cfg(target_os = "android")]
 fn android_sdk_int(env: &mut JNIEnv) -> Result<i32, String> {
-    let class = env.find_class("android/os/Build$VERSION").map_err(|e| e.to_string())?;
+    let class = env
+        .find_class("android/os/Build$VERSION")
+        .map_err(|e| e.to_string())?;
     env.get_static_field(class, "SDK_INT", "I")
         .and_then(|value| value.i())
         .map_err(|e| e.to_string())
@@ -316,7 +319,9 @@ fn android_scan_file(env: &mut JNIEnv, context: &JObject, path: &Path) -> Result
         .find_class("android/media/MediaScannerConnection")
         .map_err(|e| e.to_string())?;
     let path_str = path.to_string_lossy();
-    let path_java = env.new_string(path_str.as_ref()).map_err(|e| e.to_string())?;
+    let path_java = env
+        .new_string(path_str.as_ref())
+        .map_err(|e| e.to_string())?;
     let array = env
         .new_object_array(1, "java/lang/String", JObject::from(path_java))
         .map_err(|e| e.to_string())?;
@@ -395,7 +400,12 @@ fn publish_bundle_mediastore(
     file_name: &str,
 ) -> Result<String, String> {
     let resolver = env
-        .call_method(&context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
+        .call_method(
+            &context,
+            "getContentResolver",
+            "()Landroid/content/ContentResolver;",
+            &[],
+        )
         .and_then(|value| value.l())
         .map_err(|e| e.to_string())?;
     let values = env
@@ -432,10 +442,7 @@ fn publish_bundle_mediastore(
         &values,
         "put",
         "(Ljava/lang/String;Ljava/lang/String;)V",
-        &[
-            JValue::Object(&mime_key),
-            JValue::Object(&mime_value_obj),
-        ],
+        &[JValue::Object(&mime_key), JValue::Object(&mime_value_obj)],
     )
     .map_err(|e| e.to_string())?;
     if let Ok(relative_key) = env
@@ -460,18 +467,20 @@ fn publish_bundle_mediastore(
         .and_then(|value| value.l())
     {
         if let Ok(int_class) = env.find_class("java/lang/Integer") {
-            if let Ok(pending_value) =
-                env.call_static_method(int_class, "valueOf", "(I)Ljava/lang/Integer;", &[JValue::from(1)])
-                    .and_then(|value| value.l())
+            if let Ok(pending_value) = env
+                .call_static_method(
+                    int_class,
+                    "valueOf",
+                    "(I)Ljava/lang/Integer;",
+                    &[JValue::from(1)],
+                )
+                .and_then(|value| value.l())
             {
                 let _ = env.call_method(
                     &values,
                     "put",
                     "(Ljava/lang/String;Ljava/lang/Integer;)V",
-                    &[
-                        JValue::Object(&pending_key),
-                        JValue::Object(&pending_value),
-                    ],
+                    &[JValue::Object(&pending_key), JValue::Object(&pending_value)],
                 );
             }
         }
@@ -502,10 +511,7 @@ fn publish_bundle_mediastore(
             &resolver,
             "openFileDescriptor",
             "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
-            &[
-                JValue::Object(&inserted),
-                JValue::Object(&mode_obj),
-            ],
+            &[JValue::Object(&inserted), JValue::Object(&mode_obj)],
         )
         .and_then(|value| value.l())
         .map_err(|e| e.to_string())?;
@@ -532,18 +538,20 @@ fn publish_bundle_mediastore(
     {
         if let Ok(values) = env.new_object("android/content/ContentValues", "()V", &[]) {
             if let Ok(int_class) = env.find_class("java/lang/Integer") {
-                if let Ok(pending_value) =
-                    env.call_static_method(int_class, "valueOf", "(I)Ljava/lang/Integer;", &[JValue::from(0)])
-                        .and_then(|value| value.l())
+                if let Ok(pending_value) = env
+                    .call_static_method(
+                        int_class,
+                        "valueOf",
+                        "(I)Ljava/lang/Integer;",
+                        &[JValue::from(0)],
+                    )
+                    .and_then(|value| value.l())
                 {
                     let _ = env.call_method(
                         &values,
                         "put",
                         "(Ljava/lang/String;Ljava/lang/Integer;)V",
-                        &[
-                            JValue::Object(&pending_key),
-                            JValue::Object(&pending_value),
-                        ],
+                        &[JValue::Object(&pending_key), JValue::Object(&pending_value)],
                     );
                     let null_obj = JObject::null();
                     let _ = env.call_method(
@@ -632,10 +640,14 @@ fn add_dir_to_zip<W: Write + Seek>(
         }
     }
     if dir.is_dir() {
-        let rel = dir.strip_prefix(base).map_err(|_| "invalid base path".to_string())?;
+        let rel = dir
+            .strip_prefix(base)
+            .map_err(|_| "invalid base path".to_string())?;
         if !rel.as_os_str().is_empty() {
             let name = format!("{}/", rel.to_string_lossy().replace('\\', "/"));
-            writer.add_directory(name, options).map_err(|e| e.to_string())?;
+            writer
+                .add_directory(name, options)
+                .map_err(|e| e.to_string())?;
         }
         let mut count = 0;
         for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
@@ -644,9 +656,13 @@ fn add_dir_to_zip<W: Write + Seek>(
         }
         return Ok(count);
     }
-    let rel = dir.strip_prefix(base).map_err(|_| "invalid base path".to_string())?;
+    let rel = dir
+        .strip_prefix(base)
+        .map_err(|_| "invalid base path".to_string())?;
     let name = rel.to_string_lossy().replace('\\', "/");
-    writer.start_file(name, options).map_err(|e| e.to_string())?;
+    writer
+        .start_file(name, options)
+        .map_err(|e| e.to_string())?;
     let mut file = fs::File::open(dir).map_err(|e| e.to_string())?;
     std::io::copy(&mut file, writer).map_err(|e| e.to_string())?;
     Ok(1)
@@ -744,7 +760,10 @@ pub async fn ensure_media_bundle(app: AppHandle) -> Result<MediaBundleInfo, Stri
                 let candidates = [
                     resource_dir.join("media"),
                     resource_dir.join("resources").join("media"),
-                    resource_dir.join("src-tauri").join("resources").join("media"),
+                    resource_dir
+                        .join("src-tauri")
+                        .join("resources")
+                        .join("media"),
                 ];
                 let mut picked = None;
                 for dir in candidates {
@@ -807,7 +826,9 @@ pub async fn save_wallpaper(
 
     let (bytes, ext_from_mime) = decode_data_url(&data_url)?;
     let ext_from_name = file_name.as_deref().and_then(extension_from_name);
-    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let ext = ext_from_mime
+        .or(ext_from_name)
+        .unwrap_or_else(|| "png".to_string());
     let stem = sanitize_segment(file_name.as_deref().unwrap_or("wallpaper"));
     let ts = chrono::Utc::now().timestamp();
     let file = wallpaper_root.join(format!("wallpaper_{safe_sid}_{stem}_{ts}.{ext}"));
@@ -844,7 +865,8 @@ pub async fn save_wallpaper_chunked(
 
     // 合并所有Base64块并解码
     let combined = chunks.join("");
-    let bytes = BASE64_ENGINE.decode(&combined)
+    let bytes = BASE64_ENGINE
+        .decode(&combined)
         .map_err(|e| format!("Base64解码失败: {}", e))?;
 
     // 确定扩展名
@@ -856,7 +878,9 @@ pub async fn save_wallpaper_chunked(
         _ => None,
     });
     let ext_from_name = file_name.as_deref().and_then(extension_from_name);
-    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let ext = ext_from_mime
+        .or(ext_from_name)
+        .unwrap_or_else(|| "png".to_string());
 
     let stem = sanitize_segment(file_name.as_deref().unwrap_or("wallpaper"));
     let ts = chrono::Utc::now().timestamp();
@@ -902,7 +926,9 @@ pub async fn save_wallpaper_stream_start(
         _ => None,
     });
     let ext_from_name = file_name.as_deref().and_then(extension_from_name);
-    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let ext = ext_from_mime
+        .or(ext_from_name)
+        .unwrap_or_else(|| "png".to_string());
     let stem = sanitize_segment(file_name.as_deref().unwrap_or("wallpaper"));
     let ts = chrono::Utc::now().timestamp_millis();
     let file = wallpaper_root.join(format!("wallpaper_{safe_sid}_{stem}_{ts}.{ext}"));
@@ -914,7 +940,10 @@ pub async fn save_wallpaper_stream_start(
         path: file.clone(),
         previous_path,
     };
-    let mut map = state.inner.lock().map_err(|_| "stream state lock poisoned".to_string())?;
+    let mut map = state
+        .inner
+        .lock()
+        .map_err(|_| "stream state lock poisoned".to_string())?;
     map.insert(upload_id.clone(), entry);
 
     Ok(WallpaperStreamStartResult {
@@ -931,13 +960,21 @@ pub async fn save_wallpaper_stream_chunk(
     state: State<'_, WallpaperStreamState>,
 ) -> Result<(), String> {
     let (path, _) = {
-        let map = state.inner.lock().map_err(|_| "stream state lock poisoned".to_string())?;
-        let entry = map.get(upload_id.trim()).ok_or("invalid upload id".to_string())?;
+        let map = state
+            .inner
+            .lock()
+            .map_err(|_| "stream state lock poisoned".to_string())?;
+        let entry = map
+            .get(upload_id.trim())
+            .ok_or("invalid upload id".to_string())?;
         (entry.path.clone(), entry.previous_path.clone())
     };
 
     let bytes = decode_base64_payload(&chunk)?;
-    let mut file = OpenOptions::new().append(true).open(&path).map_err(|e| e.to_string())?;
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
     file.write_all(&bytes).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -949,20 +986,23 @@ pub async fn save_wallpaper_stream_finish(
     state: State<'_, WallpaperStreamState>,
 ) -> Result<WallpaperSaveResult, String> {
     let entry = {
-        let mut map = state.inner.lock().map_err(|_| "stream state lock poisoned".to_string())?;
-        map.remove(upload_id.trim()).ok_or("invalid upload id".to_string())?
+        let mut map = state
+            .inner
+            .lock()
+            .map_err(|_| "stream state lock poisoned".to_string())?;
+        map.remove(upload_id.trim())
+            .ok_or("invalid upload id".to_string())?
     };
 
     if let Some(prev) = entry.previous_path.clone() {
         let prev_path = PathBuf::from(prev);
-        if prev_path.starts_with(entry.path.parent().unwrap_or(Path::new(""))) && prev_path.exists() {
+        if prev_path.starts_with(entry.path.parent().unwrap_or(Path::new(""))) && prev_path.exists()
+        {
             let _ = fs::remove_file(prev_path);
         }
     }
 
-    let bytes = fs::metadata(&entry.path)
-        .map_err(|e| e.to_string())?
-        .len() as usize;
+    let bytes = fs::metadata(&entry.path).map_err(|e| e.to_string())?.len() as usize;
 
     Ok(WallpaperSaveResult {
         path: entry.path.to_string_lossy().to_string(),
@@ -1011,7 +1051,9 @@ pub async fn save_attachment(
 
     let (bytes, ext_from_mime) = decode_data_url(&data_url)?;
     let ext_from_name = file_name.as_deref().and_then(extension_from_name);
-    let ext = ext_from_mime.or(ext_from_name).unwrap_or_else(|| "png".to_string());
+    let ext = ext_from_mime
+        .or(ext_from_name)
+        .unwrap_or_else(|| "png".to_string());
     let stem = sanitize_segment(file_name.as_deref().unwrap_or("attachment"));
     let ts = chrono::Utc::now().timestamp_millis();
     let file = attach_root.join(format!("attachment_{safe_sid}_{stem}_{ts}.{ext}"));
@@ -1057,7 +1099,10 @@ pub async fn cleanup_wallpapers(
     let data_dir = get_data_dir(&app)?;
     let wallpaper_root = data_dir.join("wallpapers");
     if !wallpaper_root.exists() {
-        return Ok(WallpaperCleanupResult { removed: 0, kept: 0 });
+        return Ok(WallpaperCleanupResult {
+            removed: 0,
+            kept: 0,
+        });
     }
 
     let mut referenced = std::collections::HashSet::new();
@@ -1160,12 +1205,20 @@ pub async fn export_data_bundle(
             "llm_keyring_master_v1.json"
         ]
     });
-    writer.start_file("bundle.json", options).map_err(|e| e.to_string())?;
+    writer
+        .start_file("bundle.json", options)
+        .map_err(|e| e.to_string())?;
     writer
         .write_all(manifest.to_string().as_bytes())
         .map_err(|e| e.to_string())?;
 
-    let files = add_dir_to_zip(&mut writer, &data_dir, &data_dir, options, Some(&output_path))?;
+    let files = add_dir_to_zip(
+        &mut writer,
+        &data_dir,
+        &data_dir,
+        options,
+        Some(&output_path),
+    )?;
     writer.finish().map_err(|e| e.to_string())?;
     let bytes = fs::metadata(&output_path).map_err(|e| e.to_string())?.len();
     let mut result_path = output_path.to_string_lossy().to_string();
@@ -1266,7 +1319,11 @@ pub async fn load_config(app: AppHandle) -> Result<Value, String> {
 
     // 解密 API Key
     if let Some(obj) = config.as_object_mut() {
-        if obj.get("_encrypted").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if obj
+            .get("_encrypted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             if let Some(api_key) = obj.get("apiKey").and_then(|v| v.as_str()) {
                 match simple_decrypt(api_key) {
                     Ok(decrypted) => {
@@ -1321,7 +1378,9 @@ pub async fn get_chat_history(
     limit: Option<i64>,
 ) -> Result<Vec<ChatMessage>, String> {
     let data_dir = get_data_dir(&app)?;
-    let chat_file = data_dir.join("chats").join(format!("{}.json", character_id));
+    let chat_file = data_dir
+        .join("chats")
+        .join(format!("{}.json", character_id));
 
     if !chat_file.exists() {
         return Ok(Vec::new());
@@ -1341,12 +1400,11 @@ pub async fn get_chat_history(
 
 /// 清除聊天历史
 #[tauri::command]
-pub async fn clear_chat_history(
-    app: AppHandle,
-    character_id: String,
-) -> Result<(), String> {
+pub async fn clear_chat_history(app: AppHandle, character_id: String) -> Result<(), String> {
     let data_dir = get_data_dir(&app)?;
-    let chat_file = data_dir.join("chats").join(format!("{}.json", character_id));
+    let chat_file = data_dir
+        .join("chats")
+        .join(format!("{}.json", character_id));
 
     if chat_file.exists() {
         fs::remove_file(chat_file).map_err(|e| e.to_string())?;
@@ -1375,12 +1433,11 @@ pub async fn save_world_info(
 
 /// 获取世界书数据
 #[tauri::command]
-pub async fn get_world_info(
-    app: AppHandle,
-    character_id: String,
-) -> Result<Value, String> {
+pub async fn get_world_info(app: AppHandle, character_id: String) -> Result<Value, String> {
     let data_dir = get_data_dir(&app)?;
-    let world_file = data_dir.join("worldinfo").join(format!("{}.json", character_id));
+    let world_file = data_dir
+        .join("worldinfo")
+        .join(format!("{}.json", character_id));
 
     if !world_file.exists() {
         return Ok(serde_json::json!({}));
@@ -1706,7 +1763,8 @@ pub async fn http_request(
 
     let mut header_map = reqwest::header::HeaderMap::new();
     for (k, v) in headers {
-        let name = reqwest::header::HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
+        let name =
+            reqwest::header::HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
         let value = reqwest::header::HeaderValue::from_str(&v).map_err(|e| e.to_string())?;
         header_map.insert(name, value);
     }
@@ -1742,7 +1800,12 @@ pub async fn http_request(
 
 /// JS -> Rust log bridge (prints to logcat via stderr on Android)
 #[tauri::command]
-pub async fn log_js(tag: String, level: Option<String>, message: String, data: Option<Value>) -> Result<(), String> {
+pub async fn log_js(
+    tag: String,
+    level: Option<String>,
+    message: String,
+    data: Option<Value>,
+) -> Result<(), String> {
     let tag = tag.trim();
     if tag.is_empty() {
         return Ok(());
@@ -1770,7 +1833,10 @@ pub async fn log_js(tag: String, level: Option<String>, message: String, data: O
 }
 
 #[tauri::command]
-pub async fn init_database(db: State<'_, MemoryDb>, scope_id: Option<String>) -> Result<(), String> {
+pub async fn init_database(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+) -> Result<(), String> {
     db.init_database(scope_id)
 }
 
@@ -1793,7 +1859,11 @@ pub async fn update_memory(
 }
 
 #[tauri::command]
-pub async fn delete_memory(db: State<'_, MemoryDb>, scope_id: Option<String>, id: String) -> Result<(), String> {
+pub async fn delete_memory(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    id: String,
+) -> Result<(), String> {
     db.delete_memory(scope_id, id)
 }
 
@@ -1843,6 +1913,10 @@ pub async fn get_templates(
 }
 
 #[tauri::command]
-pub async fn delete_template(db: State<'_, MemoryDb>, scope_id: Option<String>, id: String) -> Result<(), String> {
+pub async fn delete_template(
+    db: State<'_, MemoryDb>,
+    scope_id: Option<String>,
+    id: String,
+) -> Result<(), String> {
     db.delete_template(scope_id, id)
 }

@@ -28,14 +28,11 @@ export class DeepseekProvider extends OpenAIProvider {
         method: 'GET',
         headers: this.getHeaders(),
       });
-      return (data.data || []).filter(m => m.id.includes('deepseek')).map(m => m.id);
+      return (data.data || []).filter((m) => m.id.includes('deepseek')).map((m) => m.id);
     } catch (error) {
       console.warn('Failed to list Deepseek models, using defaults:', error);
       // Return common Deepseek models as fallback
-      return [
-        'deepseek-chat',
-        'deepseek-coder',
-      ];
+      return ['deepseek-chat', 'deepseek-coder'];
     }
   }
 

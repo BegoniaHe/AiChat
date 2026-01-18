@@ -9,9 +9,9 @@
  * @returns {string}
  */
 export function formatTime(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 /**
@@ -38,26 +38,26 @@ export function formatTime(ts) {
  * @returns {ContactDisplayInfo}
  */
 export function buildContactDisplayInfo(contact, { currentId, getLastMessage, getUnreadCount }) {
-    const id = contact.id;
-    const isGroup = Boolean(contact.isGroup) || id.startsWith('group:');
-    const membersCount = isGroup && Array.isArray(contact.members) ? contact.members.length : 0;
+  const id = contact.id;
+  const isGroup = Boolean(contact.isGroup) || id.startsWith('group:');
+  const membersCount = isGroup && Array.isArray(contact.members) ? contact.members.length : 0;
 
-    const last = typeof getLastMessage === 'function' ? getLastMessage(id) : null;
-    const snippet = last ? (last.content || '').slice(0, 32) : '新会话';
-    const time = last?.timestamp ? formatTime(last.timestamp) : '';
-    const unread = typeof getUnreadCount === 'function' ? getUnreadCount(id) : 0;
+  const last = typeof getLastMessage === 'function' ? getLastMessage(id) : null;
+  const snippet = last ? (last.content || '').slice(0, 32) : '新会话';
+  const time = last?.timestamp ? formatTime(last.timestamp) : '';
+  const unread = typeof getUnreadCount === 'function' ? getUnreadCount(id) : 0;
 
-    return {
-        id,
-        name: contact.name || id,
-        avatar: contact.avatar || '',
-        isGroup,
-        membersCount,
-        snippet,
-        time,
-        unread,
-        isCurrent: id === currentId,
-    };
+  return {
+    id,
+    name: contact.name || id,
+    avatar: contact.avatar || '',
+    isGroup,
+    membersCount,
+    snippet,
+    time,
+    unread,
+    isCurrent: id === currentId,
+  };
 }
 
 /**
@@ -67,19 +67,19 @@ export function buildContactDisplayInfo(contact, { currentId, getLastMessage, ge
  * @returns {{ valid: boolean, error?: string }}
  */
 export function validateContactName(name, exists) {
-    const trimmed = (name || '').trim();
+  const trimmed = (name || '').trim();
 
-    if (!trimmed) {
-        return { valid: false, error: '请输入好友名称' };
-    }
+  if (!trimmed) {
+    return { valid: false, error: '请输入好友名称' };
+  }
 
-    if (trimmed.startsWith('group:')) {
-        return { valid: false, error: '好友名称不可使用 group: 前缀' };
-    }
+  if (trimmed.startsWith('group:')) {
+    return { valid: false, error: '好友名称不可使用 group: 前缀' };
+  }
 
-    if (typeof exists === 'function' && exists(trimmed)) {
-        return { valid: false, error: '名称已存在，请换一个' };
-    }
+  if (typeof exists === 'function' && exists(trimmed)) {
+    return { valid: false, error: '名称已存在，请换一个' };
+  }
 
-    return { valid: true };
+  return { valid: true };
 }

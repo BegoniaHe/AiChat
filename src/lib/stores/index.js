@@ -18,8 +18,14 @@ export { getMomentsStore, MomentsStore } from './moments.svelte.js';
 
 // Preset store (SillyTavern-like)
 export {
-    DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT,
-    DEFAULT_GROUP_RULES, DEFAULT_MOMENT_COMMENT_RULES, DEFAULT_MOMENT_CREATION_RULES, DEFAULT_MOMENT_RULES, DEFAULT_SUMMARY_RULES, getPresetStore, PresetStore
+  DEFAULT_DIALOGUE_RULES_PRIVATE_CHAT,
+  DEFAULT_GROUP_RULES,
+  DEFAULT_MOMENT_COMMENT_RULES,
+  DEFAULT_MOMENT_CREATION_RULES,
+  DEFAULT_MOMENT_RULES,
+  DEFAULT_SUMMARY_RULES,
+  getPresetStore,
+  PresetStore,
 } from './preset.svelte.js';
 
 // Create singleton preset store
@@ -29,8 +35,10 @@ export const presetStore = _getPresetStore();
 
 // Regex store (SillyTavern-like)
 export {
-    getRegexStore,
-    regex_placement, RegexStore, substitute_find_regex
+  getRegexStore,
+  regex_placement,
+  RegexStore,
+  substitute_find_regex,
 } from './regex.svelte.js';
 
 // WorldInfo store
@@ -42,4 +50,3 @@ export { DEFAULT_MEMORY_TEMPLATE } from './memory-default-template.js';
 // 工具函数
 export { createPersistentStore, createStore } from './persistent.svelte.js';
 export { makeScopedKey, normalizeScopeId } from './store-scope.js';
-

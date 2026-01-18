@@ -12,11 +12,7 @@
    */
 
   /** @type {Props} */
-  let {
-    open = $bindable(false),
-    value = '',
-    onClose,
-  } = $props();
+  let { open = $bindable(false), value = '', onClose } = $props();
 
   function handleClose() {
     open = false;
@@ -26,7 +22,7 @@
 
 <Modal {open} onClose={handleClose} title="动态大总结原始回复" maxWidth="720px" maxHeight="80vh">
   <div class="raw-modal">
-    <textarea readonly value={value}></textarea>
+    <textarea readonly {value}></textarea>
   </div>
 </Modal>
 
@@ -47,7 +43,8 @@
     padding: 12px;
     font-size: 13px;
     line-height: 1.4;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
     white-space: pre;
     box-sizing: border-box;
     outline: none;

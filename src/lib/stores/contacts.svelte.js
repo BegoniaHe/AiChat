@@ -38,7 +38,7 @@ function normalizeContact(contact) {
 function createContactsStore(scopeId = '') {
   const scope = normalizeScopeId(scopeId);
   const storeKey = makeScopedKey(BASE_STORE_KEY, scope);
-  
+
   let contacts = $state({});
   let initialized = false;
 
@@ -46,7 +46,7 @@ function createContactsStore(scopeId = '') {
   async function load() {
     try {
       let data = await tryInvoke('load_kv', { name: storeKey });
-      
+
       if (!data) {
         const raw = localStorage.getItem(storeKey);
         if (raw) {
@@ -57,7 +57,7 @@ function createContactsStore(scopeId = '') {
       if (data?.contacts) {
         contacts = data.contacts;
       }
-      
+
       initialized = true;
       logger.info(`Contacts loaded: ${Object.keys(contacts).length} contacts`);
     } catch (err) {
@@ -83,7 +83,7 @@ function createContactsStore(scopeId = '') {
     get value() {
       return contacts;
     },
-    
+
     get list() {
       return Object.values(contacts).sort((a, b) => {
         // 置顶优先
@@ -92,11 +92,11 @@ function createContactsStore(scopeId = '') {
         return (b.lastMessageTime || 0) - (a.lastMessageTime || 0);
       });
     },
-    
+
     get(id) {
       return contacts[id] || null;
     },
-    
+
     add(contact) {
       const normalized = normalizeContact(contact);
       contacts[normalized.id] = normalized;
@@ -104,7 +104,7 @@ function createContactsStore(scopeId = '') {
       save();
       return normalized;
     },
-    
+
     update(id, updates) {
       if (!contacts[id]) return null;
       contacts[id] = {
@@ -116,7 +116,7 @@ function createContactsStore(scopeId = '') {
       save();
       return contacts[id];
     },
-    
+
     remove(id) {
       if (!contacts[id]) return false;
       delete contacts[id];
@@ -124,7 +124,7 @@ function createContactsStore(scopeId = '') {
       save();
       return true;
     },
-    
+
     updateLastMessage(id, message, time = Date.now()) {
       if (!contacts[id]) return;
       contacts[id].lastMessage = message;
@@ -132,39 +132,39 @@ function createContactsStore(scopeId = '') {
       contacts = { ...contacts };
       save();
     },
-    
+
     incrementUnread(id) {
       if (!contacts[id]) return;
       contacts[id].unreadCount = (contacts[id].unreadCount || 0) + 1;
       contacts = { ...contacts };
       save();
     },
-    
+
     clearUnread(id) {
       if (!contacts[id]) return;
       contacts[id].unreadCount = 0;
       contacts = { ...contacts };
       save();
     },
-    
+
     togglePin(id) {
       if (!contacts[id]) return;
       contacts[id].pinned = !contacts[id].pinned;
       contacts = { ...contacts };
       save();
     },
-    
+
     toggleMute(id) {
       if (!contacts[id]) return;
       contacts[id].muted = !contacts[id].muted;
       contacts = { ...contacts };
       save();
     },
-    
+
     get isInitialized() {
       return initialized;
     },
-    
+
     async reload() {
       await load();
     },

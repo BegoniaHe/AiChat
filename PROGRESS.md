@@ -1,21 +1,25 @@
 # 開發進度追蹤（必更新）(必须使用当下时间记录)
 
 ## 2026-01-17 15:44
+
 - Android 资料包导出：补强 MediaStore 导出后回传实际下载路径并触发媒体扫描，避免导出后找不到文件。
 - 修改：
   - `src-tauri/src/commands.rs`
 
 ## 2026-01-17 23:10
+
 - Dev/Release 分离：新增 dev 配置覆盖包名，避免 Android 调试包与 release 安装冲突。
 - 修改：
   - `src-tauri/tauri.conf.dev.json`
 
 ## 2026-01-17 23:16
+
 - Android debug 安装隔离：debug build 加上 applicationIdSuffix 与版本后缀，避免与 release 包名冲突。
 - 修改：
   - `src-tauri/gen/android/app/build.gradle.kts`
 
 ## 2026-01-17 02:12
+
 - Persona 调试日志：调试面板新增日志筛选输入；Persona 切换与 Chat/Contacts store 加入范围日志与 session/联系人新增日志。
 - ChatStore v2 队列：异步写入改用捕获的 v2 实例，避免 Persona 切换时写入跨 scope。
 - 修改：
@@ -25,17 +29,20 @@
   - `src/scripts/storage/contacts-store.js`
 
 ## 2026-01-17 01:33
+
 - Persona 切换时防止旧会话异步加载写入新 scope：聊天存储增加 scope 校验并在延迟持久化中锁定 storeKey。
 - 修改：
   - `src/scripts/storage/chat-store.js`
 
 ## 2026-01-17 01:47
+
 - 修复 Persona 联系人/会话混入：持久化数据写入 scopeId 标记，加载时校验不匹配则忽略。
 - 修改：
   - `src/scripts/storage/chat-store.js`
   - `src/scripts/storage/contacts-store.js`
 
 ## 2026-01-17 01:23
+
 - Persona 切换时防止异步 hydrate 覆盖新 scope：为联系人/会话/分组/动态/动态摘要 store 增加 scope token 校验。
 - 修改：
   - `src/scripts/storage/chat-store.js`
@@ -45,17 +52,20 @@
   - `src/scripts/storage/moment-summary-store.js`
 
 ## 2026-01-17 01:07
+
 - 新 Persona 不再自动生成 default 聊天室：空会话时 currentId 为空、相关方法对空会话直接返回；变量面板无会话时不再回落 default。
 - 修改：
   - `src/scripts/storage/chat-store.js`
   - `src/scripts/ui/variable-panel.js`
 
 ## 2026-01-17 00:53
+
 - 修复 default 聊天室删除后仍会回来的问题：删除当前会话时自动切到其它会话（若存在）。
 - 修改：
   - `src/scripts/storage/chat-store.js`
 
 ## 2026-01-17 00:43
+
 - Persona 切换：避免新 Persona 继续继承旧数据（联系人/会话/动态摘要等），修复新建 Persona 出现旧联系人无头像问题。
 - 修改：
   - `src/scripts/storage/chat-store.js`
@@ -64,16 +74,19 @@
   - `src/scripts/storage/moment-summary-store.js`
 
 ## 2026-01-15 21:35
+
 - 未分组联系人区域常驻显示；为空时显示占位并支持拖拽回未分组。
 - 修改：
   - `src/scripts/ui/contact-group-renderer.js`
 
 ## 2026-01-15 21:31
+
 - 分组拖拽优化：仅高亮当前悬停分组，支持拖拽悬停自动展开并可投放到不同层级。
 - 修改：
   - `src/scripts/ui/contact-drag-manager.js`
 
 ## 2026-01-15 21:22
+
 - 联系人分组：长按分组名称弹出联系人选择清单，支持批量加入该分组。
 - 联系人分组：新增嵌套/层级分组支持，分组可设置上级并在列表中呈现层级。
 - 修改：
@@ -83,6 +96,7 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-15 21:04
+
 - 记忆表格模式：开启新聊天改为按钮选择（保留摘要/清空全部/取消）。
 - 记忆表格与存档绑定：清空后开启新聊天仅影响新存档，切回历史存档会恢复表格内容。
 - 修改：
@@ -91,22 +105,26 @@
   - `src/scripts/ui/group-chat-panels.js`
 
 ## 2026-01-15 20:14
+
 - 附件发送补强：Enter 可缓存仅附件的待发送气泡；发送时不再因“发送到这里”而忽略附件。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2026-01-15 19:32
+
 - 附件过期清理：全局扫描改为闲时分批处理，降低卡顿风险；应用运行超过 24 小时后会触发定时扫描。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2026-01-15 19:27
+
 - 附件过期清理：启动时全局扫描所有会话，过期图片标记失效并删除本地文件。
 - Prompt 构建：过期图片不再进入请求内容。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2026-01-15 10:25
+
 - 资料迁移：新增一键打包/导入资料包（聊天记录、联系人、壁纸、记忆表格等），导出为 ZIP 并支持覆盖导入。
 - 导入前关闭记忆表格 DB 连接，避免 Windows 文件占用导致导入失败。
 - 通用设定新增资料迁移入口与状态提示，导入后提示重启。
@@ -118,6 +136,7 @@
   - `src/scripts/ui/general-settings-panel.js`
 
 ## 2026-01-15 10:33
+
 - 资料包排除 API 配置与 keyring 文件，避免迁移敏感资讯。
 - 资料迁移 UI 文案补充安全提醒，导入提示覆盖所有资料。
 - 导出时同步写入 app_settings，以便迁移 UI 偏好。
@@ -126,6 +145,7 @@
   - `src/scripts/ui/general-settings-panel.js`
 
 ## 2026-01-15 11:04
+
 - 导入资料包改为容错模式：单个文件失败会跳过并继续导入，统计跳过数量。
 - 导入完成提示增加跳过项数量提示。
 - 修改：
@@ -133,12 +153,14 @@
   - `src/scripts/ui/general-settings-panel.js`
 
 ## 2026-01-15 11:18
+
 - 世界书管理隐藏内置「手机-格式」，避免与自动注入逻辑混淆。
 - 群聊成员绑定列表同步隐藏内置世界书选项。
 - 修改：
   - `src/scripts/ui/world-panel.js`
 
 ## 2026-01-15 12:42
+
 - 桌面端联系人拖拽改为 pointer 方案，移动端仍走原 HTML5 拖拽。
 - 贴图面板打开时修正聊天输入栏高度计算，避免出现大块空白。
 - 修改：
@@ -146,6 +168,7 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-15 00:56
+
 - 聊天室底部留白微调：消息列表底部预留缩减（输入框间距更紧）。
 - 壁纸持久化补强：新增原图流式分块写入、修正保存参数命名、失败提示带错误信息。
 - 壁纸清理：清除壁纸/删除联系人同步删除本地文件；通用设定新增“清理壁纸残留”入口。
@@ -159,6 +182,7 @@
   - `src-tauri/src/lib.rs`
 
 ## 2026-01-15 17:53
+
 - 聊天附件：图片/文档先进入输入框上方预览，发送按钮才真正发请求；仅附件也可触发请求。
 - 图片持久化：新增附件保存到 AppData，消息记录保存路径与过期时间（默认 7 天），过期自动清理。
 - Prompt 预览：图片/语音改为占位符显示（含 gif），不再展示 base64 长串。
@@ -172,11 +196,13 @@
   - `src-tauri/src/lib.rs`
 
 ## 2026-01-15 18:25
+
 - 修复本次 Prompt 异常：增加异常保护并回退显示，避免无响应。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2026-01-14 20:09
+
 - 聊天室底部留白对齐修正：消息列表改为使用输入栏位置计算的底部内边距，避免多余空白。
 - 面板开合时同步更新底部偏移，贴图预览仍单独加高。
 - 修改：
@@ -184,11 +210,13 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-14 20:20
+
 - 聊天室底部偏移计算减去安全区差值，避免在 Android 底部手势栏下重复预留导致空白。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2026-01-14 20:41
+
 - 聊天室底部留白计算改为使用消息列表与输入栏的实际相对位置，避免误差导致空白。
 - 壁纸保存失败时标记为临时，不再将超大 data URL 写入聊天存档以免清空历史。
 - 修改：
@@ -196,12 +224,14 @@
   - `src/scripts/storage/chat-store.js`
 
 ## 2026-01-14 21:00
+
 - 聊天室底部间距加入动态校正（检测最后一条消息与输入栏的实际间距并修正）。
 - 壁纸上传改为先压缩再保存，提升持久化成功率。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2026-01-14 16:31
+
 - 聊天设置：气泡/字体颜色改为仅作用当前聊天室（CSS 变量 + 会话切换应用）。
 - 聊天壁纸：新增拖拽/上传框，提供预览比例、拖拽裁切、缩放、旋转与重置/清除。
 - 壁纸本地化：新增 Tauri 命令写入 AppData 壁纸文件并按需加载显示。
@@ -213,6 +243,7 @@
   - `src-tauri/src/lib.rs`
 
 ## 2026-01-14 16:35
+
 - 聊天设置新增“应用范围”（当前/全部）选项，气泡/字体可一键同步到全部会话。
 - 修改：
   - `src/index.html`
@@ -220,6 +251,7 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-14 16:53
+
 - 聊天设置：新增恢复默认按钮；全局默认色存储并用于新会话继承。
 - 壁纸显示：顶部渐变遮罩层级提升，避免状态栏区域透出壁纸。
 - 壁纸屏保：聊天页无操作 2 分钟仅显示壁纸，点击/操作恢复。
@@ -231,6 +263,7 @@
   - `src/scripts/storage/chat-store.js`
 
 ## 2026-01-06 10:11
+
 - Phase 7：记忆表格 AI 自动提取（<tableEdit> JSON 指令 + 自动写表）。
 - Prompt 注入新增记忆表格编辑规则，行索引/表索引指引；记忆注入支持行编号与表 ID 标注。
 - 自动写表解析：前端抽取 <tableEdit>、解析 JSON 操作并执行批量新增/更新/删除；表格面板监听自动刷新。
@@ -243,6 +276,7 @@
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-06 14:29
+
 - 记忆表格：编辑处新增提示词模板编辑与发送预览（注入位置/包裹可调）。
 - 记忆表格：自动写表支持“同请求/独立请求”模式，独立请求可选 API 配置。
 - 独立写表：新增记忆更新请求（使用当前表格提示词 + 最近聊天记录），解析 <tableEdit> 写入。
@@ -257,6 +291,7 @@
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-06 16:58
+
 - 记忆更新上下文改为“轮数”配置（用户+助手），通用设定文案同步。
 - 写表记录新增“请求提示词”存档与查看入口，支持同请求/独立请求回溯。
 - 修改：
@@ -266,17 +301,20 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-05 09:54
+
 - 修复记忆表格搜索输入失焦问题：工具栏独立渲染，搜索与批量操作不再重建 DOM。
 - 修改：
   - `src/scripts/ui/memory-table-editor.js`
 
 ## 2026-01-05 09:44
+
 - Phase 3：记忆表格支持搜索、批量操作（启用/禁用/删除）、行状态标识与最大行数限制提示。
 - 聊天室记忆表格默认隐藏全局表格，批量模式下禁用单行操作。
 - 修改：
   - `src/scripts/ui/memory-table-editor.js`
 
 ## 2026-01-03 00:06
+
 - Phase 3：聊天室面板内记忆表格 UI（联系人/群聊）落地，支持表格分组展示、增删改、启用/置顶/优先级。
 - 设置菜单新增“记忆表格”入口，提供模板导入/导出与默认模板切换面板。
 - 修改/新增：
@@ -290,6 +328,7 @@
   - `src-tauri/src/memory_db.rs`
 
 ## 2026-01-02 23:50
+
 - 记忆表格：联系人面板改为 flex 以支持滚动；聊天面板不再显示全局表格，改由“记忆表格管理”面板编辑全局表格。
 - 默认模板调整：新增“角色档案”表格；用户档案保留为全局。
 - 修改：
@@ -302,6 +341,7 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-02 23:08
+
 - Phase 2：默认记忆模板落地（模板结构 + 首次启动写入 templates 表）。
 - 新增模板 CRUD 命令与前端模板 Store，Persona 切换时同步写入默认模板。
 - 修改/新增：
@@ -314,17 +354,20 @@
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-02 22:52
+
 - 修复 Memory DB 编译错误：补足 Manager trait 引入、AppHandle 获取、事务提交借用冲突处理。
 - 修改：
   - `src-tauri/src/memory_db.rs`
   - `src-tauri/src/lib.rs`
 
 ## 2026-01-02 22:42
+
 - Debug 面板新增“Memory DB 烟测”按钮，便于 Android 端快速验证 SQLite 读写初始化。
 - 修改：
   - `src/scripts/ui/debug-panel.js`
 
 ## 2026-01-02 22:24
+
 - 记忆表格：Persona 改为分库（`memories__{scope}.db`），切换 Persona 同步切换 DB。
 - 前端 MemoryTableStore 支持 scope，并在 Persona 切换时同步。
 - 修改：
@@ -334,6 +377,7 @@
   - `src/scripts/ui/app.js`
 
 ## 2026-01-02 20:47
+
 - 记忆表格 Phase 0/1：SQLite schema + MemoryDb（初始化、WAL/外键、CRUD、批量/事务）落地。
 - Tauri 命令注册与前端 MemoryTableStore 接口完成，桥接层挂载。
 - 模板 Schema 辅助文件建立（后续模板/渲染使用）。
@@ -349,6 +393,7 @@
   - `src/scripts/memory/template-schema.js`
 
 ## 2026-01-02 19:47
+
 - 通用设定新增：Persona 绑定联系人/聊天记录开关（默认开启），切换 Persona 自动切换联系人/历史/动态/摘要。
 - 通用设定新增：记忆存储方式（摘要 / 记忆表格）切换；表格模式关闭摘要注入与摘要生成。
 - 摘要页面适配：好友/群聊设置根据记忆模式切换显示摘要区或记忆表格占位提示。
@@ -368,6 +413,7 @@
   - `src/scripts/ui/group-chat-panels.js`
 
 ## 2026-01-02 13:05
+
 - 聊天提示词：按位置拆分注入（IN_PROMPT/BEFORE_PROMPT/SYSTEM_DEPTH_1/IN_CHAT），SYSTEM_DEPTH_1 在 history 后追加。
 - 世界书 position：非 OpenAI context 模板含 description/scenario/examples 时，按占位符前后插入；缺失时回退包裹 story_string。
 - worldInfo prompt-only 正则：非 OpenAI 路径也应用。
@@ -375,29 +421,34 @@
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-02 12:05
+
 - 世界书 @Depth 条目：非 OpenAI prompt 也注入 history，避免仅 OpenAI 生效。
 - 修改：
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-02 11:26
+
 - 世界书注入位置：按 position 分桶并插入到 prompt 标记（char/scenario/examples），@Depth 条目注入历史。
 - worldInfo marker 仍保留用于默认条目与 chat_guide。
 - 修改：
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-02 11:15
+
 - 世界书匹配：补齐 ST 风格触发逻辑（scanDepth、选择性逻辑、二级关键词、全词匹配、概率）。
 - 世界书仍在 worldInfo marker 注入，未变更 position/depth 的插入位置。
 - 修改：
   - `src/scripts/ui/bridge.js`
 
 ## 2026-01-02 10:55
+
 - 对话解析：群聊/私聊标签不符合标准格式时，回退为“匹配现有群/联系人名”后再解析。
 - 修改：
   - `src/scripts/ui/chat/dialogue-stream-parser.js`
   - `src/scripts/ui/app.js`
 
 ## 2026-01-02 10:46
+
 - 缓存消息浮层：点击“发送”改为仅放回聊天室缓存，不直接发请求。
 - 待发送浮层：整体样式更透明。
 - 修改：
@@ -405,28 +456,33 @@
   - `src/assets/css/qq-legacy.css`
 
 ## 2026-01-02 10:32
+
 - 缓存消息发送：统一修正 sent 状态并清理 pending 队列，避免蓝点计数残留。
 - 缓存消息发送：点击发送后立即刷新 pending 计数，避免发送中蓝点仍显示旧值。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2025-12-30 17:02
+
 - 创意写作：复制改为优先使用输出正则后的纯文本，避免复制到美化后的显示内容。
 - 创意写作：chat_history 改为只发送最近三条消息，并使用输出/输入正则后的纯文本。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2025-12-30 17:15
+
 - 创意写作：chat_history 维持原有聊天消息注入逻辑，仅在限定历史长度内保留最新三条创意写作回复。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2025-12-30 18:16
+
 - 富文本 iframe：当首段是 html fenced code 且后续仅文本时，将文本合并进 iframe，避免出现“iframe 空白 + 正文在外层”的分离现象。
 - 修改：
   - `src/scripts/ui/chat/rich-text-renderer.js`
 
 ## 2025-12-30 09:58
+
 - 富文本 iframe：允许脚本时改走 host + document.write 直写原始 HTML，避免 release 下 blob 脚本不执行导致高度/长按失效。
 - host 收到允许脚本时不再 DOMParser 重排，改为直写保留脚本顺序。
 - 修改：
@@ -434,6 +490,7 @@
   - `src/iframe-host.js`
 
 ## 2025-12-30 11:04
+
 - 富文本脚本模式：iframe sandbox 增加 same-origin 以兼容脚本执行与同源访问。
 - CSP 放宽脚本/样式/媒体来源（含 http/data/blob 与 unsafe-eval），适配自定义 HTML 资源。
 - Android release 允许 cleartext，避免 http 资源被系统阻断。
@@ -445,18 +502,21 @@
   - `src/scripts/ui/general-settings-panel.js`
 
 ## 2025-12-30 11:47
+
 - 富文本脚本模式改为直接 srcdoc/blob 渲染，移除 host 中转，避免 release 下 host 脚本/桥接被拦截。
 - 脚本模式不再设置 iframe sandbox（对齐 ST 方案），并注入 base href 以支持相对资源。
 - 修改：
   - `src/scripts/ui/chat/rich-text-renderer.js`
 
 ## 2025-12-30 11:57
+
 - 富文本脚本模式对齐 ST：桥接脚本改为 blob 外链注入，避免 inline 脚本被 WebView 阻断。
 - iframe 增加 data 标记，脚本从 DOM 读取 id；父页面同源观察 iframe 内容自动测高。
 - 修改：
   - `src/scripts/ui/chat/rich-text-renderer.js`
 
 ## 2025-12-30 12:15
+
 - 富文本长按菜单：iframe 桥接补充按压时间门槛与捕获阶段监听，避免轻触触发。
 - iframe 事件不再触发外层长按计时，仅在收到 longpress 时弹出菜单。
 - 修改：
@@ -464,6 +524,7 @@
   - `src/scripts/ui/chat/chat-ui.js`
 
 ## 2025-12-30 12:54
+
 - 关闭流式小点时隐藏打字气泡与提示，避免仅停动画仍显示空泡。
 - 流式占位气泡标记为 typing placeholder，首段文本到来时移除。
 - 修改：
@@ -471,6 +532,7 @@
   - `src/assets/css/main.css`
 
 ## 2025-12-29 00:12
+
 - 通用设定新增「富文本 iframe 执行脚本」开关，启用时弹出风险警告。
 - 富文本 iframe 主机支持按开关执行脚本（默认安全模式不执行）。
 - 允许富文本在启用脚本后加载 https 样式资源，并放开 CSP 的 https 样式/脚本/字体来源。
@@ -483,6 +545,7 @@
   - `src-tauri/tauri.conf.json`
 
 ## 架構簡表
+
 - 前端殼：`src/index.html` + `assets/css/qq-legacy.css`（原版QQ樣式） + `assets/css/main.css`
 - 交互邏輯：`src/scripts/ui/app.js`（整體協調）、`src/scripts/ui/chat/chat-ui.js`（渲染/輸入/打字）、`src/scripts/ui/config-panel.js`
 - 橋接層：`src/scripts/ui/bridge.js`
@@ -490,6 +553,7 @@
 - 資產：`src/assets/**`（CSS/圖片等），`src/lib/**`（第三方）
 
 ## 變更日誌
+
 - 2025-12-28 22:48
   - 狀態欄漸變加深並拉到純白收尾（聊天室與列表頁頂欄）。
   - 修改：`src/assets/css/main.css`
@@ -649,7 +713,7 @@
   - 修改：`src/scripts/ui/moments-panel.js`
   - 修改：`src/assets/css/main.css`
 - 2025-12-23 14:25
-  - 动态评论解析回退增强：首次失败后裁剪 </think>/</thinking> 前内容再解析，仍失败则抽取 moment_reply_* 片段重试，并补充调试日志与摘要写入。
+  - 动态评论解析回退增强：首次失败后裁剪 </think>/</thinking> 前内容再解析，仍失败则抽取 moment*reply*\* 片段重试，并补充调试日志与摘要写入。
   - 历史/动态评论贴图回写：动态、群聊、历史输入中的 sticker 资源会回写为 [bqb-关键词] 以保持提示词一致。
 - 2025-12-23 14:28
   - 动态评论调试信息完善：输出 moment_reply 目标匹配/写入失败的具体字段，并在 moment_id 不存在时回退到当前动态。
@@ -1380,7 +1444,7 @@
 
 - 2025-12-15 10:44 - 搬运动态提示词并拆分提示词页签：私聊提示词 + 动态提示词（注入位置/深度可配）
   - **页签拆分**：将原“对话提示词”页签更名为「私聊提示词」，新增「动态提示词」页签。
-  - **动态提示词搬运**：把 `手机流式.html` 的 QQ空间/动态格式介绍迁移为默认动态提示词，并适配到 `<content>` 内输出（moment_start/moment_reply_*）。
+  - **动态提示词搬运**：把 `手机流式.html` 的 QQ空间/动态格式介绍迁移为默认动态提示词，并适配到 `<content>` 内输出（moment*start/moment_reply*\*）。
   - **注入语义对齐**：动态提示词与私聊提示词一样，支持 ST 风格注入位置（BEFORE_PROMPT/IN_PROMPT/IN_CHAT/NONE）与 IN_CHAT 深度/角色；默认深度为 0（与原文件“深度=0”一致），默认不启用，避免影响纯私聊聊天。
   - 文件修改：
     - 修改：`src/scripts/ui/preset-panel.js`
@@ -1941,7 +2005,7 @@
 
 - 2025-12-18 17:04（预设面板：保存不再跳回预设1 + 导入名带文件名）
   - **修复**：`PresetStore.upsert()` 更新已有预设时不再隐式改写 active 指针，避免“保存多个草稿后 active 被最后一次保存覆盖”导致 UI 自动跳回预设1。
-  - **体验**：导入预设时默认名称改为导入文件名（优先使用 JSON 内的 `name`，否则用文件名去扩展名）。 
+  - **体验**：导入预设时默认名称改为导入文件名（优先使用 JSON 内的 `name`，否则用文件名去扩展名）。
 
 - 2025-12-18 17:36（正则：随预设切换 + 删除预设可连带删除 + 发送时一律生效）
   - **切换联动**：预设切换后自动同步正则启用状态：只启用当前 active 预设所绑定的正则集合，其他预设绑定集合自动停用（`RegexStore.syncPresetBindings`）。
@@ -2082,11 +2146,13 @@
   - 修改：`src/scripts/ui/chat/chat-ui.js`
 
 ## 2025-12-31 11:20
+
 - 富文本 iframe：兼容 SillyTavern 的 resizeIframe 消息，使用 event.source 定位对应 iframe 并更新高度。
 - 修改：
   - `src/scripts/ui/chat/rich-text-renderer.js`
 
 ## 2025-12-31 12:07
+
 - 推理格式（Reasoning）：新增预设类型与默认模板（对齐 ST），支持自动解析/展开/写回提示词等设置。
 - 推理解析：AI 回复自动拆分 reasoning 与正文，推理套用 REASONING 正则并以折叠块显示。
 - chat_history：可按设定将推理块写回 prompt（限制次数），其余聊天历史逻辑保持不变。
@@ -2102,6 +2168,7 @@
   - `src/assets/css/qq-legacy.css`
 
 ## 2025-12-31 13:22
+
 - 通用设定新增“创意写作注入条数”，允许自定义 chat_history 中创意写作回复的注入数量（默认 3）。
 - chat_history 在创意写作模式按该数值保留最新创意写作回复。
 - 修改：
@@ -2110,6 +2177,7 @@
   - `src/scripts/ui/app.js`
 
 ## 2025-12-31 14:47
+
 - 通用设定新增“创意写作气泡加宽”开关，仅影响创意写作回复气泡的横向宽度。
 - 创意写作回复气泡可占满聊天横轴（保留少量边距），不影响聊天模式布局。
 - 修改：
@@ -2120,17 +2188,20 @@
   - `src/assets/css/qq-legacy.css`
 
 ## 2025-12-31 15:20
+
 - 修复 creative 发送时报错：将推理解析助手函数提到顶层作用域，避免 extractReasoningFromContent 未定义。
 - 修改：
   - `src/scripts/ui/app.js`
 
 ## 2025-12-31 17:31
-  - 富文本 iframe：脚本模式未 ready 时回退到 host 加载，确保自定义脚本执行。
-  - host 端保留 body 属性与 base，并补发 DOMContentLoaded/load 事件。
-  - 修改：`src/scripts/ui/chat/rich-text-renderer.js`
-  - 修改：`src/iframe-host.js`
+
+- 富文本 iframe：脚本模式未 ready 时回退到 host 加载，确保自定义脚本执行。
+- host 端保留 body 属性与 base，并补发 DOMContentLoaded/load 事件。
+- 修改：`src/scripts/ui/chat/rich-text-renderer.js`
+- 修改：`src/iframe-host.js`
 
 ## 2026-01-05
+
 - Phase 4：记忆表格注入 prompt（预算截断 + wrapper + 位置控制）。
 - 新增记忆检查器（调试入口）：展示注入/截断列表、Token 统计、Prompt 预览、刷新与复制。
 - Phase 5A：记忆模式灰度开关（调试面板切换，默认摘要）。
@@ -2152,6 +2223,7 @@
   - `src/scripts/memory/template-schema.js`
 
 ## 2026-01-08
+
 - 记忆模板写入队列修复：补充超时重置与调试状态（pending/last command/reset），避免写入被挂起阻塞。
 - 记忆模板管理刷新诊断：输出 ensure/get/force 超时与空列表原因，空模板时自动写入默认模板。
 - 私聊角色档案“性格”必填改由系统判定；若为空在写表提示词里强制提示补齐（默认模板仍为 v1.0.0）。
@@ -2162,6 +2234,7 @@
   - `src/scripts/memory/default-template.js`
 
 ## 2026-01-12 17:10
+
 - 贴图面板优化：点击“+”弹出行动面板，贴图入口独立；贴图面板支持分页/小点指示、左右滑动、最近使用/默认/新增分区，默认贴图图标使用 feather 图。
 - 贴图滚动改为原生横向 scroll-snap，滑动有过渡感并能预览相邻页；修复旧 transform 造成的贴图空白问题。
 - 记忆表格：摘要表注入限制为最新 10 条；新增私聊/群聊总体大纲表并全部注入；默认模板版本更新为 1.0.1。
@@ -2178,6 +2251,7 @@
   - `src/assets/css/qq-legacy.css`
 
 ## 2026-01-14 17:31
+
 - 聊天设置：气泡/字体支持“当前/全局”应用；新增恢复默认按钮；新会话继承全局颜色。
 - 壁纸设置：支持拖拽上传、预览裁剪（拖拽/缩放/旋转）；本地保存并按需加载；无操作 2 分钟进入仅壁纸屏保模式。
 - 壁纸显示修正：顶部渐变区域遮挡壁纸。
@@ -2198,6 +2272,7 @@
   - `src-tauri/src/lib.rs`
 
 ## 2026-01-16
+
 - 分片聊天存储（chat_store_v2）：新增索引/分片读写与会话清理指令，前端写入/更新/删除与按需加载逻辑落地。
 - ChatStore v2 迁移：旧 v1 会话迁移成分片，归档改为记录 messageCount，加载最近分片并支持滚动拉取更早消息。
 - UI 接入：进入会话/恢复状态时异步加载最近分片，滚动到顶加载更早分片，存档加载改为 await。

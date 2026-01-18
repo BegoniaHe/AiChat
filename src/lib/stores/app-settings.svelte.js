@@ -15,15 +15,15 @@ const DEFAULT_SETTINGS = {
   fontSize: 16,
   userBubbleColor: '#95EC69',
   aiBubbleColor: '#FFFFFF',
-  
+
   // 聊天
   sendOnEnter: true,
   showTimestamps: true,
-  
+
   // 通知
   notificationsEnabled: true,
   soundEnabled: true,
-  
+
   // 高级
   debugMode: false,
   autoSave: true,
@@ -39,7 +39,7 @@ function createAppSettings() {
     try {
       // 尝试从 Tauri KV 加载
       let data = await tryInvoke('load_kv', { name: STORAGE_KEY });
-      
+
       // 回退到 localStorage
       if (!data) {
         const raw = localStorage.getItem(STORAGE_KEY);
@@ -51,7 +51,7 @@ function createAppSettings() {
       if (data && typeof data === 'object') {
         settings = { ...DEFAULT_SETTINGS, ...data };
       }
-      
+
       initialized = true;
       logger.info('App settings loaded');
     } catch (err) {
@@ -76,33 +76,33 @@ function createAppSettings() {
     get value() {
       return settings;
     },
-    
+
     get(key) {
       return settings[key] ?? DEFAULT_SETTINGS[key];
     },
-    
+
     set(key, value) {
       settings[key] = value;
       settings = { ...settings }; // 触发响应式更新
       save();
     },
-    
+
     update(partial) {
       settings = { ...settings, ...partial };
       save();
     },
-    
+
     reset() {
       settings = { ...DEFAULT_SETTINGS };
       save();
     },
-    
+
     get isInitialized() {
       return initialized;
     },
-    
+
     // === 快捷方法 ===
-    
+
     // 主题
     get theme() {
       return settings.theme;
@@ -112,7 +112,7 @@ function createAppSettings() {
       settings = { ...settings };
       save();
     },
-    
+
     // 气泡颜色
     get userBubbleColor() {
       return settings.userBubbleColor;
@@ -122,7 +122,7 @@ function createAppSettings() {
       settings = { ...settings };
       save();
     },
-    
+
     get aiBubbleColor() {
       return settings.aiBubbleColor;
     },
@@ -131,7 +131,7 @@ function createAppSettings() {
       settings = { ...settings };
       save();
     },
-    
+
     // 通知
     get soundEnabled() {
       return settings.soundEnabled;
@@ -141,7 +141,7 @@ function createAppSettings() {
       settings = { ...settings };
       save();
     },
-    
+
     get notificationsEnabled() {
       return settings.notificationsEnabled;
     },

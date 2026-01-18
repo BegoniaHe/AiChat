@@ -5,445 +5,500 @@
  * - Supports private chat, group chat, and moments parsing
  */
 
-const normalizeNewlines = (s) => String(s ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+const normalizeNewlines = (s) =>
+  String(s ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
 
 const stripThinkingBlocks = (s) => {
-    let out = String(s ?? '');
-    // Remove fully closed <thinking> blocks to avoid confusing tag scanning
-    out = out.replace(/<thinking[\s\S]*?>[\s\S]*?<\/thinking>/gi, '');
-    return out;
+  let out = String(s ?? '');
+  // Remove fully closed <thinking> blocks to avoid confusing tag scanning
+  out = out.replace(/<thinking[\s\S]*?>[\s\S]*?<\/thinking>/gi, '');
+  return out;
 };
 
 const findFirstTagOpen = (s) => s.indexOf('<');
 
 const hasImplicitContentSignal = (s) => {
-    const src = String(s ?? '');
-    const lower = src.toLowerCase();
-    if (lower.includes('moment_start') || lower.includes('moment_reply_start')) return true;
-    // A private chat tag can appear without <content> when models don't follow the wrapper rule.
-    if (/<\s*[^/][^>]*的私聊\s*>/i.test(src)) return true;
-    if (/<\s*群聊\s*:/i.test(src)) return true;
-    return false;
+  const src = String(s ?? '');
+  const lower = src.toLowerCase();
+  if (lower.includes('moment_start') || lower.includes('moment_reply_start')) return true;
+  // A private chat tag can appear without <content> when models don't follow the wrapper rule.
+  if (/<\s*[^/][^>]*的私聊\s*>/i.test(src)) return true;
+  if (/<\s*群聊\s*:/i.test(src)) return true;
+  return false;
 };
 
 const parseOpenTag = (s, startIdx) => {
-    const gt = s.indexOf('>', startIdx + 1);
-    if (gt === -1) return null;
-    const raw = s.slice(startIdx + 1, gt).trim();
-    const isClosing = raw.startsWith('/');
-    let core = isClosing ? raw.slice(1).trim() : raw;
-    let selfClosing = core.endsWith('/') || raw.endsWith('/');
-    if (core.endsWith('/')) core = core.slice(0, -1).trim();
-    // NOTE: Our protocol tag names may contain spaces (e.g. "我和Lara croft的私聊"),
-    // so we intentionally do NOT split by whitespace
-    const tagName = core;
-    const tagLower = tagName.toLowerCase();
-    if (!selfClosing) {
-        const voidTags = ['br', 'img', 'hr', 'input', 'meta', 'link'];
-        selfClosing = voidTags.some(t => tagLower === t || tagLower.startsWith(`${t} `));
-    }
-    return { tagName, isClosing, selfClosing, endIdx: gt + 1 };
+  const gt = s.indexOf('>', startIdx + 1);
+  if (gt === -1) return null;
+  const raw = s.slice(startIdx + 1, gt).trim();
+  const isClosing = raw.startsWith('/');
+  let core = isClosing ? raw.slice(1).trim() : raw;
+  let selfClosing = core.endsWith('/') || raw.endsWith('/');
+  if (core.endsWith('/')) core = core.slice(0, -1).trim();
+  // NOTE: Our protocol tag names may contain spaces (e.g. "我和Lara croft的私聊"),
+  // so we intentionally do NOT split by whitespace
+  const tagName = core;
+  const tagLower = tagName.toLowerCase();
+  if (!selfClosing) {
+    const voidTags = ['br', 'img', 'hr', 'input', 'meta', 'link'];
+    selfClosing = voidTags.some((t) => tagLower === t || tagLower.startsWith(`${t} `));
+  }
+  return { tagName, isClosing, selfClosing, endIdx: gt + 1 };
 };
 
 const findMatchingCloseTag = (s, tagName, fromIdx) => {
-    const src = String(s ?? '');
-    const target = String(tagName ?? '').trim();
-    if (!target) return null;
-    let idx = Math.max(0, fromIdx | 0);
-    while (true) {
-        const closeStart = src.indexOf('</', idx);
-        if (closeStart === -1) return null;
-        const close = parseOpenTag(src, closeStart);
-        if (!close) return null;
-        if (close.isClosing && String(close.tagName || '').trim() === target) {
-            return { closeIdx: closeStart, afterClose: close.endIdx };
-        }
-        idx = close.endIdx;
-        if (idx >= src.length) return null;
+  const src = String(s ?? '');
+  const target = String(tagName ?? '').trim();
+  if (!target) return null;
+  let idx = Math.max(0, fromIdx | 0);
+  while (true) {
+    const closeStart = src.indexOf('</', idx);
+    if (closeStart === -1) return null;
+    const close = parseOpenTag(src, closeStart);
+    if (!close) return null;
+    if (close.isClosing && String(close.tagName || '').trim() === target) {
+      return { closeIdx: closeStart, afterClose: close.endIdx };
     }
+    idx = close.endIdx;
+    if (idx >= src.length) return null;
+  }
 };
 
 const findMiPhoneStart = (s) => {
-    const src = String(s ?? '');
-    const re = /<\s*MiPhone_start\s*>|MiPhone_start/i;
-    const m = re.exec(src);
-    if (!m) return null;
-    return { index: m.index, length: m[0].length };
+  const src = String(s ?? '');
+  const re = /<\s*MiPhone_start\s*>|MiPhone_start/i;
+  const m = re.exec(src);
+  if (!m) return null;
+  return { index: m.index, length: m[0].length };
 };
 
 const findMiPhoneEnd = (s) => {
-    const src = String(s ?? '');
-    const re = /<\s*MiPhone_end\s*>|MiPhone_end/i;
-    const m = re.exec(src);
-    if (!m) return null;
-    return { index: m.index, length: m[0].length };
+  const src = String(s ?? '');
+  const re = /<\s*MiPhone_end\s*>|MiPhone_end/i;
+  const m = re.exec(src);
+  if (!m) return null;
+  return { index: m.index, length: m[0].length };
 };
 
 const GROUP_CHAT_BR_MARK = '\u000b';
 
 const splitSpeakerSegments = (line) => {
-    const raw = String(line ?? '');
-    if (!raw.includes('--')) return [];
-    const parts = raw.split('--').map(p => String(p || '').trim()).filter(Boolean);
-    if (parts.length < 2) return [];
-    if (parts.length === 2) return [{ speaker: parts[0], content: parts[1] }];
-    const segments = [];
-    let i = 0;
-    while (i < parts.length - 1) {
-        const speaker = String(parts[i] || '').trim();
-        if (!speaker) {
-            i += 1;
-            continue;
-        }
-        const remaining = parts.length - i;
-        if (remaining % 2 === 1) {
-            const content = parts.slice(i + 1).join('--').trim();
-            if (content) segments.push({ speaker, content });
-            break;
-        }
-        const content = String(parts[i + 1] || '').trim();
-        if (content) segments.push({ speaker, content });
-        i += 2;
+  const raw = String(line ?? '');
+  if (!raw.includes('--')) return [];
+  const parts = raw
+    .split('--')
+    .map((p) => String(p || '').trim())
+    .filter(Boolean);
+  if (parts.length < 2) return [];
+  if (parts.length === 2) return [{ speaker: parts[0], content: parts[1] }];
+  const segments = [];
+  let i = 0;
+  while (i < parts.length - 1) {
+    const speaker = String(parts[i] || '').trim();
+    if (!speaker) {
+      i += 1;
+      continue;
     }
-    return segments;
+    const remaining = parts.length - i;
+    if (remaining % 2 === 1) {
+      const content = parts
+        .slice(i + 1)
+        .join('--')
+        .trim();
+      if (content) segments.push({ speaker, content });
+      break;
+    }
+    const content = String(parts[i + 1] || '').trim();
+    if (content) segments.push({ speaker, content });
+    i += 2;
+  }
+  return segments;
 };
 
 const splitMultiLineSegments = (text) => {
-    const raw = String(text ?? '').trim();
-    if (!raw.includes('--')) return [];
-    const lines = raw.split(/[\n\u000b]+/).map(l => l.trim()).filter(Boolean);
-    if (lines.length < 2) return [];
-    if (lines.some(line => !line.includes('--'))) return [];
-    const segments = [];
-    for (const line of lines) {
-        const segs = splitSpeakerSegments(line);
-        if (!segs.length) return [];
-        segments.push(...segs);
-    }
-    return segments;
+  const raw = String(text ?? '').trim();
+  if (!raw.includes('--')) return [];
+  const lines = raw
+    .split(/[\n\u000b]+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return [];
+  if (lines.some((line) => !line.includes('--'))) return [];
+  const segments = [];
+  for (const line of lines) {
+    const segs = splitSpeakerSegments(line);
+    if (!segs.length) return [];
+    segments.push(...segs);
+  }
+  return segments;
 };
 
 const parsePrivateChatMessages = (innerText) => {
-    const text = normalizeNewlines(innerText);
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const messages = [];
-    const pushMessage = ({ speaker = '', content = '', time = '' } = {}) => {
-        const cleaned = String(content || '').trim().replace(/<br\s*\/?>/gi, '\n');
-        if (!cleaned) return;
-        messages.push({
-            speaker: String(speaker || '').trim(),
-            content: cleaned,
-            time: String(time || '').trim(),
-        });
-    };
-    for (const line of lines) {
-        if (/^[-•*]\s+/.test(line)) {
-            pushMessage({ content: line.replace(/^[-•*]\s+/, '').trim() });
-            continue;
-        }
-        const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
-        if (m) {
-            pushMessage({ speaker: m[1], content: m[2], time: m[3] });
-            continue;
-        }
-        const normalized = line.replace(/<br\s*\/?>/gi, '\n');
-        const segments = splitSpeakerSegments(normalized);
-        if (segments.length) {
-            segments.forEach(seg => pushMessage({ speaker: seg?.speaker, content: seg?.content }));
-            continue;
-        }
-        // Fallback: treat as a single message line
-        pushMessage({ content: normalized });
+  const text = normalizeNewlines(innerText);
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const messages = [];
+  const pushMessage = ({ speaker = '', content = '', time = '' } = {}) => {
+    const cleaned = String(content || '')
+      .trim()
+      .replace(/<br\s*\/?>/gi, '\n');
+    if (!cleaned) return;
+    messages.push({
+      speaker: String(speaker || '').trim(),
+      content: cleaned,
+      time: String(time || '').trim(),
+    });
+  };
+  for (const line of lines) {
+    if (/^[-•*]\s+/.test(line)) {
+      pushMessage({ content: line.replace(/^[-•*]\s+/, '').trim() });
+      continue;
     }
-    return messages.filter(m => m && m.content);
+    const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
+    if (m) {
+      pushMessage({ speaker: m[1], content: m[2], time: m[3] });
+      continue;
+    }
+    const normalized = line.replace(/<br\s*\/?>/gi, '\n');
+    const segments = splitSpeakerSegments(normalized);
+    if (segments.length) {
+      segments.forEach((seg) => pushMessage({ speaker: seg?.speaker, content: seg?.content }));
+      continue;
+    }
+    // Fallback: treat as a single message line
+    pushMessage({ content: normalized });
+  }
+  return messages.filter((m) => m && m.content);
 };
 
 const isGroupChatTag = (tagName) => {
-    const tn = String(tagName || '').trim();
-    return /^群聊\s*:/i.test(tn);
+  const tn = String(tagName || '').trim();
+  return /^群聊\s*:/i.test(tn);
 };
 
 const extractGroupNameFromTag = (tagName) => {
-    const tn = String(tagName || '').trim();
-    const m = tn.match(/^群聊\s*:\s*(.+)\s*$/i);
-    return m ? String(m[1] || '').trim() : '';
+  const tn = String(tagName || '').trim();
+  const m = tn.match(/^群聊\s*:\s*(.+)\s*$/i);
+  return m ? String(m[1] || '').trim() : '';
 };
 
 const parseGroupChatBlock = (innerText) => {
-    const src = String(innerText ?? '');
-    const getBlock = (tag) => {
-        const re = new RegExp(`<\\s*${tag}\\s*>[\\s\\S]*?<\\s*/\\s*${tag}\\s*>`, 'i');
-        const m = src.match(re);
-        if (!m) return '';
-        const open = new RegExp(`<\\s*${tag}\\s*>`, 'i');
-        const close = new RegExp(`<\\s*/\\s*${tag}\\s*>`, 'i');
-        return String(m[0] || '').replace(open, '').replace(close, '').trim();
-    };
+  const src = String(innerText ?? '');
+  const getBlock = (tag) => {
+    const re = new RegExp(`<\\s*${tag}\\s*>[\\s\\S]*?<\\s*/\\s*${tag}\\s*>`, 'i');
+    const m = src.match(re);
+    if (!m) return '';
+    const open = new RegExp(`<\\s*${tag}\\s*>`, 'i');
+    const close = new RegExp(`<\\s*/\\s*${tag}\\s*>`, 'i');
+    return String(m[0] || '')
+      .replace(open, '')
+      .replace(close, '')
+      .trim();
+  };
 
-    const membersRaw = getBlock('成员');
-    const members = membersRaw
-        ? membersRaw.split(/[,，]/).map(s => String(s || '').trim()).filter(Boolean)
-        : [];
+  const membersRaw = getBlock('成员');
+  const members = membersRaw
+    ? membersRaw
+        .split(/[,，]/)
+        .map((s) => String(s || '').trim())
+        .filter(Boolean)
+    : [];
 
-    const chatRaw = getBlock('聊天内容') || src;
-    const normalized = normalizeNewlines(chatRaw);
-    const normalizedWithSystem = normalized.replace(/^\s*系统消息[:：]\s*(.*)$/gm, (match, content) => {
-        const cleaned = String(content || '').trim();
-        if (!cleaned) return match;
-        return `系统消息--${cleaned}`;
-    });
-    const textMarked = normalizedWithSystem
-        .replace(/&lt;br\s*\/?&gt;/gi, GROUP_CHAT_BR_MARK)
-        .replace(/<br\s*\/?>/gi, GROUP_CHAT_BR_MARK);
-
-    const messages = [];
-    const unmark = (s) => String(s ?? '').replaceAll(GROUP_CHAT_BR_MARK, '\n');
-
-    // First pass: extract repeated "speaker--content--HH:MM" segments
-    {
-        const src2 = textMarked;
-        let idx = 0;
-        let tailStart = 0;
-        const timeRe = /--\s*(\d{1,2}:\d{2})\s*/g;
-        while (idx < src2.length) {
-            timeRe.lastIndex = idx;
-            const tm = timeRe.exec(src2);
-            if (!tm) break;
-            const segEnd = timeRe.lastIndex;
-            const segment = String(src2.slice(idx, segEnd) || '').trim();
-            idx = segEnd;
-            while (idx < src2.length && /[\s\u000b]/.test(src2[idx])) idx++;
-
-            const lastSep = segment.lastIndexOf('--');
-            if (lastSep === -1) continue;
-            const time = String(segment.slice(lastSep + 2) || '').trim();
-            const pre = String(segment.slice(0, lastSep) || '').trim();
-            const multiSegments = splitMultiLineSegments(pre);
-            if (multiSegments.length) {
-                multiSegments.forEach((seg, index) => {
-                    const speaker = String(seg?.speaker || '').trim();
-                    const content = unmark(String(seg?.content || '').trim()).trim();
-                    if (!speaker || !content) return;
-                    messages.push({ speaker, content, time: index === multiSegments.length - 1 ? time : '' });
-                });
-                continue;
-            }
-            const firstSep = pre.indexOf('--');
-            if (firstSep === -1) continue;
-            const speaker = String(pre.slice(0, firstSep) || '').trim();
-            const content = String(pre.slice(firstSep + 2) || '').trim();
-            if (!speaker || !content) continue;
-            messages.push({ speaker, content: unmark(content).trim(), time });
-        }
-        tailStart = idx;
-
-        if (messages.length && tailStart < src2.length) {
-            const tail = String(src2.slice(tailStart) || '').trim();
-            if (tail) {
-                const tailLines = tail.split(/[\n\u000b]+/).map(l => l.trim()).filter(Boolean);
-                for (const line of tailLines) {
-                    const hasTimeSuffix = /--\s*\d{1,2}:\d{2}\s*$/.test(line);
-                    if (!hasTimeSuffix) {
-                        const segments = splitSpeakerSegments(line);
-                        if (segments.length) {
-                            segments.forEach(seg => {
-                                const speaker = String(seg?.speaker || '').trim();
-                                const content = unmark(String(seg?.content || '').trim()).trim();
-                                if (!speaker || !content) return;
-                                messages.push({ speaker, content, time: '' });
-                            });
-                            continue;
-                        }
-                    }
-                    const parts = line.split('--').map(p => p.trim()).filter(Boolean);
-                    if (parts.length >= 2) {
-                        messages.push({ speaker: parts[0], content: unmark(parts.slice(1).join('--')).trim(), time: '' });
-                    }
-                }
-            }
-        }
+  const chatRaw = getBlock('聊天内容') || src;
+  const normalized = normalizeNewlines(chatRaw);
+  const normalizedWithSystem = normalized.replace(
+    /^\s*系统消息[:：]\s*(.*)$/gm,
+    (match, content) => {
+      const cleaned = String(content || '').trim();
+      if (!cleaned) return match;
+      return `系统消息--${cleaned}`;
     }
+  );
+  const textMarked = normalizedWithSystem
+    .replace(/&lt;br\s*\/?&gt;/gi, GROUP_CHAT_BR_MARK)
+    .replace(/<br\s*\/?>/gi, GROUP_CHAT_BR_MARK);
 
-    // Fallback pass: line-based parsing for partial formats
-    if (!messages.length) {
-        const lines = textMarked.split('\n').map(l => l.trim()).filter(Boolean);
-        for (const line of lines) {
-            const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
-            if (m) {
-                messages.push({
-                    speaker: String(m[1] || '').trim(),
-                    content: unmark(String(m[2] || '').trim()).trim(),
-                    time: String(m[3] || '').trim(),
-                });
-                continue;
-            }
-            const hasTimeSuffix = /--\s*\d{1,2}:\d{2}\s*$/.test(line);
-            if (!hasTimeSuffix) {
-                const segments = splitSpeakerSegments(line);
-                if (segments.length) {
-                    segments.forEach(seg => {
-                        const speaker = String(seg?.speaker || '').trim();
-                        const content = unmark(String(seg?.content || '').trim()).trim();
-                        if (!speaker || !content) return;
-                        messages.push({ speaker, content, time: '' });
-                    });
-                    continue;
-                }
-            }
-            const parts = line.split('--').map(p => p.trim()).filter(Boolean);
-            if (parts.length >= 2) {
-                messages.push({ speaker: parts[0], content: unmark(parts.slice(1).join('--')).trim(), time: '' });
-                continue;
-            }
-        }
+  const messages = [];
+  const unmark = (s) => String(s ?? '').replaceAll(GROUP_CHAT_BR_MARK, '\n');
+
+  // First pass: extract repeated "speaker--content--HH:MM" segments
+  {
+    const src2 = textMarked;
+    let idx = 0;
+    let tailStart = 0;
+    const timeRe = /--\s*(\d{1,2}:\d{2})\s*/g;
+    while (idx < src2.length) {
+      timeRe.lastIndex = idx;
+      const tm = timeRe.exec(src2);
+      if (!tm) break;
+      const segEnd = timeRe.lastIndex;
+      const segment = String(src2.slice(idx, segEnd) || '').trim();
+      idx = segEnd;
+      while (idx < src2.length && /[\s\u000b]/.test(src2[idx])) idx++;
+
+      const lastSep = segment.lastIndexOf('--');
+      if (lastSep === -1) continue;
+      const time = String(segment.slice(lastSep + 2) || '').trim();
+      const pre = String(segment.slice(0, lastSep) || '').trim();
+      const multiSegments = splitMultiLineSegments(pre);
+      if (multiSegments.length) {
+        multiSegments.forEach((seg, index) => {
+          const speaker = String(seg?.speaker || '').trim();
+          const content = unmark(String(seg?.content || '').trim()).trim();
+          if (!speaker || !content) return;
+          messages.push({ speaker, content, time: index === multiSegments.length - 1 ? time : '' });
+        });
+        continue;
+      }
+      const firstSep = pre.indexOf('--');
+      if (firstSep === -1) continue;
+      const speaker = String(pre.slice(0, firstSep) || '').trim();
+      const content = String(pre.slice(firstSep + 2) || '').trim();
+      if (!speaker || !content) continue;
+      messages.push({ speaker, content: unmark(content).trim(), time });
     }
+    tailStart = idx;
 
-    return { members, messages };
+    if (messages.length && tailStart < src2.length) {
+      const tail = String(src2.slice(tailStart) || '').trim();
+      if (tail) {
+        const tailLines = tail
+          .split(/[\n\u000b]+/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+        for (const line of tailLines) {
+          const hasTimeSuffix = /--\s*\d{1,2}:\d{2}\s*$/.test(line);
+          if (!hasTimeSuffix) {
+            const segments = splitSpeakerSegments(line);
+            if (segments.length) {
+              segments.forEach((seg) => {
+                const speaker = String(seg?.speaker || '').trim();
+                const content = unmark(String(seg?.content || '').trim()).trim();
+                if (!speaker || !content) return;
+                messages.push({ speaker, content, time: '' });
+              });
+              continue;
+            }
+          }
+          const parts = line
+            .split('--')
+            .map((p) => p.trim())
+            .filter(Boolean);
+          if (parts.length >= 2) {
+            messages.push({
+              speaker: parts[0],
+              content: unmark(parts.slice(1).join('--')).trim(),
+              time: '',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Fallback pass: line-based parsing for partial formats
+  if (!messages.length) {
+    const lines = textMarked
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      const m = line.match(/^(.+?)--([\s\S]+?)--(\d{1,2}:\d{2})\s*$/);
+      if (m) {
+        messages.push({
+          speaker: String(m[1] || '').trim(),
+          content: unmark(String(m[2] || '').trim()).trim(),
+          time: String(m[3] || '').trim(),
+        });
+        continue;
+      }
+      const hasTimeSuffix = /--\s*\d{1,2}:\d{2}\s*$/.test(line);
+      if (!hasTimeSuffix) {
+        const segments = splitSpeakerSegments(line);
+        if (segments.length) {
+          segments.forEach((seg) => {
+            const speaker = String(seg?.speaker || '').trim();
+            const content = unmark(String(seg?.content || '').trim()).trim();
+            if (!speaker || !content) return;
+            messages.push({ speaker, content, time: '' });
+          });
+          continue;
+        }
+      }
+      const parts = line
+        .split('--')
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts.length >= 2) {
+        messages.push({
+          speaker: parts[0],
+          content: unmark(parts.slice(1).join('--')).trim(),
+          time: '',
+        });
+        continue;
+      }
+    }
+  }
+
+  return { members, messages };
 };
 
 const extractOtherNameFromPrivateChatTag = (tagName, userName) => {
-    const tn = String(tagName || '').trim();
-    const suffix = '的私聊';
-    if (!tn.endsWith(suffix)) return null;
-    const core = tn.slice(0, -suffix.length);
-    const prefix = `${String(userName || '').trim()}和`;
-    if (prefix && core.startsWith(prefix)) {
-        return core.slice(prefix.length).trim() || null;
-    }
-    const parts = core.split('和').map(s => s.trim()).filter(Boolean);
-    if (parts.length >= 2) return parts[parts.length - 1] || null;
-    return null;
+  const tn = String(tagName || '').trim();
+  const suffix = '的私聊';
+  if (!tn.endsWith(suffix)) return null;
+  const core = tn.slice(0, -suffix.length);
+  const prefix = `${String(userName || '').trim()}和`;
+  if (prefix && core.startsWith(prefix)) {
+    return core.slice(prefix.length).trim() || null;
+  }
+  const parts = core
+    .split('和')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length >= 2) return parts[parts.length - 1] || null;
+  return null;
 };
 
 const parseMomentBlock = (innerText) => {
-    const text = normalizeNewlines(innerText);
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const moments = [];
-    let current = null;
-    const isNumeric = (val) => /^-?\d+(?:\.\d+)?$/.test(String(val || '').trim());
-    const looksLikeTime = (val) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(val || '').trim());
-    const parseCommentParts = (parts) => {
-        const author = parts[0] || '';
-        const rest = parts.slice(1);
-        let replyTo = '';
-        let replyToAuthor = '';
-        let time = '';
-        const contentParts = [];
-        for (const seg of rest) {
-            const s = String(seg || '').trim();
-            if (!s) continue;
-            const m1 = s.match(/^reply_to::\s*(.+)\s*$/i);
-            if (m1) {
-                replyTo = String(m1[1] || '').trim();
-                continue;
-            }
-            const m2 = s.match(/^reply_to_author::\s*(.+)\s*$/i);
-            if (m2) {
-                replyToAuthor = String(m2[1] || '').trim();
-                continue;
-            }
-            if (!time && looksLikeTime(s)) {
-                time = s;
-                continue;
-            }
-            contentParts.push(seg);
-        }
-        return { author, content: contentParts.join('--').trim(), replyTo, replyToAuthor, time };
-    };
-
-    const commit = () => {
-        if (!current) return;
-        current.views = Number.isFinite(Number(current.views)) ? Number(current.views) : 0;
-        current.likes = Number.isFinite(Number(current.likes)) ? Number(current.likes) : 0;
-        current.timestamp = Date.now();
-        current.signature = `${current.author || ''}\u0000${current.content || ''}\u0000${current.time || ''}`;
-        if (!Array.isArray(current.comments)) current.comments = [];
-        moments.push(current);
-        current = null;
-    };
-
-    for (const line of lines) {
-        const parts = line.split('--').map(p => p.trim());
-        const isHeader = parts.length >= 5 && isNumeric(parts[3]) && isNumeric(parts[4]);
-        if (isHeader) {
-            commit();
-            current = {
-                author: parts[0] || '',
-                content: parts[1] || '',
-                time: parts[2] || '',
-                views: Number(parts[3] || 0),
-                likes: Number(parts[4] || 0),
-                comments: [],
-            };
-            continue;
-        }
-        if (parts.length >= 2 && current) {
-            const comment = parseCommentParts(parts);
-            if (comment.content) current.comments.push(comment);
-            continue;
-        }
+  const text = normalizeNewlines(innerText);
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const moments = [];
+  let current = null;
+  const isNumeric = (val) => /^-?\d+(?:\.\d+)?$/.test(String(val || '').trim());
+  const looksLikeTime = (val) => /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(val || '').trim());
+  const parseCommentParts = (parts) => {
+    const author = parts[0] || '';
+    const rest = parts.slice(1);
+    let replyTo = '';
+    let replyToAuthor = '';
+    let time = '';
+    const contentParts = [];
+    for (const seg of rest) {
+      const s = String(seg || '').trim();
+      if (!s) continue;
+      const m1 = s.match(/^reply_to::\s*(.+)\s*$/i);
+      if (m1) {
+        replyTo = String(m1[1] || '').trim();
+        continue;
+      }
+      const m2 = s.match(/^reply_to_author::\s*(.+)\s*$/i);
+      if (m2) {
+        replyToAuthor = String(m2[1] || '').trim();
+        continue;
+      }
+      if (!time && looksLikeTime(s)) {
+        time = s;
+        continue;
+      }
+      contentParts.push(seg);
     }
-    commit();
-    return moments;
+    return { author, content: contentParts.join('--').trim(), replyTo, replyToAuthor, time };
+  };
+
+  const commit = () => {
+    if (!current) return;
+    current.views = Number.isFinite(Number(current.views)) ? Number(current.views) : 0;
+    current.likes = Number.isFinite(Number(current.likes)) ? Number(current.likes) : 0;
+    current.timestamp = Date.now();
+    current.signature = `${current.author || ''}\u0000${current.content || ''}\u0000${current.time || ''}`;
+    if (!Array.isArray(current.comments)) current.comments = [];
+    moments.push(current);
+    current = null;
+  };
+
+  for (const line of lines) {
+    const parts = line.split('--').map((p) => p.trim());
+    const isHeader = parts.length >= 5 && isNumeric(parts[3]) && isNumeric(parts[4]);
+    if (isHeader) {
+      commit();
+      current = {
+        author: parts[0] || '',
+        content: parts[1] || '',
+        time: parts[2] || '',
+        views: Number(parts[3] || 0),
+        likes: Number(parts[4] || 0),
+        comments: [],
+      };
+      continue;
+    }
+    if (parts.length >= 2 && current) {
+      const comment = parseCommentParts(parts);
+      if (comment.content) current.comments.push(comment);
+      continue;
+    }
+  }
+  commit();
+  return moments;
 };
 
 const parseMomentReplyBlock = (innerText) => {
-    const text = normalizeNewlines(innerText);
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    let momentId = '';
-    const comments = [];
-    for (const line of lines) {
-        const m = line.match(/^moment_id::\s*(.+)\s*$/i);
-        if (m) {
-            momentId = String(m[1] || '').trim();
-            continue;
-        }
-        const parts = line.split('--').map(p => p.trim());
-        if (parts.length >= 2) {
-            const author = parts[0] || '';
-            const rest = parts.slice(1);
-            let replyTo = '';
-            let replyToAuthor = '';
-            const contentParts = [];
-            for (const seg of rest) {
-                const s = String(seg || '').trim();
-                const m1 = s.match(/^reply_to::\s*(.+)\s*$/i);
-                if (m1) {
-                    replyTo = String(m1[1] || '').trim();
-                    continue;
-                }
-                const m2 = s.match(/^reply_to_author::\s*(.+)\s*$/i);
-                if (m2) {
-                    replyToAuthor = String(m2[1] || '').trim();
-                    continue;
-                }
-                contentParts.push(seg);
-            }
-            comments.push({
-                author,
-                content: contentParts.join('--') || '',
-                replyTo,
-                replyToAuthor,
-            });
-        }
+  const text = normalizeNewlines(innerText);
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  let momentId = '';
+  const comments = [];
+  for (const line of lines) {
+    const m = line.match(/^moment_id::\s*(.+)\s*$/i);
+    if (m) {
+      momentId = String(m[1] || '').trim();
+      continue;
     }
-    return { momentId, comments };
+    const parts = line.split('--').map((p) => p.trim());
+    if (parts.length >= 2) {
+      const author = parts[0] || '';
+      const rest = parts.slice(1);
+      let replyTo = '';
+      let replyToAuthor = '';
+      const contentParts = [];
+      for (const seg of rest) {
+        const s = String(seg || '').trim();
+        const m1 = s.match(/^reply_to::\s*(.+)\s*$/i);
+        if (m1) {
+          replyTo = String(m1[1] || '').trim();
+          continue;
+        }
+        const m2 = s.match(/^reply_to_author::\s*(.+)\s*$/i);
+        if (m2) {
+          replyToAuthor = String(m2[1] || '').trim();
+          continue;
+        }
+        contentParts.push(seg);
+      }
+      comments.push({
+        author,
+        content: contentParts.join('--') || '',
+        replyTo,
+        replyToAuthor,
+      });
+    }
+  }
+  return { momentId, comments };
 };
 
 const findNextToken = (s) => {
-    const src = String(s ?? '');
-    const lower = src.toLowerCase();
-    const idxTag = src.indexOf('<');
-    const idxMoment = lower.indexOf('moment_start');
-    const idxReply = lower.indexOf('moment_reply_start');
-    const candidates = [
-        { kind: 'tag', idx: idxTag },
-        { kind: 'moment', idx: idxMoment },
-        { kind: 'moment_reply', idx: idxReply },
-    ].filter(x => x.idx !== -1);
-    if (!candidates.length) return null;
-    candidates.sort((a, b) => a.idx - b.idx);
-    return candidates[0];
+  const src = String(s ?? '');
+  const lower = src.toLowerCase();
+  const idxTag = src.indexOf('<');
+  const idxMoment = lower.indexOf('moment_start');
+  const idxReply = lower.indexOf('moment_reply_start');
+  const candidates = [
+    { kind: 'tag', idx: idxTag },
+    { kind: 'moment', idx: idxMoment },
+    { kind: 'moment_reply', idx: idxReply },
+  ].filter((x) => x.idx !== -1);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.idx - b.idx);
+  return candidates[0];
 };
 
 /**
@@ -451,229 +506,245 @@ const findNextToken = (s) => {
  * Parses streaming AI responses for chat tags
  */
 export class DialogueStreamParser {
-    constructor({ userName = '我', resolveLooseGroupTag, resolveLoosePrivateTag } = {}) {
-        this.userName = userName;
+  constructor({ userName = '我', resolveLooseGroupTag, resolveLoosePrivateTag } = {}) {
+    this.userName = userName;
+    this.preBuffer = '';
+    this.inContent = false;
+    this.contentBuffer = '';
+    this.ended = false;
+    this.contentWrapper = '';
+    this.resolveLooseGroupTag =
+      typeof resolveLooseGroupTag === 'function' ? resolveLooseGroupTag : null;
+    this.resolveLoosePrivateTag =
+      typeof resolveLoosePrivateTag === 'function' ? resolveLoosePrivateTag : null;
+  }
+
+  /**
+   * Push a chunk of text and parse events
+   * @param {string} chunk
+   * @returns {Array<{type: string, [key: string]: any}>}
+   */
+  push(chunk) {
+    if (this.ended) return [];
+    const events = [];
+    const text = String(chunk ?? '');
+    if (!text) return events;
+
+    if (!this.inContent) {
+      this.preBuffer += text;
+      this.preBuffer = stripThinkingBlocks(this.preBuffer);
+      // Detect <content ...> opening
+      const m = this.preBuffer.match(/<content\b[^>]*>/i);
+      if (m) {
+        const start = this.preBuffer.toLowerCase().indexOf(m[0].toLowerCase());
+        const after = start + m[0].length;
+        this.inContent = true;
+        this.contentWrapper = 'content';
+        this.contentBuffer += this.preBuffer.slice(after);
         this.preBuffer = '';
-        this.inContent = false;
-        this.contentBuffer = '';
-        this.ended = false;
-        this.contentWrapper = '';
-        this.resolveLooseGroupTag = typeof resolveLooseGroupTag === 'function' ? resolveLooseGroupTag : null;
-        this.resolveLoosePrivateTag = typeof resolveLoosePrivateTag === 'function' ? resolveLoosePrivateTag : null;
+      } else {
+        const miStart = findMiPhoneStart(this.preBuffer);
+        if (miStart) {
+          const after = miStart.index + miStart.length;
+          this.inContent = true;
+          this.contentWrapper = 'miphone';
+          this.contentBuffer += this.preBuffer.slice(after);
+          this.preBuffer = '';
+        } else if (hasImplicitContentSignal(this.preBuffer)) {
+          this.inContent = true;
+          this.contentWrapper = 'implicit';
+          this.contentBuffer += this.preBuffer;
+          this.preBuffer = '';
+        } else {
+          // keep bounded to avoid memory growth before content
+          if (this.preBuffer.length > 80_000) this.preBuffer = this.preBuffer.slice(-40_000);
+          return events;
+        }
+      }
+    } else {
+      this.contentBuffer += text;
     }
 
-    /**
-     * Push a chunk of text and parse events
-     * @param {string} chunk 
-     * @returns {Array<{type: string, [key: string]: any}>}
-     */
-    push(chunk) {
-        if (this.ended) return [];
-        const events = [];
-        const text = String(chunk ?? '');
-        if (!text) return events;
+    // If content ended, only parse within it
+    let endIdx = -1;
+    if (this.contentWrapper === 'content') {
+      endIdx = this.contentBuffer.toLowerCase().indexOf('</content>');
+    } else if (this.contentWrapper === 'miphone') {
+      const miEnd = findMiPhoneEnd(this.contentBuffer);
+      if (miEnd) endIdx = miEnd.index;
+    }
+    let scanText = this.contentBuffer;
+    if (endIdx !== -1) {
+      scanText = this.contentBuffer.slice(0, endIdx);
+    }
 
-        if (!this.inContent) {
-            this.preBuffer += text;
-            this.preBuffer = stripThinkingBlocks(this.preBuffer);
-            // Detect <content ...> opening
-            const m = this.preBuffer.match(/<content\b[^>]*>/i);
-            if (m) {
-                const start = this.preBuffer.toLowerCase().indexOf(m[0].toLowerCase());
-                const after = start + m[0].length;
-                this.inContent = true;
-                this.contentWrapper = 'content';
-                this.contentBuffer += this.preBuffer.slice(after);
-                this.preBuffer = '';
-            } else {
-                const miStart = findMiPhoneStart(this.preBuffer);
-                if (miStart) {
-                    const after = miStart.index + miStart.length;
-                    this.inContent = true;
-                    this.contentWrapper = 'miphone';
-                    this.contentBuffer += this.preBuffer.slice(after);
-                    this.preBuffer = '';
-                } else if (hasImplicitContentSignal(this.preBuffer)) {
-                    this.inContent = true;
-                    this.contentWrapper = 'implicit';
-                    this.contentBuffer += this.preBuffer;
-                    this.preBuffer = '';
-                } else {
-                    // keep bounded to avoid memory growth before content
-                    if (this.preBuffer.length > 80_000) this.preBuffer = this.preBuffer.slice(-40_000);
-                    return events;
-                }
-            }
-        } else {
-            this.contentBuffer += text;
+    // Parse completed tags in scanText
+    let work = scanText;
+    let advanced = true;
+    while (advanced) {
+      advanced = false;
+      const next = findNextToken(work);
+      if (!next) break;
+
+      if (next.kind === 'moment') {
+        const startIdx = next.idx;
+        const endMark = 'moment_end';
+        const endAt = work.toLowerCase().indexOf(endMark, startIdx);
+        if (endAt === -1) break;
+        const inner = work.slice(startIdx + 'moment_start'.length, endAt);
+        const after = endAt + endMark.length;
+        const moments = parseMomentBlock(inner);
+        if (moments.length) events.push({ type: 'moments', moments });
+        work = work.slice(after);
+        advanced = true;
+        continue;
+      }
+
+      if (next.kind === 'moment_reply') {
+        const startIdx = next.idx;
+        const endMark = 'moment_reply_end';
+        const endAt = work.toLowerCase().indexOf(endMark, startIdx);
+        if (endAt === -1) break;
+        const inner = work.slice(startIdx + 'moment_reply_start'.length, endAt);
+        const after = endAt + endMark.length;
+        const { momentId, comments } = parseMomentReplyBlock(inner);
+        if (comments.length) events.push({ type: 'moment_reply', momentId, comments });
+        work = work.slice(after);
+        advanced = true;
+        continue;
+      }
+
+      const lt = next.idx;
+      const open = parseOpenTag(work, lt);
+      if (!open) break;
+      const { tagName, isClosing, endIdx: tagEndIdx } = open;
+      if (isClosing) {
+        work = work.slice(tagEndIdx);
+        advanced = true;
+        continue;
+      }
+      if (open.selfClosing) {
+        work = work.slice(tagEndIdx);
+        advanced = true;
+        continue;
+      }
+
+      const close = findMatchingCloseTag(work, tagName, tagEndIdx);
+      if (!close) break;
+      const closeIdx = close.closeIdx;
+
+      const inner = work.slice(tagEndIdx, closeIdx);
+      const afterClose = close.afterClose;
+
+      if (tagName.endsWith('的私聊')) {
+        const otherName = extractOtherNameFromPrivateChatTag(tagName, this.userName);
+        const msgs = parsePrivateChatMessages(inner);
+        if (msgs.length) {
+          events.push({ type: 'private_chat', tagName, otherName, messages: msgs });
         }
+        work = work.slice(afterClose);
+        advanced = true;
+        continue;
+      }
 
-        // If content ended, only parse within it
-        let endIdx = -1;
-        if (this.contentWrapper === 'content') {
-            endIdx = this.contentBuffer.toLowerCase().indexOf('</content>');
-        } else if (this.contentWrapper === 'miphone') {
-            const miEnd = findMiPhoneEnd(this.contentBuffer);
-            if (miEnd) endIdx = miEnd.index;
+      if (isGroupChatTag(tagName)) {
+        const groupName = extractGroupNameFromTag(tagName);
+        const { members, messages } = parseGroupChatBlock(inner);
+        if (groupName && messages.length) {
+          events.push({ type: 'group_chat', tagName, groupName, members, messages });
         }
-        let scanText = this.contentBuffer;
-        if (endIdx !== -1) {
-            scanText = this.contentBuffer.slice(0, endIdx);
-        }
+        work = work.slice(afterClose);
+        advanced = true;
+        continue;
+      }
 
-        // Parse completed tags in scanText
-        let work = scanText;
-        let advanced = true;
-        while (advanced) {
-            advanced = false;
-            const next = findNextToken(work);
-            if (!next) break;
-
-            if (next.kind === 'moment') {
-                const startIdx = next.idx;
-                const endMark = 'moment_end';
-                const endAt = work.toLowerCase().indexOf(endMark, startIdx);
-                if (endAt === -1) break;
-                const inner = work.slice(startIdx + 'moment_start'.length, endAt);
-                const after = endAt + endMark.length;
-                const moments = parseMomentBlock(inner);
-                if (moments.length) events.push({ type: 'moments', moments });
-                work = work.slice(after);
-                advanced = true;
-                continue;
-            }
-
-            if (next.kind === 'moment_reply') {
-                const startIdx = next.idx;
-                const endMark = 'moment_reply_end';
-                const endAt = work.toLowerCase().indexOf(endMark, startIdx);
-                if (endAt === -1) break;
-                const inner = work.slice(startIdx + 'moment_reply_start'.length, endAt);
-                const after = endAt + endMark.length;
-                const { momentId, comments } = parseMomentReplyBlock(inner);
-                if (comments.length) events.push({ type: 'moment_reply', momentId, comments });
-                work = work.slice(after);
-                advanced = true;
-                continue;
-            }
-
-            const lt = next.idx;
-            const open = parseOpenTag(work, lt);
-            if (!open) break;
-            const { tagName, isClosing, endIdx: tagEndIdx } = open;
-            if (isClosing) {
-                work = work.slice(tagEndIdx);
-                advanced = true;
-                continue;
-            }
-            if (open.selfClosing) {
-                work = work.slice(tagEndIdx);
-                advanced = true;
-                continue;
-            }
-
-            const close = findMatchingCloseTag(work, tagName, tagEndIdx);
-            if (!close) break;
-            const closeIdx = close.closeIdx;
-
-            const inner = work.slice(tagEndIdx, closeIdx);
-            const afterClose = close.afterClose;
-
-            if (tagName.endsWith('的私聊')) {
-                const otherName = extractOtherNameFromPrivateChatTag(tagName, this.userName);
-                const msgs = parsePrivateChatMessages(inner);
-                if (msgs.length) {
-                    events.push({ type: 'private_chat', tagName, otherName, messages: msgs });
-                }
-                work = work.slice(afterClose);
-                advanced = true;
-                continue;
-            }
-
-            if (isGroupChatTag(tagName)) {
-                const groupName = extractGroupNameFromTag(tagName);
-                const { members, messages } = parseGroupChatBlock(inner);
-                if (groupName && messages.length) {
-                    events.push({ type: 'group_chat', tagName, groupName, members, messages });
-                }
-                work = work.slice(afterClose);
-                advanced = true;
-                continue;
-            }
-
-            // Fallback: treat bare group/contact tags as group/private when matching existing names
-            const fallbackGroupName = this.resolveLooseGroupTag ? this.resolveLooseGroupTag(tagName) : '';
-            const fallbackPrivateName = this.resolveLoosePrivateTag ? this.resolveLoosePrivateTag(tagName) : '';
-            if (fallbackGroupName || fallbackPrivateName) {
-                const hasGroupMarkers = /<\s*聊天内容\s*>/i.test(inner) || /<\s*成员\s*>/i.test(inner);
-                const preferGroup = Boolean(fallbackGroupName) && (hasGroupMarkers || !fallbackPrivateName);
-                if (preferGroup) {
-                    const { members, messages } = parseGroupChatBlock(inner);
-                    if (messages.length) {
-                        events.push({
-                            type: 'group_chat',
-                            tagName,
-                            groupName: fallbackGroupName,
-                            members,
-                            messages,
-                        });
-                        work = work.slice(afterClose);
-                        advanced = true;
-                        continue;
-                    }
-                }
-                if (fallbackPrivateName) {
-                    const msgs = parsePrivateChatMessages(inner);
-                    if (msgs.length) {
-                        events.push({ type: 'private_chat', tagName, otherName: fallbackPrivateName, messages: msgs });
-                        work = work.slice(afterClose);
-                        advanced = true;
-                        continue;
-                    }
-                }
-            }
-
-            // Ignore other tags but consume them when closed
+      // Fallback: treat bare group/contact tags as group/private when matching existing names
+      const fallbackGroupName = this.resolveLooseGroupTag ? this.resolveLooseGroupTag(tagName) : '';
+      const fallbackPrivateName = this.resolveLoosePrivateTag
+        ? this.resolveLoosePrivateTag(tagName)
+        : '';
+      if (fallbackGroupName || fallbackPrivateName) {
+        const hasGroupMarkers = /<\s*聊天内容\s*>/i.test(inner) || /<\s*成员\s*>/i.test(inner);
+        const preferGroup = Boolean(fallbackGroupName) && (hasGroupMarkers || !fallbackPrivateName);
+        if (preferGroup) {
+          const { members, messages } = parseGroupChatBlock(inner);
+          if (messages.length) {
+            events.push({
+              type: 'group_chat',
+              tagName,
+              groupName: fallbackGroupName,
+              members,
+              messages,
+            });
             work = work.slice(afterClose);
             advanced = true;
+            continue;
+          }
         }
-
-        // Commit remaining unconsumed content
-        if (endIdx !== -1) {
-            this.ended = true;
-            this.contentBuffer = '';
-        } else {
-            this.contentBuffer = work;
-            if (this.contentBuffer.length > 160_000) this.contentBuffer = this.contentBuffer.slice(-80_000);
+        if (fallbackPrivateName) {
+          const msgs = parsePrivateChatMessages(inner);
+          if (msgs.length) {
+            events.push({
+              type: 'private_chat',
+              tagName,
+              otherName: fallbackPrivateName,
+              messages: msgs,
+            });
+            work = work.slice(afterClose);
+            advanced = true;
+            continue;
+          }
         }
+      }
 
-        return events;
+      // Ignore other tags but consume them when closed
+      work = work.slice(afterClose);
+      advanced = true;
     }
 
-    /**
-     * Flush remaining buffer
-     * @returns {Array}
-     */
-    flush() {
-        return [];
+    // Commit remaining unconsumed content
+    if (endIdx !== -1) {
+      this.ended = true;
+      this.contentBuffer = '';
+    } else {
+      this.contentBuffer = work;
+      if (this.contentBuffer.length > 160_000)
+        this.contentBuffer = this.contentBuffer.slice(-80_000);
     }
 
-    /**
-     * Reset parser state
-     */
-    reset() {
-        this.preBuffer = '';
-        this.inContent = false;
-        this.contentBuffer = '';
-        this.ended = false;
-        this.contentWrapper = '';
-    }
+    return events;
+  }
+
+  /**
+   * Flush remaining buffer
+   * @returns {Array}
+   */
+  flush() {
+    return [];
+  }
+
+  /**
+   * Reset parser state
+   */
+  reset() {
+    this.preBuffer = '';
+    this.inContent = false;
+    this.contentBuffer = '';
+    this.ended = false;
+    this.contentWrapper = '';
+  }
 }
 
 // Export helper functions for direct use
 export {
-    extractGroupNameFromTag, extractOtherNameFromPrivateChatTag, isGroupChatTag, normalizeNewlines, parseGroupChatBlock,
-    parseMomentBlock,
-    parseMomentReplyBlock, parsePrivateChatMessages, splitSpeakerSegments, stripThinkingBlocks
+  extractGroupNameFromTag,
+  extractOtherNameFromPrivateChatTag,
+  isGroupChatTag,
+  normalizeNewlines,
+  parseGroupChatBlock,
+  parseMomentBlock,
+  parseMomentReplyBlock,
+  parsePrivateChatMessages,
+  splitSpeakerSegments,
+  stripThinkingBlocks,
 };
-

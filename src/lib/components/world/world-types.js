@@ -10,28 +10,28 @@ export const DEFAULT_WEIGHT = 100;
 
 /** Selective logic options */
 export const SELECTIVE_LOGIC_OPTIONS = [
-    { value: 0, label: 'AND 任一（匹配任一关键词）' },
-    { value: 1, label: 'NOT 全部（不匹配全部关键词）' },
-    { value: 2, label: 'NOT 任一（不匹配任一关键词）' },
-    { value: 3, label: 'AND 全部（匹配全部关键词）' },
+  { value: 0, label: 'AND 任一（匹配任一关键词）' },
+  { value: 1, label: 'NOT 全部（不匹配全部关键词）' },
+  { value: 2, label: 'NOT 任一（不匹配任一关键词）' },
+  { value: 3, label: 'AND 全部（匹配全部关键词）' },
 ];
 
 /** Position options */
 export const POSITION_OPTIONS = [
-    { value: 0, label: '↑Char（角色前）' },
-    { value: 1, label: '↓Char（角色后）' },
-    { value: 2, label: '↑AT（作者备注前）' },
-    { value: 3, label: '↓AT（作者备注后）' },
-    { value: 4, label: '@Depth（按深度插入）' },
-    { value: 5, label: '↑EM（例子前）' },
-    { value: 6, label: '↓EM（例子后）' },
+  { value: 0, label: '↑Char（角色前）' },
+  { value: 1, label: '↓Char（角色后）' },
+  { value: 2, label: '↑AT（作者备注前）' },
+  { value: 3, label: '↓AT（作者备注后）' },
+  { value: 4, label: '@Depth（按深度插入）' },
+  { value: 5, label: '↑EM（例子前）' },
+  { value: 6, label: '↓EM（例子后）' },
 ];
 
 /** Role options */
 export const ROLE_OPTIONS = [
-    { value: 0, label: 'system' },
-    { value: 1, label: 'user' },
-    { value: 2, label: 'assistant' },
+  { value: 0, label: 'system' },
+  { value: 1, label: 'user' },
+  { value: 2, label: 'assistant' },
 ];
 
 /**
@@ -40,11 +40,11 @@ export const ROLE_OPTIONS = [
  * @returns {*} Cloned object
  */
 export function deepClone(obj) {
-    try {
-        return structuredClone(obj);
-    } catch {
-        return JSON.parse(JSON.stringify(obj || {}));
-    }
+  try {
+    return structuredClone(obj);
+  } catch {
+    return JSON.parse(JSON.stringify(obj || {}));
+  }
 }
 
 /**
@@ -54,8 +54,8 @@ export function deepClone(obj) {
  * @returns {number}
  */
 export function toNumber(val, def) {
-    const n = Number(val);
-    return Number.isFinite(n) ? n : def;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : def;
 }
 
 /**
@@ -64,11 +64,14 @@ export function toNumber(val, def) {
  * @returns {string[]}
  */
 export function normalizeArray(val) {
-    if (Array.isArray(val)) return val.map(v => String(v).trim()).filter(Boolean);
-    if (typeof val === 'string') {
-        return val.split(/[,，\n\r]/).map(s => s.trim()).filter(Boolean);
-    }
-    return [];
+  if (Array.isArray(val)) return val.map((v) => String(v).trim()).filter(Boolean);
+  if (typeof val === 'string') {
+    return val
+      .split(/[,，\n\r]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 /**
@@ -125,75 +128,78 @@ export function normalizeArray(val) {
  * @returns {WorldEntry}
  */
 export function normalizeEntry(entry = {}, index = 0) {
-    const e = { ...entry };
+  const e = { ...entry };
 
-    e.id = e.id ?? (Number.isInteger(e.uid) ? String(e.uid) : `entry-${index}`);
-    if (e.uid == null && /^\d+$/.test(e.id)) {
-        e.uid = Number(e.id);
-    }
+  e.id = e.id ?? (Number.isInteger(e.uid) ? String(e.uid) : `entry-${index}`);
+  if (e.uid == null && /^\d+$/.test(e.id)) {
+    e.uid = Number(e.id);
+  }
 
-    const comment = e.comment ?? e.title ?? '';
-    e.comment = comment;
-    e.title = comment;
+  const comment = e.comment ?? e.title ?? '';
+  e.comment = comment;
+  e.title = comment;
 
-    const key = normalizeArray(e.key ?? e.triggers);
-    const keysecondary = normalizeArray(e.keysecondary ?? e.secondary);
-    e.key = key;
-    e.triggers = key;
-    e.keysecondary = keysecondary;
-    e.secondary = keysecondary;
+  const key = normalizeArray(e.key ?? e.triggers);
+  const keysecondary = normalizeArray(e.keysecondary ?? e.secondary);
+  e.key = key;
+  e.triggers = key;
+  e.keysecondary = keysecondary;
+  e.secondary = keysecondary;
 
-    const order = toNumber(e.order ?? e.priority, 100);
-    e.order = order;
-    e.priority = order;
+  const order = toNumber(e.order ?? e.priority, 100);
+  e.order = order;
+  e.priority = order;
 
-    e.depth = toNumber(e.depth, DEFAULT_DEPTH);
-    e.position = toNumber(e.position, 0);
-    e.role = toNumber(e.role, 0);
+  e.depth = toNumber(e.depth, DEFAULT_DEPTH);
+  e.position = toNumber(e.position, 0);
+  e.role = toNumber(e.role, 0);
 
-    e.disable = Boolean(e.disable);
-    e.constant = Boolean(e.constant);
-    e.selective = e.selective !== false;
-    e.selectiveLogic = toNumber(e.selectiveLogic, 0);
+  e.disable = Boolean(e.disable);
+  e.constant = Boolean(e.constant);
+  e.selective = e.selective !== false;
+  e.selectiveLogic = toNumber(e.selectiveLogic, 0);
 
-    // Probability: old format may be 0-1 ratio
-    const rawProb = e.probability;
-    const probPercent = typeof rawProb === 'number'
-        ? (rawProb <= 1 ? Math.round(rawProb * 100) : Math.round(rawProb))
-        : 100;
-    e.probability = probPercent;
-    e.useProbability = e.useProbability !== false;
+  // Probability: old format may be 0-1 ratio
+  const rawProb = e.probability;
+  const probPercent =
+    typeof rawProb === 'number'
+      ? rawProb <= 1
+        ? Math.round(rawProb * 100)
+        : Math.round(rawProb)
+      : 100;
+  e.probability = probPercent;
+  e.useProbability = e.useProbability !== false;
 
-    e.ignoreBudget = Boolean(e.ignoreBudget);
-    e.excludeRecursion = Boolean(e.excludeRecursion);
-    e.preventRecursion = Boolean(e.preventRecursion);
-    e.vectorized = Boolean(e.vectorized);
-    e.addMemo = Boolean(e.addMemo);
+  e.ignoreBudget = Boolean(e.ignoreBudget);
+  e.excludeRecursion = Boolean(e.excludeRecursion);
+  e.preventRecursion = Boolean(e.preventRecursion);
+  e.vectorized = Boolean(e.vectorized);
+  e.addMemo = Boolean(e.addMemo);
 
-    e.matchPersonaDescription = Boolean(e.matchPersonaDescription);
-    e.matchCharacterDescription = Boolean(e.matchCharacterDescription);
-    e.matchCharacterPersonality = Boolean(e.matchCharacterPersonality);
-    e.matchCharacterDepthPrompt = Boolean(e.matchCharacterDepthPrompt);
-    e.matchScenario = Boolean(e.matchScenario);
-    e.matchCreatorNotes = Boolean(e.matchCreatorNotes);
+  e.matchPersonaDescription = Boolean(e.matchPersonaDescription);
+  e.matchCharacterDescription = Boolean(e.matchCharacterDescription);
+  e.matchCharacterPersonality = Boolean(e.matchCharacterPersonality);
+  e.matchCharacterDepthPrompt = Boolean(e.matchCharacterDepthPrompt);
+  e.matchScenario = Boolean(e.matchScenario);
+  e.matchCreatorNotes = Boolean(e.matchCreatorNotes);
 
-    e.group = e.group ?? '';
-    e.groupOverride = Boolean(e.groupOverride);
-    e.groupWeight = toNumber(e.groupWeight, DEFAULT_WEIGHT);
+  e.group = e.group ?? '';
+  e.groupOverride = Boolean(e.groupOverride);
+  e.groupWeight = toNumber(e.groupWeight, DEFAULT_WEIGHT);
 
-    e.scanDepth = e.scanDepth ?? null;
-    e.caseSensitive = e.caseSensitive ?? null;
-    e.matchWholeWords = e.matchWholeWords ?? null;
-    e.useGroupScoring = e.useGroupScoring ?? null;
+  e.scanDepth = e.scanDepth ?? null;
+  e.caseSensitive = e.caseSensitive ?? null;
+  e.matchWholeWords = e.matchWholeWords ?? null;
+  e.useGroupScoring = e.useGroupScoring ?? null;
 
-    e.automationId = e.automationId ?? '';
-    e.sticky = e.sticky ?? null;
-    e.cooldown = e.cooldown ?? null;
-    e.delay = e.delay ?? null;
-    e.delayUntilRecursion = toNumber(e.delayUntilRecursion, 0);
+  e.automationId = e.automationId ?? '';
+  e.sticky = e.sticky ?? null;
+  e.cooldown = e.cooldown ?? null;
+  e.delay = e.delay ?? null;
+  e.delayUntilRecursion = toNumber(e.delayUntilRecursion, 0);
 
-    e.content = e.content ?? '';
-    return /** @type {WorldEntry} */ (e);
+  e.content = e.content ?? '';
+  return /** @type {WorldEntry} */ (e);
 }
 
 /**
@@ -202,7 +208,7 @@ export function normalizeEntry(entry = {}, index = 0) {
  * @returns {WorldEntry}
  */
 export function createDefaultEntry(index = 0) {
-    return normalizeEntry({ constant: true, selective: false }, index);
+  return normalizeEntry({ constant: true, selective: false }, index);
 }
 
 /**
@@ -213,16 +219,24 @@ export function createDefaultEntry(index = 0) {
  * @returns {string}
  */
 export function positionLabel(pos = 0, role = 0, depth = DEFAULT_DEPTH) {
-    switch (Number(pos)) {
-        case 0: return '↑Char';
-        case 1: return '↓Char';
-        case 2: return '↑AT';
-        case 3: return '↓AT';
-        case 4: return `@D${depth}/${ROLE_OPTIONS.find(r => r.value === role)?.label || 'system'}`;
-        case 5: return '↑EM';
-        case 6: return '↓EM';
-        default: return String(pos);
-    }
+  switch (Number(pos)) {
+    case 0:
+      return '↑Char';
+    case 1:
+      return '↓Char';
+    case 2:
+      return '↑AT';
+    case 3:
+      return '↓AT';
+    case 4:
+      return `@D${depth}/${ROLE_OPTIONS.find((r) => r.value === role)?.label || 'system'}`;
+    case 5:
+      return '↑EM';
+    case 6:
+      return '↓EM';
+    default:
+      return String(pos);
+  }
 }
 
 /**
@@ -232,9 +246,12 @@ export function positionLabel(pos = 0, role = 0, depth = DEFAULT_DEPTH) {
  * @returns {string}
  */
 export function buildOptions(opts, selected) {
-    return opts.map(o =>
+  return opts
+    .map(
+      (o) =>
         `<option value="${o.value}" ${Number(selected) === o.value ? 'selected' : ''}>${o.label}</option>`
-    ).join('');
+    )
+    .join('');
 }
 
 /**
@@ -243,12 +260,12 @@ export function buildOptions(opts, selected) {
  * @param {string} filename - Filename
  */
 export function downloadJson(data, filename) {
-    const text = JSON.stringify(data, null, 2);
-    const blob = new Blob([text], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename.endsWith('.json') ? filename : `${filename}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const text = JSON.stringify(data, null, 2);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename.endsWith('.json') ? filename : `${filename}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
 }

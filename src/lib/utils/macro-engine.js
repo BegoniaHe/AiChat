@@ -35,7 +35,12 @@ export class MacroEngine {
         const m = msgs[i];
         if (!m) continue;
         if (String(m.role || '') !== role) continue;
-        const raw = (typeof m.raw === 'string' && m.raw) ? m.raw : (typeof m.content === 'string' ? m.content : '');
+        const raw =
+          typeof m.raw === 'string' && m.raw
+            ? m.raw
+            : typeof m.content === 'string'
+              ? m.content
+              : '';
         return String(raw || '');
       }
     } catch {}
@@ -49,7 +54,7 @@ export class MacroEngine {
         const m = msgs[i];
         if (!m) continue;
         if (role && String(m.role || '') !== role) continue;
-        const id = (m && typeof m.id === 'string') ? m.id : '';
+        const id = m && typeof m.id === 'string' ? m.id : '';
         if (id) return id;
       }
     } catch {}
@@ -62,7 +67,12 @@ export class MacroEngine {
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
         if (!m) continue;
-        const raw = (typeof m.raw === 'string' && m.raw) ? m.raw : (typeof m.content === 'string' ? m.content : '');
+        const raw =
+          typeof m.raw === 'string' && m.raw
+            ? m.raw
+            : typeof m.content === 'string'
+              ? m.content
+              : '';
         if (raw) return String(raw);
       }
     } catch {}
@@ -94,7 +104,10 @@ export class MacroEngine {
       const curRaw = this.chatStore?.getVariable?.(key, sessionId);
       const curNum = Number(curRaw);
       const addNum = Number(value);
-      const next = (Number.isFinite(curNum) && Number.isFinite(addNum)) ? String(curNum + addNum) : `${String(curRaw ?? '')}${String(value ?? '')}`;
+      const next =
+        Number.isFinite(curNum) && Number.isFinite(addNum)
+          ? String(curNum + addNum)
+          : `${String(curRaw ?? '')}${String(value ?? '')}`;
       this.chatStore?.setVariable?.(key, next, sessionId);
       return '';
     });
@@ -115,7 +128,7 @@ export class MacroEngine {
     out = out.replace(/{{getvar::([^}]+)}}/gi, (_m, name) => {
       const key = String(name || '').trim();
       const val = this.chatStore?.getVariable?.(key, sessionId);
-      return (val === undefined || val === null) ? '' : String(val);
+      return val === undefined || val === null ? '' : String(val);
     });
 
     return out;
@@ -128,7 +141,7 @@ export class MacroEngine {
     const char = String(baseVars?.char || 'Assistant');
     const overrideLastUserMessage = (() => {
       const v = context?.lastUserMessage;
-      const s = (typeof v === 'string') ? v : '';
+      const s = typeof v === 'string' ? v : '';
       return s.trim() ? s : '';
     })();
 
@@ -154,15 +167,25 @@ export class MacroEngine {
     out = out.replace(/{{user_last_message}}/gi, lastUser);
     out = out.replace(/{{lastCharMessage}}/gi, () => this.getLastByRole('assistant', sessionId));
     out = out.replace(/{{lastUserMessageId}}/gi, () => this.getLastIdByRole('user', sessionId));
-    out = out.replace(/{{lastCharMessageId}}/gi, () => this.getLastIdByRole('assistant', sessionId));
+    out = out.replace(/{{lastCharMessageId}}/gi, () =>
+      this.getLastIdByRole('assistant', sessionId)
+    );
 
-    out = out.replace(/{{time}}/gi, () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    out = out.replace(/{{time}}/gi, () =>
+      new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    );
     out = out.replace(/{{date}}/gi, () => new Date().toLocaleDateString());
-    out = out.replace(/{{weekday}}/gi, () => new Date().toLocaleDateString(undefined, { weekday: 'long' }));
+    out = out.replace(/{{weekday}}/gi, () =>
+      new Date().toLocaleDateString(undefined, { weekday: 'long' })
+    );
     out = out.replace(/{{isotime}}/gi, () => this.formatIsoTime(new Date()));
     out = out.replace(/{{isodate}}/gi, () => this.formatIsoDate(new Date()));
 
-    out = out.replace(/{{reverse:(.+?)}}/gi, (_m, str) => Array.from(String(str ?? '')).reverse().join(''));
+    out = out.replace(/{{reverse:(.+?)}}/gi, (_m, str) =>
+      Array.from(String(str ?? ''))
+        .reverse()
+        .join('')
+    );
 
     return out;
   }
@@ -186,7 +209,8 @@ export class MacroEngine {
 
     try {
       for (const [k, v] of Object.entries(context || {})) {
-        if (!k || k === 'sessionId' || k === 'user' || k === 'char' || k === 'extraMacros') continue;
+        if (!k || k === 'sessionId' || k === 'user' || k === 'char' || k === 'extraMacros')
+          continue;
         const normalized = this.normalizeMacroValue(v);
         if (normalized !== '') baseVars[k] = normalized;
       }
@@ -237,7 +261,11 @@ export class MacroEngine {
         const cmd = parts[0].toLowerCase();
         const args = parts.slice(1);
 
-        if (parts.length === 1 && !Object.prototype.hasOwnProperty.call(baseVars, trimmed) && !Object.prototype.hasOwnProperty.call(baseVarsLower, trimmedLower)) {
+        if (
+          parts.length === 1 &&
+          !Object.prototype.hasOwnProperty.call(baseVars, trimmed) &&
+          !Object.prototype.hasOwnProperty.call(baseVarsLower, trimmedLower)
+        ) {
           return match;
         }
 
@@ -276,7 +304,7 @@ export class MacroEngine {
         const key = args[0];
         const def = args[1] || '';
         const val = this.chatStore?.getVariable?.(key, sessionId);
-        return (val !== undefined && val !== null) ? val : def;
+        return val !== undefined && val !== null ? val : def;
       }
       case 'addvar': {
         if (args.length < 2) return '';
@@ -285,7 +313,10 @@ export class MacroEngine {
         const curRaw = this.chatStore?.getVariable?.(key, sessionId);
         const curNum = Number(curRaw);
         const addNum = Number(addRaw);
-        const next = (Number.isFinite(curNum) && Number.isFinite(addNum)) ? String(curNum + addNum) : `${String(curRaw ?? '')}${String(addRaw ?? '')}`;
+        const next =
+          Number.isFinite(curNum) && Number.isFinite(addNum)
+            ? String(curNum + addNum)
+            : `${String(curRaw ?? '')}${String(addRaw ?? '')}`;
         this.chatStore?.setVariable?.(key, next, sessionId);
         return '';
       }

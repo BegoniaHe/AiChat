@@ -4,8 +4,8 @@ mod commands;
 mod memory_db;
 mod storage;
 
-use tauri::Manager;
 use commands::WallpaperStreamState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -23,19 +23,22 @@ Generate well-structured commit messages based on staged changes or user descrip
 1. **Commit message language**: ALWAYS write in **English** unless user explicitly requests another language
 2. **Explanation language**: Use the **same language as user's request**
 3. **Translation rule**: If commit language ≠ user's language → provide explanation
-  - User speaks Chinese + English commit → Explain in Chinese
-  - User speaks English + Chinese commit → Explain in English
-  - User speaks English + English commit → No extra explanation needed
-  - User speaks Chinese + Chinese commit → No extra explanation needed
+
+- User speaks Chinese + English commit → Explain in Chinese
+- User speaks English + Chinese commit → Explain in English
+- User speaks English + English commit → No extra explanation needed
+- User speaks Chinese + Chinese commit → No extra explanation needed
 
 ### Confirmation Policy
 
 **ALWAYS ask for confirmation before committing** unless user explicitly says:
+
 - "commit directly"
 - "commit immediately"
 - "just commit it"
 
 **Standard flow**:
+
 1. Generate commit message
 2. Explain what it means (in user's language if different from English)
 3. Show the command: `git commit -m "..."`
@@ -54,21 +57,21 @@ Generate well-structured commit messages based on staged changes or user descrip
    - Documentation → Should be on `docs/*` branch
    - Refactoring → Should be on `refactor/*` branch
    - Hotfix → Should be on `hotfix/*` branch
-   
 4. **Branch validation rules**:
    - If on `main` or `master` → WARN: "You're on the main branch. Consider creating a feature branch first."
    - If branch name doesn't match change type → WARN: "Current branch is `X`, but changes look like `Y` type. Continue or switch branch?"
    - If branch name matches change type → Proceed silently
 
 **Example warnings**:
+
 ```
 On main + adding feature:
    "You're on main branch. Consider: git checkout -b feat/your-feature-name"
-   
+
 On feat/ui-update + fixing bug:
    "Current branch is feat/ui-update but changes look like a bug fix.
    Consider: git checkout -b fix/bug-name or continue on current branch?"
-   
+
 On docs/readme + adding code:
    "Current branch is docs/readme but changes include code modifications.
    Consider switching to feat/* or fix/* branch?"
@@ -86,21 +89,22 @@ When user asks for a commit message:
 
 ### Step 2: Determine Type
 
-| Type | When to Use |
-|------|-------------|
-| `feat` | New feature for the user |
-| `fix` | Bug fix |
-| `docs` | Documentation only changes |
-| `style` | Formatting, missing semicolons, etc. (no code change) |
+| Type       | When to Use                                             |
+| ---------- | ------------------------------------------------------- |
+| `feat`     | New feature for the user                                |
+| `fix`      | Bug fix                                                 |
+| `docs`     | Documentation only changes                              |
+| `style`    | Formatting, missing semicolons, etc. (no code change)   |
 | `refactor` | Code change that neither fixes a bug nor adds a feature |
-| `perf` | Performance improvement |
-| `test` | Adding or updating tests |
-| `build` | Changes to build system or dependencies |
-| `ci` | CI configuration changes |
-| `chore` | Other changes that don't modify src or test files |
-| `revert` | Reverts a previous commit |
+| `perf`     | Performance improvement                                 |
+| `test`     | Adding or updating tests                                |
+| `build`    | Changes to build system or dependencies                 |
+| `ci`       | CI configuration changes                                |
+| `chore`    | Other changes that don't modify src or test files       |
+| `revert`   | Reverts a previous commit                               |
 
 **Quick Decision Tree**:
+
 ```
 Changes involve...
 ├─ New user-facing feature? → feat
@@ -114,6 +118,7 @@ Changes involve...
 ### Step 3: Determine Scope (Optional)
 
 Scope should be a noun describing the section of codebase:
+
 - `feat(gui)`: GUI-related feature
 - `fix(memory)`: Memory-related fix
 - `docs(api)`: API documentation
@@ -127,6 +132,7 @@ Scope should be a noun describing the section of codebase:
 - Keep under 50 characters
 
 **Common mistakes**:
+
 - ❌ `Added new feature` → ✅ `add new feature`
 - ❌ `Fix bug.` → ✅ `fix authentication issue`
 - ❌ Multiple concerns → Split into separate commits
@@ -140,16 +146,19 @@ Scope should be a noun describing the section of codebase:
 ### Step 6: Add Footer (If Needed)
 
 **Breaking Changes**:
+
 ```
 BREAKING CHANGE: <description>
 ```
 
 **AI-Generated Commits** (REQUIRED for AI assistance):
+
 ```
 Reviewed-by: [MODEL_NAME]
 ```
 
 **Issue References**:
+
 ```
 Refs #123
 Closes #456
@@ -158,11 +167,13 @@ Closes #456
 ## Examples
 
 ### Simple Feature
+
 ```
 feat(gui): add transparent window support
 ```
 
 ### Bug Fix with Body
+
 ```
 fix(memory): resolve index memory leak
 
@@ -174,6 +185,7 @@ Reviewed-by: [MODEL_NAME]
 ```
 
 ### Breaking Change
+
 ```
 refactor(core)!: restructure plugin system
 
@@ -188,6 +200,7 @@ Reviewed-by: [MODEL_NAME]
 ```
 
 ### Documentation Update
+
 ```
 docs: update PRD with new interaction flow
 
@@ -195,6 +208,7 @@ Reviewed-by: [MODEL_NAME]
 ```
 
 ### Multiple Changes (use most significant type)
+
 ```
 feat(state): add mood decay system with persistence
 
@@ -218,39 +232,43 @@ When user says "create commit" or "commit message":
 6. If confirmed, run: `git commit -m "<message>"`
 
 **Example 1 (Chinese user, English commit)**:
+
 ```
 User: "帮我提交这个功能"
 AI: "建议的提交信息：
      feat(gui): add transparent window support
-     
+
      这个提交添加了透明窗口功能。是否执行此提交？"
 User: "是" or "直接提交" or "y"
 AI: [executes git commit]
 ```
 
 **Example 2 (English user, Chinese commit)**:
+
 ```
 User: "write a Chinese commit for this feature"
 AI: "Suggested commit:
      feat(gui): 添加透明窗口支持
-     
+
      This commit adds transparent window support. Proceed?"
 User: "yes" or "commit directly" or "y"
 AI: [executes git commit]
 ```
 
 **Example 3 (English user, English commit - no explanation)**:
+
 ```
 User: "commit this feature"
 AI: "Suggested commit:
      feat(gui): add transparent window support
-     
+
      Proceed with this commit?"
 User: "yes" or "commit directly" or "y"
 AI: [executes git commit]
 ```
 
 When user says "amend commit":
+
 ```bash
 git commit --amend -m "<new message>"
 ```

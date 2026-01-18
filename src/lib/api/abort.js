@@ -3,7 +3,7 @@
  */
 
 export const splitRequestOptions = (options = {}) => {
-  const src = (options && typeof options === 'object') ? options : {};
+  const src = options && typeof options === 'object' ? options : {};
   const signal = src.signal;
   const { signal: _signal, ...rest } = src;
   return { signal, options: rest };
@@ -19,7 +19,9 @@ export const createLinkedAbortController = ({ timeoutMs, signal } = {}) => {
     try {
       controller.abort(signal?.reason);
     } catch {
-      try { controller.abort(); } catch {}
+      try {
+        controller.abort();
+      } catch {}
     }
   };
 
@@ -27,23 +29,31 @@ export const createLinkedAbortController = ({ timeoutMs, signal } = {}) => {
     if (signal.aborted) {
       abortInner();
     } else {
-      try { signal.addEventListener('abort', abortInner, { once: true }); } catch {}
+      try {
+        signal.addEventListener('abort', abortInner, { once: true });
+      } catch {}
     }
   }
 
   if (shouldTimeout) {
     timeoutId = setTimeout(() => {
-      try { controller.abort(); } catch {}
+      try {
+        controller.abort();
+      } catch {}
     }, ms);
   }
 
   const cleanup = () => {
     if (timeoutId) {
-      try { clearTimeout(timeoutId); } catch {}
+      try {
+        clearTimeout(timeoutId);
+      } catch {}
       timeoutId = null;
     }
     if (signal) {
-      try { signal.removeEventListener('abort', abortInner); } catch {}
+      try {
+        signal.removeEventListener('abort', abortInner);
+      } catch {}
     }
   };
 

@@ -34,13 +34,13 @@
 
 ### 1.2 重构目标
 
-| 目标 | 描述 |
-|------|------|
-| **工程化** | 使用npm/pnpm管理依赖，Vite构建 |
-| **组件化** | 迁移到Svelte组件架构 |
-| **可维护性** | 拆分巨型文件，单文件<500行 |
-| **类型安全** | 可选TypeScript/JSDoc类型注解 |
-| **测试覆盖** | 添加单元测试和E2E测试 |
+| 目标         | 描述                           |
+| ------------ | ------------------------------ |
+| **工程化**   | 使用npm/pnpm管理依赖，Vite构建 |
+| **组件化**   | 迁移到Svelte组件架构           |
+| **可维护性** | 拆分巨型文件，单文件<500行     |
+| **类型安全** | 可选TypeScript/JSDoc类型注解   |
+| **测试覆盖** | 添加单元测试和E2E测试          |
 
 ---
 
@@ -65,20 +65,20 @@ src/
 
 ### 2.2 核心文件代码量
 
-| 文件 | 行数 | 状态 | 迁移策略 |
-|------|------|------|----------|
-| `src/scripts/ui/app.js` | 8409 | ⚠️ 超大 | 拆分为30+组件 |
-| `src/scripts/ui/bridge.js` | 3306 | ⚠️ 超大 | 拆分为工具模块 |
-| `src/scripts/storage/chat-store.js` | 2594 | ⚠️ 超大 | 包装Svelte Store |
-| `src/scripts/ui/memory-template-panel.js` | 1991 | ⚠️ 大 | 单独组件 |
-| `src/scripts/ui/preset-panel.js` | 1873 | ⚠️ 大 | 单独组件 |
-| `src/scripts/ui/chat/chat-ui.js` | 1744 | ⚠️ 大 | 拆分为5+组件 |
-| `src/scripts/ui/chat/rich-text-renderer.js` | 1332 | ⚠️ 大 | 封装为组件 |
-| `src/scripts/ui/config-panel.js` | 1224 | ⚠️ 大 | 单独组件 |
-| `src/scripts/ui/contact-settings-panel.js` | 992 | 中等 | 单独组件 |
-| `src/scripts/ui/moments-panel.js` | 939 | 中等 | 单独组件 |
-| `src/scripts/ui/general-settings-panel.js` | 781 | 中等 | 单独组件 |
-| `src/scripts/ui/persona-panel.js` | 743 | 中等 | 单独组件 |
+| 文件                                        | 行数 | 状态    | 迁移策略         |
+| ------------------------------------------- | ---- | ------- | ---------------- |
+| `src/scripts/ui/app.js`                     | 8409 | ⚠️ 超大 | 拆分为30+组件    |
+| `src/scripts/ui/bridge.js`                  | 3306 | ⚠️ 超大 | 拆分为工具模块   |
+| `src/scripts/storage/chat-store.js`         | 2594 | ⚠️ 超大 | 包装Svelte Store |
+| `src/scripts/ui/memory-template-panel.js`   | 1991 | ⚠️ 大   | 单独组件         |
+| `src/scripts/ui/preset-panel.js`            | 1873 | ⚠️ 大   | 单独组件         |
+| `src/scripts/ui/chat/chat-ui.js`            | 1744 | ⚠️ 大   | 拆分为5+组件     |
+| `src/scripts/ui/chat/rich-text-renderer.js` | 1332 | ⚠️ 大   | 封装为组件       |
+| `src/scripts/ui/config-panel.js`            | 1224 | ⚠️ 大   | 单独组件         |
+| `src/scripts/ui/contact-settings-panel.js`  | 992  | 中等    | 单独组件         |
+| `src/scripts/ui/moments-panel.js`           | 939  | 中等    | 单独组件         |
+| `src/scripts/ui/general-settings-panel.js`  | 781  | 中等    | 单独组件         |
+| `src/scripts/ui/persona-panel.js`           | 743  | 中等    | 单独组件         |
 
 ### 2.3 依赖关系图
 
@@ -115,15 +115,15 @@ src/
 
 ### 3.1 技术栈选型
 
-| 类别 | 现有 | 目标 | 理由 |
-|------|------|------|------|
-| **框架** | Vanilla JS | Svelte 5 | 轻量、高性能、原生编译 |
-| **构建** | 无 | Vite 6 | 快速HMR、Tauri官方支持 |
-| **包管理** | curl下载 | pnpm | 快速、节省磁盘 |
-| **通知库** | Toastr | svelte-french-toast | Svelte原生 |
-| **类型** | 无 | JSDoc + 可选TS | 渐进式类型安全 |
-| **测试** | 无 | Vitest + Testing Library | Vite原生支持 |
-| **样式** | 纯CSS | Svelte Scoped CSS | 组件化样式 |
+| 类别       | 现有       | 目标                     | 理由                   |
+| ---------- | ---------- | ------------------------ | ---------------------- |
+| **框架**   | Vanilla JS | Svelte 5                 | 轻量、高性能、原生编译 |
+| **构建**   | 无         | Vite 6                   | 快速HMR、Tauri官方支持 |
+| **包管理** | curl下载   | pnpm                     | 快速、节省磁盘         |
+| **通知库** | Toastr     | svelte-french-toast      | Svelte原生             |
+| **类型**   | 无         | JSDoc + 可选TS           | 渐进式类型安全         |
+| **测试**   | 无         | Vitest + Testing Library | Vite原生支持           |
+| **样式**   | 纯CSS      | Svelte Scoped CSS        | 组件化样式             |
 
 ### 3.2 目录结构设计
 
@@ -214,14 +214,14 @@ AiChat/
 
 **子组件拆分**:
 
-| 组件 | 迁移来源 | 行数 |
-|------|----------|------|
-| `ChatRoom.svelte` | `app.js:200-800` | ~600 |
-| `MessageList.svelte` | `chat-ui.js:200-600` | ~400 |
+| 组件                   | 迁移来源             | 行数 |
+| ---------------------- | -------------------- | ---- |
+| `ChatRoom.svelte`      | `app.js:200-800`     | ~600 |
+| `MessageList.svelte`   | `chat-ui.js:200-600` | ~400 |
 | `MessageBubble.svelte` | `chat-ui.js:600-900` | ~300 |
-| `ComposerInput.svelte` | `app.js:800-1000` | ~200 |
-| `StickerPanel.svelte` | `app.js:2500-2700` | ~200 |
-| `ActionPanel.svelte` | `app.js:2520-2560` | ~40 |
+| `ComposerInput.svelte` | `app.js:800-1000`    | ~200 |
+| `StickerPanel.svelte`  | `app.js:2500-2700`   | ~200 |
+| `ActionPanel.svelte`   | `app.js:2520-2560`   | ~40  |
 
 #### 4.1.3 ContactsPage.svelte
 
@@ -235,11 +235,11 @@ AiChat/
 
 **子组件拆分**:
 
-| 组件 | 迁移来源 |
-|------|----------|
+| 组件                 | 迁移来源                            |
+| -------------------- | ----------------------------------- |
 | `ContactList.svelte` | `contact-group-renderer.js:100-300` |
 | `ContactItem.svelte` | `contact-group-renderer.js:300-400` |
-| `GroupHeader.svelte` | `contact-group-renderer.js:50-100` |
+| `GroupHeader.svelte` | `contact-group-renderer.js:50-100`  |
 
 #### 4.1.4 MomentsPage.svelte
 
@@ -252,53 +252,53 @@ AiChat/
 
 **子组件拆分**:
 
-| 组件 | 迁移来源 |
-|------|----------|
-| `MomentCard.svelte` | `moments-panel.js:400-500` |
-| `CommentList.svelte` | `moments-panel.js:500-600` |
+| 组件                    | 迁移来源                   |
+| ----------------------- | -------------------------- |
+| `MomentCard.svelte`     | `moments-panel.js:400-500` |
+| `CommentList.svelte`    | `moments-panel.js:500-600` |
 | `MomentComposer.svelte` | `moments-panel.js:600-700` |
 
 ### 4.2 Panel组件 (弹窗/面板)
 
-| 组件 | 迁移来源 | 优先级 |
-|------|----------|--------|
-| `ConfigPanel.svelte` | `src/scripts/ui/config-panel.js:1-1224` | P0 |
-| `PersonaPanel.svelte` | `src/scripts/ui/persona-panel.js:1-743` | P0 |
-| `SessionPanel.svelte` | `src/scripts/ui/session-panel.js:1-303` | P0 |
-| `ContactSettingsPanel.svelte` | `src/scripts/ui/contact-settings-panel.js:1-992` | P1 |
-| `GeneralSettingsPanel.svelte` | `src/scripts/ui/general-settings-panel.js:1-781` | P1 |
-| `PresetPanel.svelte` | `src/scripts/ui/preset-panel.js:1-1873` | P1 |
-| `RegexPanel.svelte` | `src/scripts/ui/regex-panel.js:1-720` | P2 |
-| `RegexSessionPanel.svelte` | `src/scripts/ui/regex-session-panel.js:1-*` | P2 |
-| `WorldPanel.svelte` | `src/scripts/ui/world-panel.js:1-551` | P2 |
-| `WorldEditorPanel.svelte` | `src/scripts/ui/world-editor.js:1-566` | P2 |
-| `MemoryTemplatePanel.svelte` | `src/scripts/ui/memory-template-panel.js:1-1991` | P2 |
-| `MemoryTableEditor.svelte` | `src/scripts/ui/memory-table-editor.js:1-*` | P2 |
-| `GroupPanel.svelte` | `src/scripts/ui/group-panel.js:1-*` | P2 |
-| `GroupChatPanels.svelte` | `src/scripts/ui/group-chat-panels.js:1-*` | P2 |
-| `MomentSummaryPanel.svelte` | `src/scripts/ui/moment-summary-panel.js:1-*` | P2 |
-| `DebugPanel.svelte` | `src/scripts/ui/debug-panel.js:1-661` | P3 |
-| `VariablePanel.svelte` | `src/scripts/ui/variable-panel.js:1-216` | P3 |
+| 组件                          | 迁移来源                                         | 优先级 |
+| ----------------------------- | ------------------------------------------------ | ------ |
+| `ConfigPanel.svelte`          | `src/scripts/ui/config-panel.js:1-1224`          | P0     |
+| `PersonaPanel.svelte`         | `src/scripts/ui/persona-panel.js:1-743`          | P0     |
+| `SessionPanel.svelte`         | `src/scripts/ui/session-panel.js:1-303`          | P0     |
+| `ContactSettingsPanel.svelte` | `src/scripts/ui/contact-settings-panel.js:1-992` | P1     |
+| `GeneralSettingsPanel.svelte` | `src/scripts/ui/general-settings-panel.js:1-781` | P1     |
+| `PresetPanel.svelte`          | `src/scripts/ui/preset-panel.js:1-1873`          | P1     |
+| `RegexPanel.svelte`           | `src/scripts/ui/regex-panel.js:1-720`            | P2     |
+| `RegexSessionPanel.svelte`    | `src/scripts/ui/regex-session-panel.js:1-*`      | P2     |
+| `WorldPanel.svelte`           | `src/scripts/ui/world-panel.js:1-551`            | P2     |
+| `WorldEditorPanel.svelte`     | `src/scripts/ui/world-editor.js:1-566`           | P2     |
+| `MemoryTemplatePanel.svelte`  | `src/scripts/ui/memory-template-panel.js:1-1991` | P2     |
+| `MemoryTableEditor.svelte`    | `src/scripts/ui/memory-table-editor.js:1-*`      | P2     |
+| `GroupPanel.svelte`           | `src/scripts/ui/group-panel.js:1-*`              | P2     |
+| `GroupChatPanels.svelte`      | `src/scripts/ui/group-chat-panels.js:1-*`        | P2     |
+| `MomentSummaryPanel.svelte`   | `src/scripts/ui/moment-summary-panel.js:1-*`     | P2     |
+| `DebugPanel.svelte`           | `src/scripts/ui/debug-panel.js:1-661`            | P3     |
+| `VariablePanel.svelte`        | `src/scripts/ui/variable-panel.js:1-216`         | P3     |
 
 ### 4.3 通用组件
 
-| 组件 | 功能 | 迁移来源 |
-|------|------|----------|
-| `Modal.svelte` | 通用弹窗容器 | 各Panel的弹窗逻辑 |
-| `Toast.svelte` | 通知提示 | 替换Toastr |
-| `Button.svelte` | 统一按钮样式 | 各处button元素 |
-| `Avatar.svelte` | 头像组件 | `chat-ui.js` 头像渲染 |
-| `MediaPicker.svelte` | 媒体选择器 | `src/scripts/ui/media-picker.js` |
-| `StickerPicker.svelte` | 表情选择器 | `src/scripts/ui/sticker-picker.js` |
+| 组件                   | 功能         | 迁移来源                           |
+| ---------------------- | ------------ | ---------------------------------- |
+| `Modal.svelte`         | 通用弹窗容器 | 各Panel的弹窗逻辑                  |
+| `Toast.svelte`         | 通知提示     | 替换Toastr                         |
+| `Button.svelte`        | 统一按钮样式 | 各处button元素                     |
+| `Avatar.svelte`        | 头像组件     | `chat-ui.js` 头像渲染              |
+| `MediaPicker.svelte`   | 媒体选择器   | `src/scripts/ui/media-picker.js`   |
+| `StickerPicker.svelte` | 表情选择器   | `src/scripts/ui/sticker-picker.js` |
 
 ### 4.4 Svelte Actions (可复用交互)
 
-| Action | 功能 | 迁移来源 |
-|--------|------|----------|
-| `use:longpress` | 长按检测 | `moments-panel.js:220-280` |
-| `use:drag` | 拖拽功能 | `contact-drag-manager.js:50-200` |
-| `use:clickOutside` | 点击外部关闭 | 各Panel的关闭逻辑 |
-| `use:autosize` | 输入框自动高度 | `chat-ui.js` 输入框逻辑 |
+| Action             | 功能           | 迁移来源                         |
+| ------------------ | -------------- | -------------------------------- |
+| `use:longpress`    | 长按检测       | `moments-panel.js:220-280`       |
+| `use:drag`         | 拖拽功能       | `contact-drag-manager.js:50-200` |
+| `use:clickOutside` | 点击外部关闭   | 各Panel的关闭逻辑                |
+| `use:autosize`     | 输入框自动高度 | `chat-ui.js` 输入框逻辑          |
 
 ---
 
@@ -324,22 +324,22 @@ const legacyStore = new LegacyChatStore();
 
 // Svelte响应式包装
 function createChatStore() {
-    const { subscribe, set, update } = writable({
-        sessions: {},
-        current: null,
-        messages: []
-    });
+  const { subscribe, set, update } = writable({
+    sessions: {},
+    current: null,
+    messages: [],
+  });
 
-    return {
-        subscribe,
-        // 代理到旧Store方法
-        async init() {
-            await legacyStore.ready;
-            set(legacyStore.state);
-        },
-        setCurrent: (id) => legacyStore.setCurrent(id),
-        // ... 其他方法
-    };
+  return {
+    subscribe,
+    // 代理到旧Store方法
+    async init() {
+      await legacyStore.ready;
+      set(legacyStore.state);
+    },
+    setCurrent: (id) => legacyStore.setCurrent(id),
+    // ... 其他方法
+  };
 }
 
 export const chatStore = createChatStore();
@@ -347,16 +347,16 @@ export const chatStore = createChatStore();
 
 ### 5.2 Store清单
 
-| Store | 迁移来源 | 类型 |
-|-------|----------|------|
-| `chatStore` | `src/scripts/storage/chat-store.js` | writable |
+| Store           | 迁移来源                                | 类型     |
+| --------------- | --------------------------------------- | -------- |
+| `chatStore`     | `src/scripts/storage/chat-store.js`     | writable |
 | `contactsStore` | `src/scripts/storage/contacts-store.js` | writable |
-| `groupStore` | `src/scripts/storage/group-store.js` | writable |
-| `momentsStore` | `src/scripts/storage/moments-store.js` | writable |
-| `personaStore` | `src/scripts/storage/persona-store.js` | writable |
-| `configStore` | `src/scripts/storage/config.js` | writable |
-| `appSettings` | `src/scripts/storage/app-settings.js` | writable |
-| `presetStore` | `src/scripts/storage/preset-store.js` | writable |
+| `groupStore`    | `src/scripts/storage/group-store.js`    | writable |
+| `momentsStore`  | `src/scripts/storage/moments-store.js`  | writable |
+| `personaStore`  | `src/scripts/storage/persona-store.js`  | writable |
+| `configStore`   | `src/scripts/storage/config.js`         | writable |
+| `appSettings`   | `src/scripts/storage/app-settings.js`   | writable |
+| `presetStore`   | `src/scripts/storage/preset-store.js`   | writable |
 
 ---
 
@@ -364,15 +364,15 @@ export const chatStore = createChatStore();
 
 ### 6.1 CSS文件清单
 
-| 文件 | 行数 | 迁移策略 |
-|------|------|----------|
-| `src/assets/css/qq-legacy.css` | 1721 | → 拆分到组件Scoped CSS |
-| `src/assets/css/main.css` | 1137 | → `app.css` 全局样式 |
-| `src/assets/css/chat.css` | 394 | → `ChatRoom.svelte` |
-| `src/assets/css/contact-groups.css` | 230 | → `ContactList.svelte` |
-| `src/assets/css/cards.css` | 46 | → `MomentCard.svelte` |
-| `src/assets/css/legacy-card.css` | 14 | → 按需拆分 |
-| `src/assets/css/toastr.min.css` | 0 | 删除 (使用svelte-french-toast) |
+| 文件                                | 行数 | 迁移策略                       |
+| ----------------------------------- | ---- | ------------------------------ |
+| `src/assets/css/qq-legacy.css`      | 1721 | → 拆分到组件Scoped CSS         |
+| `src/assets/css/main.css`           | 1137 | → `app.css` 全局样式           |
+| `src/assets/css/chat.css`           | 394  | → `ChatRoom.svelte`            |
+| `src/assets/css/contact-groups.css` | 230  | → `ContactList.svelte`         |
+| `src/assets/css/cards.css`          | 46   | → `MomentCard.svelte`          |
+| `src/assets/css/legacy-card.css`    | 14   | → 按需拆分                     |
+| `src/assets/css/toastr.min.css`     | 0    | 删除 (使用svelte-french-toast) |
 
 ### 6.2 CSS变量系统
 
@@ -381,17 +381,17 @@ export const chatStore = createChatStore();
 ```css
 /* src/app.css - 全局CSS变量 */
 :root {
-    --color-primary: #0f172a;
-    --color-secondary: #64748b;
-    --color-background: #f8fafc;
-    --color-bubble-user: #E8F0FE;
-    --color-bubble-assistant: #c9c9c9;
-    --color-text: #1F2937;
-    --color-border: #e2e8f0;
-    --color-danger: #b91c1c;
-    --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 16px;
+  --color-primary: #0f172a;
+  --color-secondary: #64748b;
+  --color-background: #f8fafc;
+  --color-bubble-user: #e8f0fe;
+  --color-bubble-assistant: #c9c9c9;
+  --color-text: #1f2937;
+  --color-border: #e2e8f0;
+  --color-danger: #b91c1c;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
 }
 ```
 
@@ -403,12 +403,12 @@ export const chatStore = createChatStore();
 
 API层代码质量较好，可直接迁移:
 
-| 文件 | 迁移方式 |
-|------|----------|
-| `src/scripts/api/client.js` | 直接复制到 `src/api/` |
-| `src/scripts/api/stream.js` | 直接复制 |
-| `src/scripts/api/abort.js` | 直接复制 |
-| `src/scripts/api/providers/*.js` | 直接复制 |
+| 文件                             | 迁移方式              |
+| -------------------------------- | --------------------- |
+| `src/scripts/api/client.js`      | 直接复制到 `src/api/` |
+| `src/scripts/api/stream.js`      | 直接复制              |
+| `src/scripts/api/abort.js`       | 直接复制              |
+| `src/scripts/api/providers/*.js` | 直接复制              |
 
 ### 7.2 Tauri API封装
 
@@ -433,15 +433,15 @@ API层代码质量较好，可直接迁移:
 ```svelte
 <!-- MessageStream.svelte -->
 <script>
-    import { streamStore } from '../stores/stream.js';
-    // 从 dialogue-stream-parser.js 导入解析逻辑
-    import { DialogueStreamParser } from '../legacy/chat/dialogue-stream-parser.js';
+  import { streamStore } from '../stores/stream.js';
+  // 从 dialogue-stream-parser.js 导入解析逻辑
+  import { DialogueStreamParser } from '../legacy/chat/dialogue-stream-parser.js';
 </script>
 
 {#if $streamStore.isStreaming}
-    <div class="typing-indicator">
-        {$streamStore.partialContent}
-    </div>
+  <div class="typing-indicator">
+    {$streamStore.partialContent}
+  </div>
 {/if}
 ```
 
@@ -454,8 +454,8 @@ API层代码质量较好，可直接迁移:
 ```javascript
 // src/lib/actions/drag.js
 export function drag(node, options) {
-    // 从 contact-drag-manager.js:50-200 迁移核心逻辑
-    // 使用 Pointer Events API
+  // 从 contact-drag-manager.js:50-200 迁移核心逻辑
+  // 使用 Pointer Events API
 }
 ```
 
@@ -471,12 +471,12 @@ export function drag(node, options) {
 ```javascript
 // src/lib/actions/longpress.js
 export function longpress(node, callback) {
-    // 从 moments-panel.js:220-280 迁移
-    let timer;
-    const handleStart = (e) => {
-        timer = setTimeout(() => callback(e), 520);
-    };
-    // ...
+  // 从 moments-panel.js:220-280 迁移
+  let timer;
+  const handleStart = (e) => {
+    timer = setTimeout(() => callback(e), 520);
+  };
+  // ...
 }
 ```
 
@@ -493,16 +493,12 @@ export function longpress(node, callback) {
 ```svelte
 <!-- RichTextIframe.svelte -->
 <script>
-    import { onMount } from 'svelte';
-    export let content = '';
-    // 从 rich-text-renderer.js 迁移postMessage逻辑
+  import { onMount } from 'svelte';
+  export let content = '';
+  // 从 rich-text-renderer.js 迁移postMessage逻辑
 </script>
 
-<iframe 
-    src="./iframe-host.html"
-    sandbox="allow-scripts"
-    bind:this={iframeEl}
-/>
+<iframe src="./iframe-host.html" sandbox="allow-scripts" bind:this={iframeEl} />
 ```
 
 ---
@@ -561,40 +557,40 @@ Total: ~22天 (约1个月)
 
 ### 9.2 里程碑
 
-| 里程碑 | 交付物 | 验收标准 |
-|--------|--------|----------|
-| M1 | 环境搭建完成 | `pnpm dev` 能启动Vite+Tauri |
-| M2 | 核心框架完成 | 三大页面可切换，数据加载正常 |
-| M3 | ChatPage可用 | 聊天功能完整，流式响应正常 |
-| M4 | 所有页面可用 | 功能与旧版一致 |
-| M5 | 生产就绪 | 测试通过，性能达标 |
+| 里程碑 | 交付物       | 验收标准                     |
+| ------ | ------------ | ---------------------------- |
+| M1     | 环境搭建完成 | `pnpm dev` 能启动Vite+Tauri  |
+| M2     | 核心框架完成 | 三大页面可切换，数据加载正常 |
+| M3     | ChatPage可用 | 聊天功能完整，流式响应正常   |
+| M4     | 所有页面可用 | 功能与旧版一致               |
+| M5     | 生产就绪     | 测试通过，性能达标           |
 
 ---
 
 ## 十、风险与对策
 
-| 风险 | 概率 | 影响 | 对策 |
-|------|------|------|------|
-| app.js拆分复杂度高 | 高 | 高 | 逐步迁移，保持可运行状态 |
-| Store状态同步问题 | 中 | 高 | 保留旧Store类，仅包装响应式 |
-| Android兼容性问题 | 中 | 中 | 每阶段进行移动端测试 |
-| 样式回归 | 中 | 低 | 保留旧CSS作为fallback |
-| Tauri API变更 | 低 | 中 | 使用已验证的tauri.js封装层 |
+| 风险               | 概率 | 影响 | 对策                        |
+| ------------------ | ---- | ---- | --------------------------- |
+| app.js拆分复杂度高 | 高   | 高   | 逐步迁移，保持可运行状态    |
+| Store状态同步问题  | 中   | 高   | 保留旧Store类，仅包装响应式 |
+| Android兼容性问题  | 中   | 中   | 每阶段进行移动端测试        |
+| 样式回归           | 中   | 低   | 保留旧CSS作为fallback       |
+| Tauri API变更      | 低   | 中   | 使用已验证的tauri.js封装层  |
 
 ---
 
 ## 十一、成功指标
 
-| 指标 | 当前 | 目标 |
-|------|------|------|
-| 最大文件行数 | 8410 | <500 |
-| 依赖管理 | curl手动 | pnpm lock |
-| 构建工具 | 无 | Vite |
-| HMR支持 | 无 | 有 |
-| 类型检查 | 无 | JSDoc/TS |
-| 测试覆盖 | 0% | >60% |
-| 首屏加载 | ~2s | <1s |
-| 包体积(gzip) | ~150KB | <100KB |
+| 指标         | 当前     | 目标      |
+| ------------ | -------- | --------- |
+| 最大文件行数 | 8410     | <500      |
+| 依赖管理     | curl手动 | pnpm lock |
+| 构建工具     | 无       | Vite      |
+| HMR支持      | 无       | 有        |
+| 类型检查     | 无       | JSDoc/TS  |
+| 测试覆盖     | 0%       | >60%      |
+| 首屏加载     | ~2s      | <1s       |
+| 包体积(gzip) | ~150KB   | <100KB    |
 
 ---
 

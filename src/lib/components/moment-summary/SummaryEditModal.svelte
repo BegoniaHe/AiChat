@@ -14,13 +14,7 @@
    */
 
   /** @type {Props} */
-  let {
-    open = $bindable(false),
-    value = '',
-    title = '编辑摘要',
-    onSave,
-    onClose,
-  } = $props();
+  let { open = $bindable(false), value = '', title = '编辑摘要', onSave, onClose } = $props();
 
   let text = $state(value);
 
@@ -43,10 +37,7 @@
 
 <Modal {open} onClose={handleClose} {title} maxWidth="640px">
   <div class="edit-modal">
-    <textarea
-      bind:value={text}
-      placeholder="输入摘要内容..."
-    ></textarea>
+    <textarea bind:value={text} placeholder="输入摘要内容..."></textarea>
     <div class="actions">
       <button class="cancel-btn" onclick={handleClose}>取消</button>
       <button class="save-btn" onclick={handleSave}>保存</button>

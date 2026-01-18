@@ -39,11 +39,14 @@ export class OpenAIProvider {
 
     if (typeof options.temperature === 'number') out.temperature = options.temperature;
     if (typeof options.top_p === 'number') out.top_p = options.top_p;
-    if (typeof options.presence_penalty === 'number') out.presence_penalty = options.presence_penalty;
-    if (typeof options.frequency_penalty === 'number') out.frequency_penalty = options.frequency_penalty;
+    if (typeof options.presence_penalty === 'number')
+      out.presence_penalty = options.presence_penalty;
+    if (typeof options.frequency_penalty === 'number')
+      out.frequency_penalty = options.frequency_penalty;
 
     if (Number.isFinite(options.max_tokens)) out.max_tokens = Math.trunc(options.max_tokens);
-    if (Number.isFinite(options.maxTokens) && !out.max_tokens) out.max_tokens = Math.trunc(options.maxTokens);
+    if (Number.isFinite(options.maxTokens) && !out.max_tokens)
+      out.max_tokens = Math.trunc(options.maxTokens);
 
     if (typeof options.stop === 'string' || Array.isArray(options.stop)) {
       out.stop = options.stop;

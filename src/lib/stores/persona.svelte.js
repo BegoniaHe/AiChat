@@ -64,7 +64,7 @@ function createPersonaStore() {
     try {
       let data = await tryInvoke('load_kv', { name: STORAGE_KEY });
       let active = await tryInvoke('load_kv', { name: ACTIVE_KEY });
-      
+
       if (!data) {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) data = JSON.parse(raw);
@@ -76,7 +76,7 @@ function createPersonaStore() {
       if (Array.isArray(data)) {
         personas = data.map(normalizePersona);
       }
-      
+
       if (active) {
         activeId = active;
       }
@@ -90,7 +90,7 @@ function createPersonaStore() {
         activeId = personas[0].id;
         await save();
       }
-      
+
       initialized = true;
       logger.info(`Persona store loaded: ${personas.length} personas, active: ${activeId}`);
     } catch (err) {
@@ -119,37 +119,37 @@ function createPersonaStore() {
     get list() {
       return personas;
     },
-    
+
     get activeId() {
       return activeId;
     },
-    
+
     get active() {
       return personas.find((p) => p.id === activeId) || personas[0] || createDefaultPersona();
     },
-    
+
     get(id) {
       return personas.find((p) => p.id === id);
     },
-    
+
     setActive(id) {
       if (personas.find((p) => p.id === id)) {
         activeId = id;
         save();
       }
     },
-    
+
     add(persona) {
       const normalized = normalizePersona(persona);
       personas = [...personas, normalized];
       save();
       return normalized;
     },
-    
+
     update(id, updates) {
       const index = personas.findIndex((p) => p.id === id);
       if (index === -1) return null;
-      
+
       personas[index] = {
         ...personas[index],
         ...updates,
@@ -159,20 +159,20 @@ function createPersonaStore() {
       save();
       return personas[index];
     },
-    
+
     remove(id) {
       if (id === 'default') return false;
-      
+
       personas = personas.filter((p) => p.id !== id);
-      
+
       if (activeId === id) {
         activeId = personas[0]?.id || 'default';
       }
-      
+
       save();
       return true;
     },
-    
+
     get isInitialized() {
       return initialized;
     },

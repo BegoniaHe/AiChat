@@ -12,18 +12,18 @@ export const DEFAULT_USER_BUBBLE_COLOR = '#E8F0FE';
  * 描述位置选项
  */
 export const POSITION_OPTIONS = [
-    { value: 0, label: 'IN_PROMPT（作为 system prompt 注入）' },
-    { value: 4, label: 'AT_DEPTH（插入到聊天历史指定深度）' },
-    { value: 9, label: 'NONE（不注入）' },
+  { value: 0, label: 'IN_PROMPT（作为 system prompt 注入）' },
+  { value: 4, label: 'AT_DEPTH（插入到聊天历史指定深度）' },
+  { value: 9, label: 'NONE（不注入）' },
 ];
 
 /**
  * 注入角色选项
  */
 export const ROLE_OPTIONS = [
-    { value: 0, label: 'system' },
-    { value: 1, label: 'user' },
-    { value: 2, label: 'assistant' },
+  { value: 0, label: 'system' },
+  { value: 1, label: 'user' },
+  { value: 2, label: 'assistant' },
 ];
 
 /**
@@ -33,8 +33,8 @@ export const ROLE_OPTIONS = [
  * @returns {string}
  */
 export function normalizeHexColor(value, fallback = DEFAULT_USER_BUBBLE_COLOR) {
-    const raw = String(value || '').trim();
-    return /^#[0-9A-F]{6}$/i.test(raw) ? raw : fallback;
+  const raw = String(value || '').trim();
+  return /^#[0-9A-F]{6}$/i.test(raw) ? raw : fallback;
 }
 
 /**
@@ -57,16 +57,16 @@ export function normalizeHexColor(value, fallback = DEFAULT_USER_BUBBLE_COLOR) {
  * @returns {Persona}
  */
 export function createDefaultPersona() {
-    return {
-        id: '',
-        name: 'User',
-        avatar: '',
-        description: '',
-        userBubbleColor: DEFAULT_USER_BUBBLE_COLOR,
-        position: 0,
-        depth: 2,
-        role: 0,
-    };
+  return {
+    id: '',
+    name: 'User',
+    avatar: '',
+    description: '',
+    userBubbleColor: DEFAULT_USER_BUBBLE_COLOR,
+    position: 0,
+    depth: 2,
+    role: 0,
+  };
 }
 
 /**
@@ -75,16 +75,18 @@ export function createDefaultPersona() {
  * @returns {Persona}
  */
 export function normalizePersona(p) {
-    return {
-        id: p.id || '',
-        name: String(p.name || '').trim() || 'User',
-        avatar: String(p.avatar || '').trim(),
-        description: String(p.description || ''),
-        userBubbleColor: normalizeHexColor(p.userBubbleColor),
-        position: Number.isFinite(Number(p.position)) ? Number(p.position) : 0,
-        depth: Number.isFinite(Number(p.depth)) ? Math.max(0, Math.trunc(Number(p.depth))) : 2,
-        role: Number.isFinite(Number(p.role)) ? Math.max(0, Math.min(2, Math.trunc(Number(p.role)))) : 0,
-        created: p.created || Date.now(),
-        updated: p.updated || Date.now(),
-    };
+  return {
+    id: p.id || '',
+    name: String(p.name || '').trim() || 'User',
+    avatar: String(p.avatar || '').trim(),
+    description: String(p.description || ''),
+    userBubbleColor: normalizeHexColor(p.userBubbleColor),
+    position: Number.isFinite(Number(p.position)) ? Number(p.position) : 0,
+    depth: Number.isFinite(Number(p.depth)) ? Math.max(0, Math.trunc(Number(p.depth))) : 2,
+    role: Number.isFinite(Number(p.role))
+      ? Math.max(0, Math.min(2, Math.trunc(Number(p.role))))
+      : 0,
+    created: p.created || Date.now(),
+    updated: p.updated || Date.now(),
+  };
 }

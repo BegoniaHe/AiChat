@@ -3,8 +3,18 @@
  * 迁移自: src/scripts/memory/memory-prompt-utils.js
  */
 
-const MEMORY_PROMPT_POSITIONS = new Set(['after_persona', 'system_end', 'before_chat', 'history_depth']);
-const SUMMARY_TABLE_IDS = new Set(['chat_summary', 'group_summary', 'chat_outline', 'group_outline']);
+const MEMORY_PROMPT_POSITIONS = new Set([
+  'after_persona',
+  'system_end',
+  'before_chat',
+  'history_depth',
+]);
+const SUMMARY_TABLE_IDS = new Set([
+  'chat_summary',
+  'group_summary',
+  'chat_outline',
+  'group_outline',
+]);
 const SUMMARY_LIMIT_TABLE_IDS = new Set(['chat_summary', 'group_summary']);
 
 export const isSummaryTableId = (tableId) => {
@@ -18,10 +28,13 @@ export const isSummaryLimitTableId = (tableId) => {
 };
 
 export const normalizeMemoryUpdateMode = (raw, defaultMode = 'full') => {
-  const mode = String(raw || '').trim().toLowerCase();
+  const mode = String(raw || '')
+    .trim()
+    .toLowerCase();
   if (!mode) return defaultMode;
   if (mode === 'summary' || mode === 'summary-only' || mode === 'summary_only') return 'summary';
-  if (mode === 'standard' || mode === 'standard-only' || mode === 'standard_only') return 'standard';
+  if (mode === 'standard' || mode === 'standard-only' || mode === 'standard_only')
+    return 'standard';
   if (mode === 'full' || mode === 'all' || mode === 'unified') return 'full';
   if (mode.includes('summary')) return 'summary';
   if (mode.includes('standard')) return 'standard';
@@ -32,12 +45,21 @@ export const normalizeMemoryUpdateMode = (raw, defaultMode = 'full') => {
 export const parseMemoryPromptPositions = (raw) => {
   if (Array.isArray(raw)) {
     return raw
-      .map(item => String(item || '').trim().toLowerCase())
-      .filter(pos => MEMORY_PROMPT_POSITIONS.has(pos));
+      .map((item) =>
+        String(item || '')
+          .trim()
+          .toLowerCase()
+      )
+      .filter((pos) => MEMORY_PROMPT_POSITIONS.has(pos));
   }
-  const text = String(raw || '').trim().toLowerCase();
+  const text = String(raw || '')
+    .trim()
+    .toLowerCase();
   if (!text) return [];
-  const parts = text.split(/[+,]/).map(part => part.trim()).filter(Boolean);
+  const parts = text
+    .split(/[+,]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
   const out = [];
   parts.forEach((part) => {
     if (!MEMORY_PROMPT_POSITIONS.has(part)) return;
@@ -47,7 +69,9 @@ export const parseMemoryPromptPositions = (raw) => {
 };
 
 export const normalizeTokenMode = (raw) => {
-  const mode = String(raw || '').trim().toLowerCase();
+  const mode = String(raw || '')
+    .trim()
+    .toLowerCase();
   return mode === 'strict' ? 'strict' : 'rough';
 };
 
@@ -140,8 +164,8 @@ export const buildMemoryTablePlan = ({
     if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
     return String(b.id).localeCompare(String(a.id));
   };
-  const pinned = items.filter(it => it.isPinned).sort(sortByPriority);
-  const normal = items.filter(it => !it.isPinned).sort(sortByPriority);
+  const pinned = items.filter((it) => it.isPinned).sort(sortByPriority);
+  const normal = items.filter((it) => !it.isPinned).sort(sortByPriority);
   const ordered = [...pinned, ...normal];
   const rowPrefixTokens = autoExtract ? estimateTokens('- [0] ', tokenMode) : 0;
 

@@ -64,7 +64,9 @@ export class GeminiProvider {
             const url = part?.image_url?.url;
             const parsed = parseDataUrl(url);
             if (parsed?.data) {
-              parts.push({ inlineData: { mimeType: parsed.mime || 'image/jpeg', data: parsed.data } });
+              parts.push({
+                inlineData: { mimeType: parsed.mime || 'image/jpeg', data: parsed.data },
+              });
             } else if (url) {
               parts.push({ text: `[图片] ${String(url)}` });
             }
@@ -109,9 +111,10 @@ export class GeminiProvider {
     if (this.isVertexAI) {
       // Vertex AI URL format
       if (this.projectId) {
-        const baseHost = this.region === 'global'
-          ? 'https://aiplatform.googleapis.com'
-          : `https://${this.region}-aiplatform.googleapis.com`;
+        const baseHost =
+          this.region === 'global'
+            ? 'https://aiplatform.googleapis.com'
+            : `https://${this.region}-aiplatform.googleapis.com`;
         const url = `${baseHost}/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models/${this.model}:${endpoint}`;
         return stream ? `${url}?alt=sse` : url;
       } else {
@@ -173,7 +176,10 @@ export class GeminiProvider {
    */
   async chat(messages, options = {}) {
     const { signal, options: payloadOptions } = splitRequestOptions(options);
-    const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
+    const { controller, cleanup } = createLinkedAbortController({
+      timeoutMs: this.timeout,
+      signal,
+    });
 
     try {
       const url = this.buildUrl(false);
@@ -208,12 +214,13 @@ export class GeminiProvider {
 
       // Extract text from response
       const responseContent = candidates[0].content ?? candidates[0].output;
-      const responseText = typeof responseContent === 'string'
-        ? responseContent
-        : responseContent?.parts
-            ?.filter(part => !part.thought)
-            ?.map(part => part.text)
-            ?.join('\n\n');
+      const responseText =
+        typeof responseContent === 'string'
+          ? responseContent
+          : responseContent?.parts
+              ?.filter((part) => !part.thought)
+              ?.map((part) => part.text)
+              ?.join('\n\n');
 
       if (!responseText) {
         throw new Error('Empty response from Gemini');
@@ -230,7 +237,10 @@ export class GeminiProvider {
    */
   async *streamChat(messages, options = {}) {
     const { signal, options: payloadOptions } = splitRequestOptions(options);
-    const { controller, cleanup } = createLinkedAbortController({ timeoutMs: this.timeout, signal });
+    const { controller, cleanup } = createLinkedAbortController({
+      timeoutMs: this.timeout,
+      signal,
+    });
 
     try {
       const url = this.buildUrl(true);
@@ -279,18 +289,15 @@ export class GeminiProvider {
       if (this.isVertexAI) {
         // Vertex AI models endpoint
         if (this.projectId) {
-          const baseHost = this.region === 'global'
-            ? 'https://aiplatform.googleapis.com'
-            : `https://${this.region}-aiplatform.googleapis.com`;
+          const baseHost =
+            this.region === 'global'
+              ? 'https://aiplatform.googleapis.com'
+              : `https://${this.region}-aiplatform.googleapis.com`;
           url = `${baseHost}/v1/projects/${this.projectId}/locations/${this.region}/publishers/google/models`;
           headers['Authorization'] = `Bearer ${this.apiKey}`;
         } else {
           // Return common Gemini models if project ID is not set
-          return [
-            'gemini-2.0-flash-exp',
-            'gemini-1.5-pro',
-            'gemini-1.5-flash',
-          ];
+          return ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash'];
         }
       } else {
         // Google AI Studio models endpoint
@@ -308,8 +315,8 @@ export class GeminiProvider {
       // Filter for models that support generateContent
       const models = data.models || [];
       return models
-        .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
-        .map(m => m.name.split('/').pop()); // Extract model ID from full name
+        .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+        .map((m) => m.name.split('/').pop()); // Extract model ID from full name
     } catch (error) {
       console.warn('Failed to list Gemini models:', error);
       // Return common models as fallback
