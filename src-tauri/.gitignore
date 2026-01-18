@@ -1,0 +1,6 @@
+# Build artifacts
+/target
+gen/
+
+# Tauri build
+WixTools
