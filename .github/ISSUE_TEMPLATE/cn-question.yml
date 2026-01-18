@@ -1,0 +1,39 @@
+name: 问题咨询（中文）
+description: 询问关于 AiChat 的问题
+title: "[Question]: "
+labels: ["question"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        有关于 AiChat 的问题吗？请在这里提问！
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: 前置确认
+      options:
+        - label: 我已阅读文档
+          required: false
+        - label: 我已搜索现有 Issue 中的类似问题
+          required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 您的问题
+      description: 您想了解什么？
+      placeholder: 在此提出您的问题...
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 补充说明
+      description: 在此添加关于您问题的任何其他上下文
+      placeholder: 任何可能有帮助的额外信息...
+    validations:
+      required: false

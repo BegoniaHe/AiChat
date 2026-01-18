@@ -1,0 +1,160 @@
+name: Bug 反馈（中文）
+description: 报告 AiChat 的错误或问题
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢您花时间报告 Bug！请填写以下表单以帮助我们理解和修复问题。
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: 前置确认
+      description: 请确认自己完成了下列项目之后再进行勾选
+      options:
+        - label: 我理解 Issue 是用于反馈和解决问题的，而非吐槽评论区，将尽可能提供更多信息帮助问题解决
+          required: false
+        - label: 我填写了简短且清晰明确的标题，以便开发者在翻阅 Issue 列表时能快速确定大致问题
+          required: false
+        - label: 我已搜索现有 Issue，确认这不是重复问题
+          required: false
+        - label: 我正在使用最新版本的 AiChat
+          required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: AiChat 版本
+      description: 您正在使用的 AiChat 版本是？
+      placeholder: "例如：0.4.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      description: 您使用的操作系统是？
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (Debian/Ubuntu)
+        - Linux (Arch)
+        - Linux (Fedora/RHEL)
+        - 其他 Linux
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: 系统版本
+      description: 操作系统的具体版本
+      placeholder: "例如：Windows 11 23H2, macOS 14.2, Ubuntu 22.04"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ai-provider
+    attributes:
+      label: AI 服务商
+      description: 您使用的 AI 服务商是？
+      options:
+        - Anthropic (Claude)
+        - OpenAI (GPT)
+        - Google (Gemini)
+        - DeepSeek
+        - 自定义 API
+        - 不适用
+    validations:
+      required: false
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: 功能区域
+      description: 哪个功能受到影响？
+      options:
+        - 聊天
+        - 联系人
+        - 动态
+        - 角色/人设
+        - 预设
+        - 记忆系统
+        - 世界信息
+        - 设置
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 清晰简洁地描述 Bug 是什么
+      placeholder: 描述您遇到的问题...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 如何重现这个问题
+      placeholder: |
+        1. 打开 '...'
+        2. 点击 '...'
+        3. 看到错误
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+      description: 您期望发生什么？
+      placeholder: 描述您期望发生的情况...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么？
+      placeholder: 描述实际发生的情况...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志和错误信息
+      description: |
+        请提供相关的错误信息或日志。
+        您可以通过打开开发者工具（F12）查看控制台日志。
+      placeholder: 在此粘贴日志内容或错误信息...
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或屏幕录制
+      description: 如果适用，添加截图以帮助解释您的问题。
+      placeholder: 将图片拖放到这里或粘贴图片 URL
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充说明
+      description: 在此添加关于问题的任何其他上下文
+      placeholder: 任何可能有帮助的额外信息...

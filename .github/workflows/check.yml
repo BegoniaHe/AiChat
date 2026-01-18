@@ -1,0 +1,41 @@
+name: Code Check
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - ".github/workflows/check.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - ".github/workflows/check.yml"
+  workflow_dispatch:
+
+jobs:
+  check:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - run: pnpm install
+
+      - run: pnpm check
+
+      - run: pnpm lint
+
+      - run: pnpm format:check
+
+        

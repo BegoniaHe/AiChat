@@ -1,0 +1,104 @@
+name: Issue Checkbox Checker
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  check-checkboxes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for unchecked prerequisites
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            if (!issue) return;
+            
+            const body = issue.body || '';
+            
+            // Check if "I have not read carefully" checkbox is checked
+            const notReadPatterns = [
+              /- \[[xX]\] I have not read carefully/,
+              /- \[[xX]\] 我未仔细阅读/
+            ];
+            
+            const hasNotReadChecked = notReadPatterns.some(pattern => pattern.test(body));
+            
+            if (hasNotReadChecked) {
+              const closeMessage = [
+                '## Issue Automatically Closed / Issue 已自动关闭',
+                '',
+                '**English:**',
+                'This issue has been automatically closed because you checked "I have not read carefully."',
+                '',
+                'Please:',
+                '1. Read the [README](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/blob/main/README.md) and documentation carefully',
+                '2. Search for existing issues',
+                '3. Fill out the issue template completely',
+                '4. Submit a new issue when ready',
+                '',
+                '**中文:**',
+                '此 Issue 已被自动关闭，因为您勾选了"我未仔细阅读"。',
+                '',
+                '请：',
+                '1. 仔细阅读 [README](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/blob/main/README.md) 和文档',
+                '2. 搜索现有 Issue',
+                '3. 完整填写 Issue 模板',
+                '4. 准备好后提交新的 Issue',
+                '',
+                '---',
+                '*This is an automated action. If you believe this was done in error, please contact the maintainers.*'
+              ].join('\n');
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: closeMessage
+              });
+              
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'not_planned'
+              });
+              
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['invalid', 'auto-closed']
+              });
+              
+              return;
+            }
+            
+            // Count total checkboxes and checked boxes
+            const totalBoxes = (body.match(/- \[[ xX]\]/g) || []).length;
+            const checkedBoxes = (body.match(/- \[[xX]\]/g) || []).length;
+            
+            // If no boxes are checked in prerequisites, add a reminder
+            if (totalBoxes > 0 && checkedBoxes === 0) {
+              const reminderMessage = [
+                '## Reminder / 提醒',
+                '',
+                '**English:**',
+                'Please check the prerequisite boxes in the issue template to confirm you have completed the required steps.',
+                '',
+                '**中文:**',
+                '请勾选 Issue 模板中的前置条件复选框，以确认您已完成必要步骤。'
+              ].join('\n');
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: reminderMessage
+              });
+            }
