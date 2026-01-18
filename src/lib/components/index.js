@@ -40,3 +40,18 @@ export { default as VariablePanel } from './VariablePanel.svelte';
 // 预设管理
 export * from './preset/index.js';
 
+// 世界书管理
+export * from './world/index.js';
+
+// 正则表达式管理
+export * from './regex/index.js';
+
+// 角色管理
+export * from './persona/index.js';
+
+// 会话管理
+export * from './session/index.js';
+
+// 动态摘要管理
+export * from './moment-summary/index.js';
+
