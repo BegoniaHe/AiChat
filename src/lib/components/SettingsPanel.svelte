@@ -345,7 +345,7 @@
         {:else if activeTab === 'about'}
           <!-- 关于 -->
           <div class="section about-section">
-            <div class="app-logo">💬</div>
+            <div class="app-logo">AiChat</div>
             <h3>AiChat</h3>
             <p class="version">版本 0.2.0</p>
             <p class="description">

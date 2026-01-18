@@ -35,7 +35,7 @@
 
       <div class="badges">
         {#if muted}
-          <span class="badge muted">🔇</span>
+          <span class="badge muted">静音</span>
         {/if}
         {#if unreadCount > 0}
           <span class="badge unread">{unreadCount > 99 ? '99+' : unreadCount}</span>

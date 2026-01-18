@@ -56,7 +56,7 @@
     if (ondelete) {
       list.push({
         label: '删除',
-        icon: '🗑️',
+        icon: 'delete',
         danger: true,
         onclick: ondelete,
       });

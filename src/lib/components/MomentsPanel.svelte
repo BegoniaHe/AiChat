@@ -356,13 +356,13 @@
 
           <!-- Stats -->
           <div class="moment-stats">
-            <span>👁 浏览{moment.views || 0}次</span>
-            <span>💬 评论{comments.length}条</span>
+            <span>浏览{moment.views || 0}次</span>
+            <span>评论{comments.length}条</span>
           </div>
 
           <!-- Footer -->
           <div class="moment-footer">
-            <span class="moment-likes">👍 {moment.likes || 0}人已赞</span>
+            <span class="moment-likes">{moment.likes || 0}人已赞</span>
             <button class="moment-action" onclick={() => toggleComposer(moment.id)}> 评论 </button>
           </div>
 

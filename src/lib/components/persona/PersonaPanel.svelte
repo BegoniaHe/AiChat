@@ -172,13 +172,7 @@
   }
 </script>
 
-<Modal
-  {open}
-  onClose={handleClose}
-  title="👤 用户角色 (Personas)"
-  maxWidth="420px"
-  maxHeight="640px"
->
+<Modal {open} onClose={handleClose} title="用户角色 (Personas)" maxWidth="420px" maxHeight="640px">
   <div class="persona-panel">
     {#if view === 'list'}
       <!-- 会话锁定状态栏 -->

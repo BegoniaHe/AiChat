@@ -179,17 +179,17 @@
 
         <div class="actions-section">
           <button class="action-item" onclick={togglePin}>
-            <span class="action-icon">{contact.pinned ? '📌' : '📍'}</span>
+            <span class="action-icon">{contact.pinned ? 'Pin' : 'Unpin'}</span>
             <span class="action-label">{contact.pinned ? '取消置顶' : '置顶'}</span>
           </button>
 
           <button class="action-item" onclick={toggleMute}>
-            <span class="action-icon">{contact.muted ? '🔔' : '🔕'}</span>
+            <span class="action-icon">{contact.muted ? 'Bell' : 'Mute'}</span>
             <span class="action-label">{contact.muted ? '取消免打扰' : '免打扰'}</span>
           </button>
 
           <button class="action-item" onclick={clearChat}>
-            <span class="action-icon">🗑️</span>
+            <span class="action-icon">Delete</span>
             <span class="action-label">清空聊天记录</span>
           </button>
 

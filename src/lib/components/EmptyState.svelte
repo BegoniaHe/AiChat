@@ -3,7 +3,7 @@
   用于展示列表为空或无内容时的状态
 -->
 <script>
-  const { icon = '📭', title = '暂无内容', description = '', children } = $props();
+  const { icon = 'empty', title = '暂无内容', description = '', children } = $props();
 </script>
 
 <div class="empty-state">

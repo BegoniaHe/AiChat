@@ -15,7 +15,7 @@
       author: '系统',
       avatar: '',
       content:
-        '欢迎使用 AiChat！这是一个 AI 聊天应用，您可以创建不同角色的 AI 进行对话。点击底部的「联系人」添加新角色开始聊天吧！ 🎉',
+        '欢迎使用 AiChat！这是一个 AI 聊天应用，您可以创建不同角色的 AI 进行对话。点击底部的「联系人」添加新角色开始聊天吧！',
       images: [],
       likes: 0,
       liked: false,
@@ -130,12 +130,12 @@
     // 预设的动态内容
     const templates = [
       '今天的心情特别好！希望大家也能开心每一天 ☀️',
-      '分享一个小技巧：保持好奇心，世界会更有趣 💡',
-      '刚刚学到了新东西，知识真是让人快乐 📚',
-      '天气真好，适合出门走走 🌸',
-      '希望今天能帮到更多人！有什么问题随时来问我 😊',
-      '在思考一些有趣的问题... 🤔',
-      '感谢所有和我交流的朋友，每次对话都让我学到很多 💬',
+      '分享一个小技巧：保持好奇心，世界会更有趣',
+      '刚刚学到了新东西，知识真是让人快乐',
+      '天气真好，适合出门走走',
+      '希望今天能帮到更多人！有什么问题随时来问我',
+      '在思考一些有趣的问题...',
+      '感谢所有和我交流的朋友，每次对话都让我学到很多',
     ];
 
     const newMoment = {
@@ -160,7 +160,7 @@
   <!-- 发布按钮 -->
   <div class="moments-actions">
     <Button variant="ghost" onclick={() => (showCompose = !showCompose)}>
-      {showCompose ? '取消' : '📝 发布动态'}
+      {showCompose ? '取消' : '发布动态'}
     </Button>
     <Button variant="ghost" onclick={generateAIMoment}>✨ AI 发布</Button>
   </div>
@@ -175,7 +175,7 @@
         rows="3"
       ></textarea>
       <div class="compose-footer">
-        <button class="compose-action" aria-label="添加图片"> 📷 </button>
+        <button class="compose-action" aria-label="添加图片">添加图片</button>
         <Button variant="primary" size="sm" onclick={postMoment} disabled={!composeContent.trim()}>
           发布
         </Button>
@@ -282,7 +282,7 @@
     {/each}
 
     {#if moments.length === 0}
-      <EmptyState icon="📷" title="暂无动态" description="还没有人发布朋友圈" />
+      <EmptyState icon="camera" title="暂无动态" description="还没有人发布朋友圈" />
     {/if}
   </div>
 </div>

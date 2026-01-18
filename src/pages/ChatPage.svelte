@@ -320,7 +320,7 @@
   {:else}
     <!-- 未选择联系人 -->
     <div class="no-contact">
-      <div class="no-contact-icon">💬</div>
+      <div class="no-contact-icon">Chat</div>
       <h3>选择一个对话</h3>
       <p>从联系人列表中选择一个角色开始聊天</p>
     </div>

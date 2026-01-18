@@ -70,7 +70,7 @@
 
     {#if sortedContacts.length === 0}
       <EmptyState
-        icon={searchQuery ? '🔍' : '👥'}
+        icon={searchQuery ? 'search' : 'contacts'}
         title={searchQuery ? `没有找到 "${searchQuery}"` : '还没有联系人'}
         description={searchQuery ? '尝试其他关键词' : '创建你的第一个 AI 角色吧'}
       >

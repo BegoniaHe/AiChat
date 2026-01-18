@@ -63,7 +63,7 @@
       <div class="active-badge"></div>
     {/if}
     {#if isLocked}
-      <div class="lock-badge" title="此会话已锁定">🔒</div>
+      <div class="lock-badge" title="此会话已锁定">锁定</div>
     {/if}
   </div>
 

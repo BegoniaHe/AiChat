@@ -242,7 +242,7 @@
           <button class="icon-btn" title="批量操作" onclick={() => (batchMode = !batchMode)}>
             ☑
           </button>
-          <button class="icon-btn danger" title="清空" onclick={clearAllSummaries}> 🗑 </button>
+          <button class="icon-btn danger" title="清空" onclick={clearAllSummaries}>清空</button>
         </div>
       </div>
 
@@ -250,7 +250,8 @@
         <div class="batch-bar">
           <button class="icon-btn" title="批量编辑" onclick={editSelectedSummaries}>✎</button>
           <button class="icon-btn danger" title="批量删除" onclick={deleteSelectedSummaries}
-            >🗑</button
+            >删除</button
+          >
           >
           <button class="icon-btn" title="退出批量" onclick={exitBatchMode}>×</button>
         </div>
@@ -282,7 +283,7 @@
       <div class="section-header">
         <div class="section-title">大总结（自动生成）</div>
         <div class="section-actions">
-          <button class="icon-btn" title="查看原始回复" onclick={openRawModal}>📄</button>
+          <button class="icon-btn" title="查看原始回复" onclick={openRawModal}>查看</button>
           <button class="icon-btn" title="编辑" onclick={editCompactedSummary}>✎</button>
           <button
             class="icon-btn"
@@ -292,7 +293,7 @@
           >
             {compacting ? '⏳' : '↻'}
           </button>
-          <button class="icon-btn danger" title="删除" onclick={clearCompacted}>🗑</button>
+          <button class="icon-btn danger" title="删除" onclick={clearCompacted}>删除</button>
         </div>
       </div>
 

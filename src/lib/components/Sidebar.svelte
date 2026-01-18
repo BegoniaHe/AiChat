@@ -44,7 +44,7 @@
       <!-- 头部 -->
       <header class="sidebar-header">
         <div class="app-info">
-          <span class="app-icon">💬</span>
+          <span class="app-icon">AC</span>
           <span class="app-name">AiChat</span>
         </div>
         <button class="close-btn" aria-label="关闭侧边栏" onclick={() => uiStore.closeSidebar()}>

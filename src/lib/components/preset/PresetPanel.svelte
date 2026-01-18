@@ -593,7 +593,7 @@
         <div class="action-btns">
           <button class="btn-secondary" onclick={onNew}>＋ 新建</button>
           <button class="btn-secondary" onclick={onRename}>✎ 重命名</button>
-          <button class="btn-danger" onclick={onDelete}>🗑 删除</button>
+          <button class="btn-danger" onclick={onDelete}>删除</button>
         </div>
       </div>
 
