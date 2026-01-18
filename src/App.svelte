@@ -44,7 +44,7 @@
 <Loading />
 
 <main class="app-container">
-  <!-- 顶部操作栏（仅在非聊天页显示） -->
+  <!-- 顶部操作栏 -->
   {#if uiStore.currentPage !== 'chat'}
     <header class="top-bar">
       <button class="menu-btn" aria-label="打开菜单" onclick={() => uiStore.toggleSidebar()}>
